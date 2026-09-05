@@ -1,0 +1,61 @@
+absl-py==2.5.0
+beautifulsoup4==4.15.0
+brotlicffi @ file:///C:/Users/task_178644395772558/croot/brotlicffi_1786444050549/work
+cached-property @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_cached_property_1787678456/work
+certifi @ file:///home/conda/feedstock_root/build_artifacts/certifi_1784717589373/work/certifi
+cffi @ file:///C:/Users/task_178669709509663/croot/cffi_1786697233080/work
+chardet==7.6.0
+charset-normalizer @ file:///C:/Users/task_EGOj6_hZRbGlV_0/croot/charset-normalizer_1782917501208/work
+colorama @ file:///home/conda/feedstock_root/build_artifacts/colorama_1733218098505/work
+contourpy==1.3.2
+cycler==0.12.1
+Cython==3.3.0
+filelock @ file:///home/conda/feedstock_root/build_artifacts/filelock_1788217352710/work
+fonttools==4.64.0
+future==1.0.0
+gdown==6.1.0
+grpcio==1.83.1
+h5py==3.16.0
+idna @ file:///C:/Users/task_178056140106162/croot/idna_1780561468696/work
+ImageIO==2.37.4
+kiwisolver==1.5.1
+lap==0.5.13
+loguru==0.7.3
+Markdown==3.10.3
+MarkupSafe==3.0.3
+matplotlib==3.10.9
+mkl-service==2.7.2
+mkl_fft @ file:///C:/Users/task_177730052905595/croot/mkl_fft_1777300602408/work
+mkl_random @ file:///C:/Users/task_178236946736054/croot/mkl_random_1782369613178/work
+numpy==1.26.4
+nvidia-ml-py==13.610.43
+opencv-python==4.10.0.84
+packaging @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_packaging_1785888127/work
+pillow @ file:///C:/Users/task_177797437138001/croot/pillow_1777974478730/work
+polars==1.44.1
+polars-runtime-32==1.44.1
+protobuf==7.36.1
+psutil==7.2.2
+pycparser @ file:///C:/Users/task_177495971250430/croot/pycparser_1774959822609/work
+pyparsing==3.3.2
+PySocks @ file:///C:/miniconda3/conda-bld/pysocks_1761753030270/work
+python-dateutil==2.9.0.post0
+PyYAML @ file:///D:/bld/pyyaml_1770223256606/work
+requests @ file:///C:/Users/task_178034870038504/croot/requests_1780348785055/work
+scipy==1.15.3
+six @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_six_1753199211/work
+soupsieve==2.9.2
+tensorboard @ file:///C:/Users/task_RVhgHDImSm6OM_0/croot/tensorboard_1784555351051/work/tensorboard-2.21.0-py3-none-any.whl#sha256=7279316dcb6bd5bc391d623dea841531299cde1887310e8133bc34a996d32255
+tensorboard-data-server==0.7.2
+torch==1.13.1
+torchreid @ git+https://github.com/KaiyangZhou/deep-person-reid.git@f8cd150fdf77e8d9e1ed143b7f308c2c609ded50
+torchvision==0.14.1
+tqdm @ file:///D:/bld/bld/rattler-build_tqdm_1785172567/work
+typing_extensions @ file:///C:/Users/task_EDsWzFOYRby3O_0/croot/typing_extensions_1784101035613/work
+ultralytics==8.4.138
+ultralytics-thop==2.1.6
+urllib3 @ file:///C:/Users/task_177853593812673/croot/urllib3_1778536217005/work
+Werkzeug==3.1.8
+win32_setctime==1.2.0
+win_inet_pton @ file:///C:/miniconda3/conda-bld/win_inet_pton_1761746276406/work
+yacs==0.1.8
