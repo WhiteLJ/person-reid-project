@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 
 import cv2
 import numpy as np
@@ -59,11 +59,13 @@ def draw_tracks(
     show_confidence: bool = True,
     class_name: Callable[[int], str] | None = None,
     show_class_name: bool = True,
+    selected_track_ids: Collection[int] | None = None,
 ) -> np.ndarray:
     """Return a copy of ``frame`` annotated with temporary Track IDs."""
 
     annotated = frame.copy()
     height, width = annotated.shape[:2]
+    selected_ids = selected_track_ids or set()
     for track in tracks:
         x1, y1, x2, y2 = (int(round(value)) for value in track.bbox)
         x1 = max(0, min(width - 1, x1))
@@ -73,12 +75,18 @@ def draw_tracks(
         if x2 <= x1 or y2 <= y1:
             continue
 
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        selected = track.track_id in selected_ids
+        color = (0, 0, 255) if selected else (0, 255, 0)
+        thickness = 4 if selected else 2
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
         label_parts: list[str] = []
-        if show_class_name and class_name is not None:
-            label_parts.append(class_name(track.class_id))
-        if show_track_id:
-            label_parts.append(f"ID {track.track_id}")
+        if selected:
+            label_parts.append(f"TARGET | ID {track.track_id}")
+        else:
+            if show_class_name and class_name is not None:
+                label_parts.append(class_name(track.class_id))
+            if show_track_id:
+                label_parts.append(f"ID {track.track_id}")
         if show_confidence:
             label_parts.append(f"conf={track.confidence:.2f}")
         if label_parts:
@@ -90,8 +98,8 @@ def draw_tracks(
                 (x1, text_y),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
-                (0, 255, 0),
-                2,
+                color,
+                thickness,
                 cv2.LINE_AA,
             )
     return annotated

@@ -65,6 +65,12 @@ one YOLO model and calls `model.track(..., persist=True, tracker="botsort.yaml")
 per frame. Do not run `predict()` and `track()` on the same frame, and do not pass
 `workers` for NumPy-frame tracking input.
 
+In MVP-3, manual selection is multi-target: `TargetManager` stores a set of temporary
+Track IDs. ROI selection and removal must use the current frame's existing `tracks`
+list and IoU matching; they must not trigger another YOLO/BoT-SORT inference. MVP-3
+must not load or call Torchreid/OSNet, create Person IDs, use TargetGallery, or use
+SQLite.
+
 ---
 
 ## 4. Critical Identity Rule

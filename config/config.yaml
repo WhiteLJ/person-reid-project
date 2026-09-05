@@ -18,8 +18,11 @@ tracking:
   persist: true
   show_track_id: true
 
+selection:
+  min_iou: 0.20
+
 ui:
-  window_name: "Person Tracking - MVP-2"
+  window_name: "Person Tracking - MVP-3"
   wait_key_ms: 1
   show_class_name: true
   show_confidence: true

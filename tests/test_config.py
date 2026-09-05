@@ -18,6 +18,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.video.source, 0)
         self.assertEqual(config.tracking.tracker, "botsort.yaml")
         self.assertTrue(config.tracking.persist)
+        self.assertAlmostEqual(config.selection.min_iou, 0.20)
 
     def test_auto_device_is_supported(self) -> None:
         self.assertIn(resolve_device("auto"), {"cpu", "cuda"})

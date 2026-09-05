@@ -540,25 +540,23 @@ cv2.selectROI()
   ↓
 选择最大 IoU Track
   ↓
-提取该人 crop
-  ↓
-OSNet embedding
-  ↓
-TargetManager.select_track(...)
+TargetManager.select(...) 或 TargetManager.deselect(...)
 ```
 
 如果最大 IoU 过低，则视为没有选中有效人物。
+MVP-3 只保存临时 `Track ID`，不提取 crop、不运行 OSNet/ReID，也不创建 Person ID。
 
 ---
 
 ### 9.3 当前目标 TRACKING
 
-如果 `selected_track_id` 仍然存在：
+如果某个 `selected_track_id` 仍然存在：
 
 - 直接跟随该 Track；
 - 绘制特殊颜色框；
-- 可按一定时间间隔采集高质量 embedding；
-- 不必每帧进行全库搜索。
+- 当前 Track 暂时消失时保留其 Track ID；
+- 如果 BoT-SORT 恢复相同 Track ID，则继续高亮；
+- MVP-3 不进行 embedding 或全库搜索。
 
 ---
 
@@ -1140,17 +1138,14 @@ ReID 不建议每帧对所有人运行。
 
 第一版直接用 OpenCV，优先保证功能完整。
 
-MVP-1 仅实现检测结果显示和 `Q` 退出；目标选择、入库、取消和 Gallery 管理快捷键
-从后续 MVP 阶段开始实现。
+MVP-3 在 OpenCV UI 中实现临时多目标选择；入库和 Gallery 管理仍属于后续 MVP。
 
 建议快捷键：
 
 ```text
-S : Select Target / 框选目标
-A : Add current target to gallery
-C : Cancel current target
-L : List gallery
-R : Reload gallery（可选）
+S : Select Target / 框选并加入当前目标
+R : Remove Target / 框选并移除一个目标
+C : Clear Targets / 清除全部目标
 Q : Quit
 ```
 
@@ -1165,7 +1160,8 @@ Track 12
 当前临时目标：
 
 ```text
-TARGET | Track 7
+TARGET | ID 7
+TARGET | ID 8
 ```
 
 目标库命中：
@@ -1210,6 +1206,9 @@ tracking:
   show_track_id: true
   lost_frames: 15
 
+selection:
+  min_iou: 0.20
+
 reid:
   gallery_threshold: 0.70
   selected_target_threshold: 0.70
@@ -1219,7 +1218,7 @@ reid:
   min_bbox_height: 100
 
 ui:
-  window_name: "Person Detection - MVP-1"
+  window_name: "Person Tracking - MVP-3"
   show_class_name: true
   show_confidence: true
   show_track_id: true
@@ -1396,13 +1395,19 @@ YOLO -> BoT-SORT -> Track ID
 MVP-2 不启用 BoT-SORT appearance ReID，不传 `workers`，不实现 ROI、OSNet/ReID、
 TargetGallery、Person ID 或 SQLite。
 
-### MVP-3：手动选人
+### MVP-3：手动多目标选择
 
 ```text
-ROI -> Track -> selected target
+ROI -> current Track -> selected_track_ids
 ```
 
-验收：可选任意当前行人并持续特殊框显示。
+验收：可重复框选多个当前行人；选中 Track 使用特殊框显示，`R` 按 ROI
+移除单个目标，`C` 清除全部目标。Track 暂时消失时保留其 ID，Track ID
+变化时不自动重新绑定。
+
+当前实现约束：ROI 选择使用当前已经处理完成的帧和 `tracks` 列表，不重新运行
+YOLO/BoT-SORT；MVP-3 不加载或调用 Torchreid/OSNet，不提取 embedding，
+不创建 Person ID、TargetGallery 或 SQLite。
 
 ### MVP-4：OSNet
 
@@ -1544,8 +1549,11 @@ numpy==1.26.4
 PyYAML==6.0.3
 ```
 
-MVP-4 接入 ReID 时追加固定版本 `torchreid==1.4.0`；MVP-1 不加载或调用
-Torchreid/OSNet。Pillow 由当前依赖链提供，MVP-1 不单独声明它。
+MVP-4 接入 ReID 时使用官方
+`https://github.com/KaiyangZhou/deep-person-reid` 项目提供的 Torchreid 1.4.0
+实现/API；不能把 PyPI 上名称相同但来源和版本不确定的 `torchreid` 包作为正式
+依赖。MVP-3 不安装、不加载或调用 Torchreid/OSNet。Pillow 由实际依赖链提供，
+在正式接入 ReID 前不单独声明它。
 
 SQLite 使用 Python 标准库 `sqlite3`，无需额外 pip 安装。
 

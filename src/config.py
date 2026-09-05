@@ -1,4 +1,4 @@
-"""Configuration loading and runtime device selection for MVP-2."""
+"""Configuration loading and runtime device selection for MVP-3."""
 
 from __future__ import annotations
 
@@ -39,6 +39,11 @@ class TrackingConfig:
 
 
 @dataclass(frozen=True)
+class SelectionConfig:
+    min_iou: float
+
+
+@dataclass(frozen=True)
 class UIConfig:
     window_name: str
     wait_key_ms: int
@@ -53,6 +58,7 @@ class AppConfig:
     model: ModelConfig
     runtime: RuntimeConfig
     tracking: TrackingConfig
+    selection: SelectionConfig
     ui: UIConfig
 
 
@@ -103,7 +109,7 @@ def _resolve_project_root(config_path: Path) -> Path:
 
 
 def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
-    """Load and validate the MVP-2 YAML configuration."""
+    """Load and validate the MVP-3 YAML configuration."""
 
     path = Path(config_path).resolve()
     if not path.is_file():
@@ -119,6 +125,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     model = _section(raw, "model")
     runtime = _section(raw, "runtime")
     tracking = _section(raw, "tracking")
+    selection = _section(raw, "selection")
     ui = _section(raw, "ui")
 
     source = parse_source(video.get("source", 0))
@@ -130,6 +137,10 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     requested_workers = int(runtime.get("num_workers", 0))
     if requested_workers < 0:
         raise ValueError("runtime.num_workers must be non-negative")
+
+    min_iou = float(selection.get("min_iou", 0.20))
+    if not 0.0 < min_iou <= 1.0:
+        raise ValueError("selection.min_iou must be greater than 0 and at most 1")
 
     return AppConfig(
         project_root=project_root,
@@ -151,8 +162,9 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             persist=bool(tracking.get("persist", True)),
             show_track_id=bool(tracking.get("show_track_id", True)),
         ),
+        selection=SelectionConfig(min_iou=min_iou),
         ui=UIConfig(
-            window_name=str(ui.get("window_name", "Person Detection - MVP-1")),
+            window_name=str(ui.get("window_name", "Person Tracking - MVP-3")),
             wait_key_ms=max(1, int(ui.get("wait_key_ms", 1))),
             show_class_name=bool(ui.get("show_class_name", True)),
             show_confidence=bool(ui.get("show_confidence", True)),

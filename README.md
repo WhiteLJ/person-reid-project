@@ -1,7 +1,7 @@
-# Person ReID Project — MVP-2
+# Person ReID Project — MVP-3
 
-MVP-2 使用 Ultralytics YOLOv8 和 `weights/yolov8n.pt`，通过 Ultralytics BoT-SORT
-为 COCO `person` 检测结果分配临时 Track ID。
+MVP-3 使用 Ultralytics YOLOv8 和 `weights/yolov8n.pt`，通过 Ultralytics BoT-SORT
+生成临时 Track ID，并支持用户通过 OpenCV ROI 同时选择多个当前 Track。
 
 本阶段支持：
 
@@ -9,15 +9,22 @@ MVP-2 使用 Ultralytics YOLOv8 和 `weights/yolov8n.pt`，通过 Ultralytics Bo
 - 本地视频文件；
 - YOLOv8 person detection + BoT-SORT temporary Track ID；
 - 连续帧之间复用 tracker 状态；
+- `S / s`：框选一个人并加入当前目标集合；
+- `R / r`：框选一个人并从当前目标集合移除；
+- `C / c`：清除所有当前目标；
+- 选中目标使用特殊框和 `TARGET | ID n` 高亮；
 - CUDA 可用时自动使用 CUDA，否则回退 CPU；
 - Windows 默认 `num_workers=0`；
 - 按 `q` 或 `Q` 退出。
 
+ROI 选择使用当前已经完成跟踪的帧和 `tracks` 列表，不会重新运行 YOLO 或
+BoT-SORT。每帧主链路仍然只调用一次 `model.track(frame, ...)`。
+
 本阶段暂不包含：
 
-- 手动选人和 ROI；
 - Torchreid/OSNet；
-- ReID；
+- ReID embedding；
+- 离开画面后的身份恢复；
 - Person ID；
 - TargetGallery；
 - SQLite；
@@ -36,7 +43,8 @@ MVP-2 的逐帧主链路只调用一次 `model.track(frame, ...)`，不对同一
 python -m pip install -r requirements.txt
 ```
 
-`pip-freeze.txt` 仅是本机环境快照，不作为安装入口。
+`pip-freeze.txt` 仅是本机环境快照，不作为安装入口。MVP-3 不安装、不加载、也不
+调用 Torchreid/OSNet。
 
 项目已包含正式模型权重：
 
@@ -69,25 +77,30 @@ python app.py --source data/demo.mp4
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-## 人工验证 Track ID
+## 人工验证多目标选择
 
-1. 启动 `python app.py`，让一个人连续走动，观察框上的 `ID n` 是否保持不变。
-2. 让第二个人进入画面并同时移动，确认两个人显示不同的 Track ID。
-3. 短暂用物体遮挡其中一人，确认遮挡前后的 ID 是否尽量保持一致。
-4. 不要以“离开画面后重新出现仍保持 ID”作为 MVP-2 验收标准，该能力由后续 ReID 实现。
+1. 启动程序，按 `S`，在独立 ROI 窗口中框选一个人并按 Enter/Space 确认；该目标应显示 `TARGET | ID n`。
+2. 再次按 `S` 框选第二个人；两个目标都应特殊高亮，重复框选同一人不会产生重复目标。
+3. 按 `R` 框选其中一个已选目标；只有该目标取消高亮，其他目标不受影响。
+4. 按 `R` 框选普通 Track 或空白区域；当前目标集合不应改变，并会记录日志提示。
+5. 按 `C` 清除全部目标，所有 Track 恢复普通显示。
+6. 目标短暂遮挡后，如果 BoT-SORT 恢复相同 Track ID，应继续特殊高亮。
+7. 目标完全离开后以新 Track ID 返回时，MVP-3 不自动重新绑定；该能力留给后续 ReID。
 
 ## 代码结构
 
 ```text
-app.py                      # MVP-2 入口和主循环
-config/config.yaml          # MVP-2 配置
+app.py                      # MVP-3 入口和主循环
+config/config.yaml          # MVP-3 配置
 src/config.py               # 配置和设备选择
 src/video_source.py         # 摄像头/视频读取
 src/detector.py             # 保留的 MVP-1 检测模块
 src/tracking_pipeline.py    # YOLOv8n + BoT-SORT
+src/roi_selector.py         # ROI 与 Track 的 IoU 匹配
+src/target_manager.py       # 多目标 Track ID 选择状态
 src/models.py               # Detection / Track 数据类
-src/visualization.py        # 检测框和 Track ID 绘制
+src/visualization.py        # 普通框和目标高亮绘制
 src/logging_utils.py        # logging 配置
-ui/opencv_ui.py             # OpenCV 窗口和按键
-tests/                      # MVP-1/MVP-2 单元测试
+ui/opencv_ui.py             # OpenCV 窗口、ROI 和按键 Action
+tests/                      # MVP-1/MVP-2/MVP-3 单元测试
 ```
