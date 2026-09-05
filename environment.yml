@@ -194,4 +194,3 @@ dependencies:
       - ultralytics==8.4.138
       - ultralytics-thop==2.1.6
       - win32-setctime==1.2.0
-prefix: D:\Anaconda\envs\person-reid

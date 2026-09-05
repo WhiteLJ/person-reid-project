@@ -1,4 +1,4 @@
-"""Minimal OpenCV display and keyboard handling for MVP-1."""
+"""Minimal OpenCV display and keyboard handling for MVP-2."""
 
 from __future__ import annotations
 

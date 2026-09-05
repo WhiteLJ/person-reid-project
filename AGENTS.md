@@ -60,6 +60,11 @@ for person-only detection and OpenCV display. BoT-SORT starts in MVP-2; Torchrei
 OSNet, TargetGallery, and SQLite start in later MVPs and must not be pulled into MVP-1
 runtime behavior.
 
+In MVP-2, the main loop must reuse one `TrackingPipeline` instance. That instance loads
+one YOLO model and calls `model.track(..., persist=True, tracker="botsort.yaml")` once
+per frame. Do not run `predict()` and `track()` on the same frame, and do not pass
+`workers` for NumPy-frame tracking input.
+
 ---
 
 ## 4. Critical Identity Rule

@@ -1,4 +1,4 @@
-"""MVP-1 entry point: YOLOv8n person detection with OpenCV display."""
+"""MVP-2 entry point: YOLOv8n person tracking with BoT-SORT and OpenCV."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from pathlib import Path
 from typing import Sequence
 
 from src.config import AppConfig, load_config, parse_source
-from src.detector import PersonDetector
 from src.logging_utils import configure_logging
+from src.tracking_pipeline import TrackingPipeline
 from src.video_source import VideoSource
-from src.visualization import draw_detections
+from src.visualization import draw_tracks
 from ui.opencv_ui import OpenCVUI
 
 
@@ -21,7 +21,7 @@ LOGGER = logging.getLogger(__name__)
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="MVP-1 YOLOv8n person detection for camera or local video"
+        description="MVP-2 YOLOv8n person tracking with BoT-SORT"
     )
     parser.add_argument(
         "--config",
@@ -42,9 +42,22 @@ def _override_source(config: AppConfig, source: str | None) -> AppConfig:
 
 
 def run(config: AppConfig) -> int:
-    LOGGER.info("APP_START device=%s workers=%d", config.model.device, config.runtime.num_workers)
-    detector = PersonDetector(config.model, config.runtime)
-    LOGGER.info("MODEL_LOADED path=%s", config.model.yolo_weight)
+    LOGGER.info(
+        "APP_START device=%s workers=%d",
+        config.model.device,
+        config.runtime.num_workers,
+    )
+    tracking_pipeline = TrackingPipeline(
+        model_config=config.model,
+        runtime_config=config.runtime,
+        tracking_config=config.tracking,
+    )
+    LOGGER.info(
+        "MODEL_LOADED path=%s tracker=%s persist=%s",
+        config.model.yolo_weight,
+        config.tracking.tracker,
+        config.tracking.persist,
+    )
 
     source = VideoSource(config.video.source)
     ui = OpenCVUI(config.ui)
@@ -57,12 +70,13 @@ def run(config: AppConfig) -> int:
                 LOGGER.info("SOURCE_END source=%s", config.video.source)
                 break
 
-            detections = detector.predict(frame)
-            annotated = draw_detections(
+            tracks = tracking_pipeline.process(frame)
+            annotated = draw_tracks(
                 frame,
-                detections,
-                detector.class_name,
+                tracks,
+                class_name=tracking_pipeline.class_name,
                 show_class_name=config.ui.show_class_name,
+                show_track_id=config.tracking.show_track_id,
                 show_confidence=config.ui.show_confidence,
             )
             if ui.show(annotated):

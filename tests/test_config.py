@@ -16,6 +16,8 @@ class ConfigTests(unittest.TestCase):
         config = load_config(Path("config/config.yaml"))
         self.assertEqual(config.runtime.num_workers, 0)
         self.assertEqual(config.video.source, 0)
+        self.assertEqual(config.tracking.tracker, "botsort.yaml")
+        self.assertTrue(config.tracking.persist)
 
     def test_auto_device_is_supported(self) -> None:
         self.assertIn(resolve_device("auto"), {"cpu", "cuda"})

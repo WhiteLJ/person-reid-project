@@ -1,4 +1,4 @@
-"""Configuration loading and runtime device selection for MVP-1."""
+"""Configuration loading and runtime device selection for MVP-2."""
 
 from __future__ import annotations
 
@@ -32,6 +32,13 @@ class RuntimeConfig:
 
 
 @dataclass(frozen=True)
+class TrackingConfig:
+    tracker: str
+    persist: bool
+    show_track_id: bool
+
+
+@dataclass(frozen=True)
 class UIConfig:
     window_name: str
     wait_key_ms: int
@@ -45,6 +52,7 @@ class AppConfig:
     video: VideoConfig
     model: ModelConfig
     runtime: RuntimeConfig
+    tracking: TrackingConfig
     ui: UIConfig
 
 
@@ -95,7 +103,7 @@ def _resolve_project_root(config_path: Path) -> Path:
 
 
 def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
-    """Load and validate the MVP-1 YAML configuration."""
+    """Load and validate the MVP-2 YAML configuration."""
 
     path = Path(config_path).resolve()
     if not path.is_file():
@@ -110,6 +118,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     video = _section(raw, "video")
     model = _section(raw, "model")
     runtime = _section(raw, "runtime")
+    tracking = _section(raw, "tracking")
     ui = _section(raw, "ui")
 
     source = parse_source(video.get("source", 0))
@@ -136,6 +145,11 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         runtime=RuntimeConfig(
             num_workers=requested_workers,
             log_level=str(runtime.get("log_level", "INFO")).upper(),
+        ),
+        tracking=TrackingConfig(
+            tracker=str(tracking.get("tracker", "botsort.yaml")),
+            persist=bool(tracking.get("persist", True)),
+            show_track_id=bool(tracking.get("show_track_id", True)),
         ),
         ui=UIConfig(
             window_name=str(ui.get("window_name", "Person Detection - MVP-1")),

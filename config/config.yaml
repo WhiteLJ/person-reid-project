@@ -13,8 +13,13 @@ runtime:
   num_workers: 0
   log_level: "INFO"
 
+tracking:
+  tracker: "botsort.yaml"
+  persist: true
+  show_track_id: true
+
 ui:
-  window_name: "Person Detection - MVP-1"
+  window_name: "Person Tracking - MVP-2"
   wait_key_ms: 1
   show_class_name: true
   show_confidence: true

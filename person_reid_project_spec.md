@@ -1197,15 +1197,17 @@ model:
   reid_weight: "weights/reid/osnet_x0_25.pth"
   device: "auto"
   person_class_id: 0
+  conf_threshold: 0.35
+  iou_threshold: 0.50
   image_size: 640
 
 runtime:
   num_workers: 0
 
 tracking:
-  backend: "ultralytics_botsort"
-  conf_threshold: 0.35
-  iou_threshold: 0.50
+  tracker: "botsort.yaml"
+  persist: true
+  show_track_id: true
   lost_frames: 15
 
 reid:
@@ -1388,6 +1390,11 @@ YOLO -> BoT-SORT -> Track ID
 ```
 
 验收：连续运动下 ID 基本稳定。
+
+当前实现约束：主循环复用同一个 `TrackingPipeline`，模型只加载一次；每帧只调用
+一次 `model.track()`，使用 `persist=True`、`tracker="botsort.yaml"` 和 `classes=[0]`。
+MVP-2 不启用 BoT-SORT appearance ReID，不传 `workers`，不实现 ROI、OSNet/ReID、
+TargetGallery、Person ID 或 SQLite。
 
 ### MVP-3：手动选人
 
