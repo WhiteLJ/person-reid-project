@@ -15,7 +15,7 @@ from src.target_manager import TargetManager
 from src.tracking_pipeline import TrackingPipeline
 from src.video_source import VideoSource
 from src.visualization import draw_tracks
-from ui.opencv_ui import OpenCVUI, UIAction
+from ui.opencv_ui import EditMode, OpenCVUI, UIAction
 
 
 LOGGER = logging.getLogger(__name__)
@@ -64,6 +64,54 @@ def run(config: AppConfig) -> int:
     source = VideoSource(config.video.source)
     ui = OpenCVUI(config.ui)
     target_manager = TargetManager()
+
+    def render_tracks(render_frame, render_tracks):
+        return draw_tracks(
+            render_frame,
+            render_tracks,
+            class_name=tracking_pipeline.class_name,
+            show_class_name=config.ui.show_class_name,
+            show_track_id=config.tracking.show_track_id,
+            show_confidence=config.ui.show_confidence,
+            selected_track_ids=target_manager.selected_track_ids,
+            show_unselected_tracks=config.ui.show_unselected_tracks,
+        )
+
+    def handle_roi(roi, frozen_tracks, mode):
+        track = find_track_by_roi(
+            roi,
+            frozen_tracks,
+            min_iou=config.selection.min_iou,
+        )
+        if track is None:
+            LOGGER.info(
+                "TARGET_ROI_FAILED mode=%s roi=%s min_iou=%.3f",
+                mode.name,
+                roi,
+                config.selection.min_iou,
+            )
+            return
+
+        if mode == EditMode.ADD_TARGETS:
+            already_selected = target_manager.is_selected(track.track_id)
+            target_manager.select(track)
+            LOGGER.info(
+                "TARGET_SELECTED track=%d already_selected=%s",
+                track.track_id,
+                already_selected,
+            )
+            return
+
+        if mode == EditMode.REMOVE_TARGETS:
+            if not target_manager.is_selected(track.track_id):
+                LOGGER.info(
+                    "TARGET_REMOVAL_IGNORED track=%d reason=not_selected",
+                    track.track_id,
+                )
+            else:
+                target_manager.deselect(track)
+                LOGGER.info("TARGET_REMOVED track=%d", track.track_id)
+
     try:
         source.open()
         LOGGER.info("SOURCE_OPENED source=%s", config.video.source)
@@ -74,71 +122,33 @@ def run(config: AppConfig) -> int:
                 break
 
             tracks = tracking_pipeline.process(frame)
-            annotated = draw_tracks(
-                frame,
-                tracks,
-                class_name=tracking_pipeline.class_name,
-                show_class_name=config.ui.show_class_name,
-                show_track_id=config.tracking.show_track_id,
-                show_confidence=config.ui.show_confidence,
-                selected_track_ids=target_manager.selected_track_ids,
-            )
+            annotated = render_tracks(frame, tracks)
             action = ui.show(annotated)
             if action == UIAction.QUIT:
                 LOGGER.info("USER_QUIT key=q")
                 break
-            if action == UIAction.SELECT_TARGET:
-                roi = ui.select_roi(frame)
-                if roi is None:
-                    LOGGER.info("TARGET_SELECTION_CANCELLED")
-                    continue
-                track = find_track_by_roi(
-                    roi,
-                    tracks,
-                    min_iou=config.selection.min_iou,
-                )
-                if track is None:
-                    LOGGER.info(
-                        "TARGET_SELECTION_FAILED roi=%s min_iou=%.3f",
-                        roi,
-                        config.selection.min_iou,
-                    )
-                else:
-                    already_selected = target_manager.is_selected(track.track_id)
-                    target_manager.select(track)
-                    LOGGER.info(
-                        "TARGET_SELECTED track=%d already_selected=%s",
-                        track.track_id,
-                        already_selected,
-                    )
-            elif action == UIAction.REMOVE_TARGET:
-                roi = ui.select_roi(frame)
-                if roi is None:
-                    LOGGER.info("TARGET_REMOVAL_CANCELLED")
-                    continue
-                track = find_track_by_roi(
-                    roi,
-                    tracks,
-                    min_iou=config.selection.min_iou,
-                )
-                if track is None:
-                    LOGGER.info(
-                        "TARGET_REMOVAL_FAILED roi=%s min_iou=%.3f",
-                        roi,
-                        config.selection.min_iou,
-                    )
-                elif not target_manager.is_selected(track.track_id):
-                    LOGGER.info(
-                        "TARGET_REMOVAL_IGNORED track=%d reason=not_selected",
-                        track.track_id,
-                    )
-                else:
-                    target_manager.deselect(track)
-                    LOGGER.info("TARGET_REMOVED track=%d", track.track_id)
-            elif action == UIAction.CLEAR_TARGETS:
+            if action == UIAction.CLEAR_TARGETS:
                 selected_count = len(target_manager.selected_track_ids)
                 target_manager.clear()
                 LOGGER.info("TARGETS_CLEARED count=%d", selected_count)
+                continue
+
+            if action in (UIAction.SELECT_TARGET, UIAction.REMOVE_TARGET):
+                edit_mode = (
+                    EditMode.ADD_TARGETS
+                    if action == UIAction.SELECT_TARGET
+                    else EditMode.REMOVE_TARGETS
+                )
+                edit_action = ui.run_edit_session(
+                    frame=frame,
+                    tracks=tracks,
+                    mode=edit_mode,
+                    on_roi=handle_roi,
+                    render_frame=render_tracks,
+                )
+                if edit_action == UIAction.QUIT:
+                    LOGGER.info("USER_QUIT key=q edit_mode=%s", edit_mode.name)
+                    break
     finally:
         source.release()
         ui.close()

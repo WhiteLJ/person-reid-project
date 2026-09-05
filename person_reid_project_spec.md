@@ -525,11 +525,8 @@ Track(track_id, bbox, conf)
 
 ### 9.2 用户手动框选目标
 
-第一版可用 OpenCV：
-
-```python
-cv2.selectROI()
-```
+MVP-3.1 使用 OpenCV 主窗口 mouse callback 的暂停编辑会话，不使用
+`cv2.selectROI()` 或独立 ROI 窗口。
 
 逻辑：
 
@@ -1140,6 +1137,11 @@ ReID 不建议每帧对所有人运行。
 
 MVP-3 在 OpenCV UI 中实现临时多目标选择；入库和 Gallery 管理仍属于后续 MVP。
 
+MVP-3.1 将 `S`/`R` 实现为同一暂停画面上的连续鼠标编辑会话：进入会话时冻结
+当前 frame 和 tracks，允许连续提交多个 ROI；Enter/Space 结束会话，Esc 取消
+当前未完成拖框，Q 传播为程序退出。编辑会话使用主窗口 callback，不使用
+`cv2.selectROI()` 或临时 ROI 窗口。
+
 建议快捷键：
 
 ```text
@@ -1222,6 +1224,7 @@ ui:
   show_class_name: true
   show_confidence: true
   show_track_id: true
+  show_unselected_tracks: false
   show_person_id: true
   show_similarity: true
   show_fps: true
@@ -1408,6 +1411,15 @@ ROI -> current Track -> selected_track_ids
 当前实现约束：ROI 选择使用当前已经处理完成的帧和 `tracks` 列表，不重新运行
 YOLO/BoT-SORT；MVP-3 不加载或调用 Torchreid/OSNet，不提取 embedding，
 不创建 Person ID、TargetGallery 或 SQLite。
+
+### MVP-3.1：暂停编辑会话
+
+正常播放时默认只显示 selected Track；所有未选 Track 仍由 YOLO + BoT-SORT
+后台跟踪。设置 `ui.show_unselected_tracks: true` 可恢复绿色调试框。
+`S` 进入 ADD_TARGETS，`R` 进入 REMOVE_TARGETS；两个模式均使用当前帧的
+frozen frame/frozen tracks 和主窗口 mouse callback，编辑期间不读取下一帧、
+不调用 YOLO/BoT-SORT。Enter/Space 退出编辑，Q 退出程序，callback 必须在
+正常和异常路径中清理。
 
 ### MVP-4：OSNet
 

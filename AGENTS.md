@@ -71,6 +71,12 @@ list and IoU matching; they must not trigger another YOLO/BoT-SORT inference. MV
 must not load or call Torchreid/OSNet, create Person IDs, use TargetGallery, or use
 SQLite.
 
+In MVP-3.1, the OpenCV UI uses a mouse-callback edit session on the existing main
+window. ADD_TARGETS and REMOVE_TARGETS must freeze the current frame and Track list,
+allow multiple ROI edits before Enter/Space, and clear the callback in a `finally`
+block. Unselected Tracks remain tracked but are hidden by default; Q from an edit
+session must propagate to application shutdown.
+
 ---
 
 ## 4. Critical Identity Rule

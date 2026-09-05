@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 
 import cv2
 import numpy as np
@@ -54,14 +54,15 @@ def draw_detections(
 
 def draw_tracks(
     frame: np.ndarray,
-    tracks: list[Track],
+    tracks: Sequence[Track],
     show_track_id: bool = True,
     show_confidence: bool = True,
     class_name: Callable[[int], str] | None = None,
     show_class_name: bool = True,
     selected_track_ids: Collection[int] | None = None,
+    show_unselected_tracks: bool = False,
 ) -> np.ndarray:
-    """Return a copy of ``frame`` annotated with temporary Track IDs."""
+    """Draw selected Tracks and optionally draw unselected Tracks for debugging."""
 
     annotated = frame.copy()
     height, width = annotated.shape[:2]
@@ -76,6 +77,8 @@ def draw_tracks(
             continue
 
         selected = track.track_id in selected_ids
+        if not selected and not show_unselected_tracks:
+            continue
         color = (0, 0, 255) if selected else (0, 255, 0)
         thickness = 4 if selected else 2
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)

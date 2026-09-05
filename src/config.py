@@ -49,6 +49,7 @@ class UIConfig:
     wait_key_ms: int
     show_class_name: bool
     show_confidence: bool
+    show_unselected_tracks: bool = False
 
 
 @dataclass(frozen=True)
@@ -168,5 +169,6 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             wait_key_ms=max(1, int(ui.get("wait_key_ms", 1))),
             show_class_name=bool(ui.get("show_class_name", True)),
             show_confidence=bool(ui.get("show_confidence", True)),
+            show_unselected_tracks=bool(ui.get("show_unselected_tracks", False)),
         ),
     )

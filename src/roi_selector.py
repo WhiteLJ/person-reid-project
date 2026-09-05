@@ -51,7 +51,7 @@ def bbox_iou(
 
 
 def find_track_by_roi(
-    roi: Sequence[float], tracks: list[Track], min_iou: float
+    roi: Sequence[float], tracks: Sequence[Track], min_iou: float
 ) -> Track | None:
     """Return the Track with the greatest IoU with ``roi`` if it passes the threshold."""
 

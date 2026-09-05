@@ -23,7 +23,7 @@ class VisualizationTests(unittest.TestCase):
         frame = np.zeros((80, 100, 3), dtype=np.uint8)
         tracks = [Track(7, (10, 10, 50, 60), 0.9, 0)]
 
-        result = draw_tracks(frame, tracks)
+        result = draw_tracks(frame, tracks, show_unselected_tracks=True)
 
         self.assertEqual(result.shape, frame.shape)
         self.assertFalse(np.array_equal(result, frame))
@@ -40,6 +40,26 @@ class VisualizationTests(unittest.TestCase):
 
         self.assertTrue(np.array_equal(result[10, 10], (0, 0, 255)))
         self.assertTrue(np.array_equal(result[10, 60], (0, 0, 255)))
+
+    def test_draw_tracks_hides_unselected_tracks_by_default(self) -> None:
+        frame = np.zeros((80, 120, 3), dtype=np.uint8)
+        tracks = [
+            Track(7, (10, 10, 40, 60), 0.9, 0),
+            Track(8, (60, 10, 90, 60), 0.8, 0),
+        ]
+
+        result = draw_tracks(frame, tracks, selected_track_ids={7})
+
+        self.assertTrue(np.array_equal(result[10, 10], (0, 0, 255)))
+        self.assertTrue(np.array_equal(result[10, 60], (0, 0, 0)))
+
+    def test_draw_tracks_can_show_unselected_tracks_for_debugging(self) -> None:
+        frame = np.zeros((80, 120, 3), dtype=np.uint8)
+        tracks = [Track(8, (60, 10, 90, 60), 0.8, 0)]
+
+        result = draw_tracks(frame, tracks, show_unselected_tracks=True)
+
+        self.assertTrue(np.array_equal(result[10, 60], (0, 255, 0)))
 
 
 if __name__ == "__main__":

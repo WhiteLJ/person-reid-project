@@ -26,3 +26,4 @@ ui:
   wait_key_ms: 1
   show_class_name: true
   show_confidence: true
+  show_unselected_tracks: false
