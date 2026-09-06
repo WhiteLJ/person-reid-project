@@ -88,6 +88,14 @@ due LOST targets and unbound candidate Tracks. Recovery must use batch ReID, a
 configurable threshold and explicitly defined two-sided margin, with one-to-one
 assignments. MVP-5 still does not implement Person ID, TargetGallery, or SQLite.
 
+In MVP-6, `TargetGallery` is an in-memory, explicit-enrollment domain module. It owns
+`GalleryPerson` records and the `session_target_id -> person_id` association lifecycle.
+G may enroll only an existing SessionTarget and must copy its reference bank and
+centroid without invoking ReID. R/C must detach target mappings without deleting
+GalleryPerson records; removing a GalleryPerson must remove all reverse mappings while
+leaving SessionTargets intact. MVP-6 must not add persistence or automatic Gallery
+recognition.
+
 ---
 
 ## 4. Critical Identity Rule

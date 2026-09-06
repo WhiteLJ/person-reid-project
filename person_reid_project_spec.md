@@ -80,7 +80,7 @@
 
 ---
 
-## 3. 两类身份必须严格区分
+## 3. 三层身份必须严格区分
 
 ### 3.1 Track ID
 
@@ -119,6 +119,22 @@ Person ID = P001
 Person ID 依靠 ReID + Target Gallery 维护。
 
 > **核心原则：Track ID 负责短时连续性；Person ID 负责长期身份。**
+
+### 3.3 SessionTarget 与 GalleryPerson
+
+MVP-5 引入的 `SessionTarget.target_id` 是当前程序运行期的临时目标身份，用于
+维护 ACTIVE/LOST/RECOVER 和当前 Track 绑定。MVP-6 引入的 `GalleryPerson.person_id`
+是用户显式 enrollment 后产生的内存目标库身份，例如 P001。两者均不是跨程序持久
+身份；MVP-7 才实现 SQLite 持久化。
+
+```text
+Track 17 -> SessionTarget 3 -> GalleryPerson P001
+Track 17 -> LOST -> Track 29
+                         └──仍然是 SessionTarget 3 / GalleryPerson P001
+```
+
+Gallery 自己维护 `session_target_id -> person_id` 映射。Track ID 改变不能改变
+Gallery 身份；删除 SessionTarget 只解除映射，不删除 GalleryPerson。
 
 ---
 
@@ -1246,7 +1262,7 @@ reid_recovery:
   reference_update_threshold: 0.80
 
 ui:
-  window_name: "Person Tracking - MVP-5"
+  window_name: "Person Tracking - MVP-6"
   show_class_name: true
   show_confidence: true
   show_track_id: true
@@ -1489,7 +1505,24 @@ batch ReID 与 normalized centroid similarity 进行一对一匹配。匹配必�
 
 ### MVP-6：内存 TargetGallery
 
-验收：当前目标可获得 P001 并在当前运行期重新识别。
+MVP-6 只实现内存 `TargetGallery`，不实现 SQLite、磁盘持久化、程序重启恢复或
+自动 Gallery recognition。用户必须先通过 `S` 创建 SessionTarget，再通过 `G`
+显式 enrollment；普通 Track 不能直接入库。
+
+`GalleryPerson` 使用递增的内存 `person_id`、默认 `Target P001` label、独立复制的
+reference bank 和 normalized centroid。Gallery 内部维护
+`session_target_id -> person_id` 关联，并负责其生命周期：R/C 删除或清除
+SessionTarget 时解除关联但保留 GalleryPerson；删除 GalleryPerson 时清除所有
+反向关联但保留 SessionTarget。target_id 和 person_id 在当前进程内均不复用。
+
+G session 复用 MVP-3.1 的 frozen frame/tracks 和 mouse callback，可连续 enrollment
+多个当前目标。enrollment 只复制 MVP-5 已有的 references/centroid，不重新运行
+YOLO、BoT-SORT 或 OSNet。Gallery 不参与 MVP-5 recovery，也不对普通 Track 自动
+执行 ReID。
+
+验收：当前目标可获得 P001/P002 等 GalleryPerson；Track ID 变化不影响关联；重复
+enrollment 幂等；删除 GalleryPerson、SessionTarget 或全部 SessionTargets 时边界
+行为符合上述规则。
 
 ### MVP-7：SQLite
 

@@ -10,6 +10,7 @@ class OpenCVUIActionTests(unittest.TestCase):
         self.assertEqual(key_to_action(ord("s")), UIAction.SELECT_TARGET)
         self.assertEqual(key_to_action(ord("R")), UIAction.REMOVE_TARGET)
         self.assertEqual(key_to_action(ord("c")), UIAction.CLEAR_TARGETS)
+        self.assertEqual(key_to_action(ord("g")), UIAction.ENROLL_GALLERY)
         self.assertEqual(key_to_action(ord("Q")), UIAction.QUIT)
         self.assertEqual(key_to_action(-1), UIAction.NONE)
 

@@ -1,4 +1,4 @@
-"""OpenCV display, actions, and MVP-3.1 ROI editing entry points."""
+"""OpenCV display, actions, and ROI editing entry points."""
 
 from __future__ import annotations
 
@@ -24,11 +24,13 @@ def key_to_action(key: int) -> UIAction:
         return UIAction.REMOVE_TARGET
     if normalized_key in (ord("c"), ord("C")):
         return UIAction.CLEAR_TARGETS
+    if normalized_key in (ord("g"), ord("G")):
+        return UIAction.ENROLL_GALLERY
     return UIAction.NONE
 
 
 class OpenCVUI:
-    """Display frames and run the blocking MVP-3.1 ROI edit session."""
+    """Display frames and run the blocking ROI edit session."""
 
     def __init__(self, config: UIConfig) -> None:
         self.config = config

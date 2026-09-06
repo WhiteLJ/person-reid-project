@@ -121,6 +121,34 @@ class ROIEditSessionTests(unittest.TestCase):
         self.assertIs(received[0][1], session.frozen_tracks)
         self.assertEqual(received[0][2], EditMode.ADD_TARGETS)
 
+    @patch("ui.roi_editor.cv2.imshow")
+    @patch("ui.roi_editor.cv2.setMouseCallback")
+    def test_gallery_session_can_submit_multiple_rois(
+        self, set_mouse_callback, imshow
+    ) -> None:
+        received: list[tuple[int, EditMode]] = []
+        session = self._session(
+            lambda roi, tracks, mode: received.append((roi[0], mode)),
+            mode=EditMode.ENROLL_GALLERY,
+        )
+
+        keys = [None, 13]
+
+        def wait_key(_wait_ms: int) -> int:
+            if keys.pop(0) is None:
+                session._on_mouse(cv2.EVENT_LBUTTONDOWN, 20, 20, 0, None)
+                session._on_mouse(cv2.EVENT_LBUTTONUP, 1, 1, 0, None)
+                session._on_mouse(cv2.EVENT_LBUTTONDOWN, 60, 20, 0, None)
+                session._on_mouse(cv2.EVENT_LBUTTONUP, 41, 1, 0, None)
+                return 255
+            return 13
+
+        with patch("ui.roi_editor.cv2.waitKey", side_effect=wait_key):
+            result = session.run()
+
+        self.assertEqual(result, UIAction.NONE)
+        self.assertEqual(received, [(1, EditMode.ENROLL_GALLERY), (41, EditMode.ENROLL_GALLERY)])
+
 
 if __name__ == "__main__":
     unittest.main()

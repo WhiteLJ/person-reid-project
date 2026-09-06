@@ -1,9 +1,9 @@
-# Person ReID Project — MVP-5
+# Person ReID Project — MVP-6
 
-MVP-5 在 MVP-4 的 OSNet 特征提取基础上，将 ReID 接入视频主流程，用于当前程序
-运行期间的目标 LOST / RECOVER。YOLOv8 使用 `weights/yolo/yolov8n.pt`，BoT-SORT
-继续生成临时 Track ID；`SessionTarget.target_id` 也只在当前进程内有效，不是
-持久化 Person ID。
+MVP-6 在 MVP-5 的基础上增加内存 `TargetGallery`。用户可以将已经通过 `S` 选择
+的 SessionTarget 显式加入 Gallery，获得当前进程内的 `GalleryPerson`（如 P001）。
+YOLOv8 使用 `weights/yolo/yolov8n.pt`，BoT-SORT 继续生成临时 Track ID；
+`SessionTarget.target_id` 和 `GalleryPerson.person_id` 都不会持久化。
 
 本阶段支持：
 
@@ -24,9 +24,11 @@ MVP-5 在 MVP-4 的 OSNet 特征提取基础上，将 ReID 接入视频主流程
 - cosine similarity validation；
 - ACTIVE / LOST / RECOVER session target；
 - 受 grace period、批量 ReID、threshold 和双侧 margin 约束的 Track ID 恢复；
-- 受一致性阈值保护且有最大长度的 reference embedding bank。
+- 受一致性阈值保护且有最大长度的 reference embedding bank；
+- `G / g`：将已有 SessionTarget 连续加入内存 TargetGallery；
+- 已入 Gallery 的目标显示 `TARGET P001 | ID n`。
 
-按 `S` 或 `R` 后进入暂停编辑会话。编辑会话使用进入模式时冻结的当前帧和
+按 `S`、`R` 或 `G` 后进入暂停编辑会话。编辑会话使用进入模式时冻结的当前帧和
 `tracks` 列表，允许连续拖动多个 ROI；Enter/Space 结束会话，Esc 取消当前未完成
 的拖框，Q 退出程序。编辑期间不会重新运行 YOLO 或 BoT-SORT，也不会读取下一帧。
 每帧主链路仍然只调用一次 `model.track(frame, ...)`。
@@ -37,7 +39,7 @@ MVP-5 在 MVP-4 的 OSNet 特征提取基础上，将 ReID 接入视频主流程
 - Person ID（当前只有临时的 SessionTarget）；
 - 持久化 Person ID；
 - 跨程序启动后的身份恢复；
-- 历史 TargetGallery；
+- 持久化 TargetGallery；
 - 自动识别历史目标库；
 - 训练或微调模型；
 - BoxMOT；
@@ -122,7 +124,7 @@ python app.py --source data/demo.mp4
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-## 人工验证 MVP-5
+## 人工验证 MVP-6
 
 1. 启动程序，按 `S`；主窗口暂停，在主窗口中拖动第一个 ROI，完成后该目标应立即显示 `TARGET | ID n`。
 2. 不要重新按 `S`，继续拖动第二个、第三个 ROI；多个目标应同时特殊高亮，重复框选同一人不会产生重复目标。
@@ -140,12 +142,18 @@ python -m unittest discover -s tests -p "test_*.py"
 11. 选择 A/B，单独让 A 离开再回来，确认只恢复 A，B 的 SessionTarget 不变化。
 12. 目标离开后按 `R` 删除仍可见的其他目标或按 `C` 清除；删除/清除后不再执行其
     后续恢复。
+13. 按 `G`，连续框选两个已经通过 `S` 选择的目标；确认分别生成 P001/P002，且
+    不需要重新运行 ReID。
+14. 再次框选同一个 SessionTarget，确认仍为原 GalleryPerson；框选普通 Track 时
+    确认 Gallery 不变化并记录 `GALLERY_ENROLL_REJECTED`。
+15. 删除 GalleryPerson 后，SessionTarget 仍能继续显示和跟踪；按 R/C 删除目标
+    时，GalleryPerson 保留但 session-target 关联消失。
 
 ## 代码结构
 
 ```text
-app.py                      # MVP-5 入口和主循环
-config/config.yaml          # MVP-5 配置
+app.py                      # MVP-6 入口和主循环
+config/config.yaml          # MVP-6 配置
 src/config.py               # 配置和设备选择
 src/video_source.py         # 摄像头/视频读取
 src/detector.py             # 保留的 MVP-1 检测模块
@@ -154,11 +162,12 @@ src/reid.py                 # Torchreid OSNet embedding 提取
 src/roi_selector.py         # ROI 与 Track 的 IoU 匹配
 src/target_manager.py       # SessionTarget 状态和 Track 绑定
 src/target_recovery.py      # reference bank 和 LOST/RECOVER 协调
+src/gallery.py              # 内存 TargetGallery 和 enrollment 关联
 src/models.py               # Detection / Track / SessionTarget 数据类
 src/visualization.py        # 普通框和目标高亮绘制
 src/logging_utils.py        # logging 配置
 ui/opencv_ui.py             # OpenCV 窗口和按键 Action
 ui/roi_editor.py            # 暂停编辑会话和鼠标拖框
 tools/reid_smoke_test.py    # 三图 ReID embedding 验证工具
-tests/                      # MVP-1 至 MVP-5 单元测试
+tests/                      # MVP-1 至 MVP-6 单元测试
 ```

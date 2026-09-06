@@ -1,4 +1,4 @@
-"""MVP-5 entry point: BoT-SORT tracks with in-session ReID recovery."""
+"""MVP-6 entry point: session-target ReID recovery and Gallery enrollment."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Sequence
 
 from src.config import AppConfig, load_config, parse_source
+from src.gallery import TargetGallery, format_person_id
 from src.logging_utils import configure_logging
 from src.reid import ReIDExtractor
 from src.roi_selector import find_track_by_roi
@@ -25,7 +26,7 @@ LOGGER = logging.getLogger(__name__)
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="MVP-5 YOLOv8n/BoT-SORT tracking with session-target ReID recovery"
+        description="MVP-6 tracking, session-target ReID recovery, and Gallery enrollment"
     )
     parser.add_argument(
         "--config",
@@ -73,6 +74,7 @@ def run(config: AppConfig) -> int:
     source = VideoSource(config.video.source)
     ui = OpenCVUI(config.ui)
     target_manager = TargetManager()
+    gallery = TargetGallery()
     target_recovery = TargetRecoveryCoordinator(
         target_manager=target_manager,
         reid_extractor=reid_extractor,
@@ -83,6 +85,15 @@ def run(config: AppConfig) -> int:
     current_frame_index = -1
 
     def render_tracks(render_frame, render_tracks):
+        gallery_labels_by_track = {}
+        for target in target_manager.active_targets():
+            if target.current_track_id is None:
+                continue
+            person = gallery.person_for_session_target(target.target_id)
+            if person is not None:
+                gallery_labels_by_track[target.current_track_id] = format_person_id(
+                    person.person_id
+                )
         return draw_tracks(
             render_frame,
             render_tracks,
@@ -92,6 +103,7 @@ def run(config: AppConfig) -> int:
             show_confidence=config.ui.show_confidence,
             selected_track_ids=target_manager.selected_track_ids,
             show_unselected_tracks=config.ui.show_unselected_tracks,
+            gallery_labels_by_track=gallery_labels_by_track,
         )
 
     def handle_roi(roi, frozen_tracks, mode):
@@ -125,12 +137,32 @@ def run(config: AppConfig) -> int:
                     track.track_id,
                 )
             else:
+                gallery.detach_session_target(target.target_id)
                 target_manager.deselect(track)
                 LOGGER.info(
                     "TARGET_REMOVED target=%d track=%d",
                     target.target_id,
                     track.track_id,
                 )
+            return
+
+        if mode == EditMode.ENROLL_GALLERY:
+            target = target_manager.target_for_track(track.track_id)
+            if target is None:
+                LOGGER.info(
+                    "GALLERY_ENROLL_REJECTED track=%d reason=not_session_target",
+                    track.track_id,
+                )
+                return
+            already_enrolled = gallery.person_for_session_target(target.target_id)
+            person = gallery.enroll(target)
+            LOGGER.info(
+                "GALLERY_ENROLLED person=%s target=%d track=%d already_enrolled=%s",
+                format_person_id(person.person_id),
+                target.target_id,
+                track.track_id,
+                already_enrolled is not None,
+            )
 
     try:
         source.open()
@@ -152,16 +184,22 @@ def run(config: AppConfig) -> int:
                 break
             if action == UIAction.CLEAR_TARGETS:
                 selected_count = len(target_manager.targets)
+                gallery.detach_all_session_targets(tuple(target_manager.targets))
                 target_manager.clear()
                 LOGGER.info("TARGETS_CLEARED count=%d", selected_count)
                 continue
 
-            if action in (UIAction.SELECT_TARGET, UIAction.REMOVE_TARGET):
-                edit_mode = (
-                    EditMode.ADD_TARGETS
-                    if action == UIAction.SELECT_TARGET
-                    else EditMode.REMOVE_TARGETS
-                )
+            if action in (
+                UIAction.SELECT_TARGET,
+                UIAction.REMOVE_TARGET,
+                UIAction.ENROLL_GALLERY,
+            ):
+                edit_modes = {
+                    UIAction.SELECT_TARGET: EditMode.ADD_TARGETS,
+                    UIAction.REMOVE_TARGET: EditMode.REMOVE_TARGETS,
+                    UIAction.ENROLL_GALLERY: EditMode.ENROLL_GALLERY,
+                }
+                edit_mode = edit_modes[action]
                 edit_action = ui.run_edit_session(
                     frame=frame,
                     tracks=tracks,

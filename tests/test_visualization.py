@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -60,6 +61,21 @@ class VisualizationTests(unittest.TestCase):
         result = draw_tracks(frame, tracks, show_unselected_tracks=True)
 
         self.assertTrue(np.array_equal(result[10, 60], (0, 255, 0)))
+
+    def test_draw_tracks_uses_gallery_label_for_selected_track(self) -> None:
+        frame = np.zeros((80, 100, 3), dtype=np.uint8)
+        tracks = [Track(7, (10, 10, 50, 60), 0.9, 0)]
+
+        with patch("src.visualization.cv2.putText") as put_text:
+            result = draw_tracks(
+                frame,
+                tracks,
+                selected_track_ids={7},
+                gallery_labels_by_track={7: "P001"},
+            )
+
+        self.assertTrue(np.array_equal(result[10, 10], (0, 0, 255)))
+        self.assertEqual(put_text.call_args.args[1], "TARGET P001 | ID 7 conf=0.90")
 
 
 if __name__ == "__main__":

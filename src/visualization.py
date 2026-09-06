@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 
 import cv2
 import numpy as np
@@ -61,6 +61,7 @@ def draw_tracks(
     show_class_name: bool = True,
     selected_track_ids: Collection[int] | None = None,
     show_unselected_tracks: bool = False,
+    gallery_labels_by_track: Mapping[int, str] | None = None,
 ) -> np.ndarray:
     """Draw selected Tracks and optionally draw unselected Tracks for debugging."""
 
@@ -84,7 +85,13 @@ def draw_tracks(
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
         label_parts: list[str] = []
         if selected:
-            label_parts.append(f"TARGET | ID {track.track_id}")
+            gallery_label = (gallery_labels_by_track or {}).get(track.track_id)
+            if gallery_label is None:
+                label_parts.append(f"TARGET | ID {track.track_id}")
+            else:
+                label_parts.append(
+                    f"TARGET {gallery_label} | ID {track.track_id}"
+                )
         else:
             if show_class_name and class_name is not None:
                 label_parts.append(class_name(track.class_id))

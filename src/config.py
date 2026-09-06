@@ -265,7 +265,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             reference_update_threshold=reference_update_threshold,
         ),
         ui=UIConfig(
-            window_name=str(ui.get("window_name", "Person Tracking - MVP-5")),
+            window_name=str(ui.get("window_name", "Person Tracking - MVP-6")),
             wait_key_ms=max(1, int(ui.get("wait_key_ms", 1))),
             show_class_name=bool(ui.get("show_class_name", True)),
             show_confidence=bool(ui.get("show_confidence", True)),

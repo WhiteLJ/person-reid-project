@@ -40,7 +40,7 @@ reid_recovery:
   reference_update_threshold: 0.80
 
 ui:
-  window_name: "Person Tracking - MVP-5"
+  window_name: "Person Tracking - MVP-6"
   wait_key_ms: 1
   show_class_name: true
   show_confidence: true

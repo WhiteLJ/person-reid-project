@@ -22,12 +22,14 @@ class UIAction(Enum):
     SELECT_TARGET = auto()
     REMOVE_TARGET = auto()
     CLEAR_TARGETS = auto()
+    ENROLL_GALLERY = auto()
 
 
 class EditMode(Enum):
     LIVE = auto()
     ADD_TARGETS = auto()
     REMOVE_TARGETS = auto()
+    ENROLL_GALLERY = auto()
 
 
 def normalize_roi_xyxy(
