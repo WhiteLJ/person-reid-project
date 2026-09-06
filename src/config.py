@@ -1,4 +1,4 @@
-"""Configuration loading and runtime device selection for MVP-3."""
+"""Configuration loading and runtime device selection."""
 
 from __future__ import annotations
 
@@ -44,6 +44,16 @@ class SelectionConfig:
 
 
 @dataclass(frozen=True)
+class ReIDConfig:
+    model_name: str
+    weight: Path
+    image_height: int
+    image_width: int
+    min_crop_width: int
+    min_crop_height: int
+
+
+@dataclass(frozen=True)
 class UIConfig:
     window_name: str
     wait_key_ms: int
@@ -60,6 +70,7 @@ class AppConfig:
     runtime: RuntimeConfig
     tracking: TrackingConfig
     selection: SelectionConfig
+    reid: ReIDConfig
     ui: UIConfig
 
 
@@ -110,7 +121,7 @@ def _resolve_project_root(config_path: Path) -> Path:
 
 
 def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
-    """Load and validate the MVP-3 YAML configuration."""
+    """Load and validate the project YAML configuration."""
 
     path = Path(config_path).resolve()
     if not path.is_file():
@@ -127,10 +138,11 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     runtime = _section(raw, "runtime")
     tracking = _section(raw, "tracking")
     selection = _section(raw, "selection")
+    reid = _section(raw, "reid")
     ui = _section(raw, "ui")
 
     source = parse_source(video.get("source", 0))
-    weight_value = model.get("yolo_weight", "weights/yolov8n.pt")
+    weight_value = model.get("yolo_weight", "weights/yolo/yolov8n.pt")
     weight_path = Path(weight_value)
     if not weight_path.is_absolute():
         weight_path = project_root / weight_path
@@ -142,6 +154,26 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     min_iou = float(selection.get("min_iou", 0.20))
     if not 0.0 < min_iou <= 1.0:
         raise ValueError("selection.min_iou must be greater than 0 and at most 1")
+
+    reid_weight_value = reid.get(
+        "weight", "weights/reid/osnet_x0_25_msmt17.pth"
+    )
+    reid_weight_path = Path(reid_weight_value)
+    if not reid_weight_path.is_absolute():
+        reid_weight_path = project_root / reid_weight_path
+
+    reid_model_name = str(reid.get("model_name", "osnet_x0_25")).strip()
+    if not reid_model_name:
+        raise ValueError("reid.model_name cannot be empty")
+
+    image_height = int(reid.get("image_height", 256))
+    image_width = int(reid.get("image_width", 128))
+    min_crop_width = int(reid.get("min_crop_width", 40))
+    min_crop_height = int(reid.get("min_crop_height", 100))
+    if image_height <= 0 or image_width <= 0:
+        raise ValueError("reid image dimensions must be positive")
+    if min_crop_width <= 0 or min_crop_height <= 0:
+        raise ValueError("reid minimum crop dimensions must be positive")
 
     return AppConfig(
         project_root=project_root,
@@ -164,8 +196,16 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             show_track_id=bool(tracking.get("show_track_id", True)),
         ),
         selection=SelectionConfig(min_iou=min_iou),
+        reid=ReIDConfig(
+            model_name=reid_model_name,
+            weight=reid_weight_path,
+            image_height=image_height,
+            image_width=image_width,
+            min_crop_width=min_crop_width,
+            min_crop_height=min_crop_height,
+        ),
         ui=UIConfig(
-            window_name=str(ui.get("window_name", "Person Tracking - MVP-3")),
+            window_name=str(ui.get("window_name", "Person Tracking - MVP-4")),
             wait_key_ms=max(1, int(ui.get("wait_key_ms", 1))),
             show_class_name=bool(ui.get("show_class_name", True)),
             show_confidence=bool(ui.get("show_confidence", True)),

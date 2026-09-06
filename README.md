@@ -1,7 +1,11 @@
-# Person ReID Project — MVP-3
+# Person ReID Project — MVP-4
 
-MVP-3 使用 Ultralytics YOLOv8 和 `weights/yolov8n.pt`，通过 Ultralytics BoT-SORT
-生成临时 Track ID，并支持用户通过 OpenCV ROI 同时选择多个当前 Track。
+MVP-4 在 MVP-3.1 的基础上增加 Torchreid 1.4.0 / OSNet `osnet_x0_25` 的
+Person ReID 特征提取和相似度验证。YOLOv8 使用 `weights/yolo/yolov8n.pt`，
+BoT-SORT 仍然只生成临时 Track ID。
+
+MVP-4 的 ReID 验证通过独立 smoke test 使用，不会把 OSNet 接入视频主循环，也不会
+对每帧所有 Track 执行 ReID。
 
 本阶段支持：
 
@@ -16,7 +20,10 @@ MVP-3 使用 Ultralytics YOLOv8 和 `weights/yolov8n.pt`，通过 Ultralytics Bo
 - 默认不显示未选中的 Track；可通过 `ui.show_unselected_tracks: true` 开启绿色调试框；
 - CUDA 可用时自动使用 CUDA，否则回退 CPU；
 - Windows 默认 `num_workers=0`；
-- 按 `q` 或 `Q` 退出。
+- 按 `q` 或 `Q` 退出；
+- Torchreid / OSNet ReID feature extraction；
+- normalized 512-D ReID embedding；
+- cosine similarity validation。
 
 按 `S` 或 `R` 后进入暂停编辑会话。编辑会话使用进入模式时冻结的当前帧和
 `tracks` 列表，允许连续拖动多个 ROI；Enter/Space 结束会话，Esc 取消当前未完成
@@ -25,12 +32,13 @@ MVP-3 使用 Ultralytics YOLOv8 和 `weights/yolov8n.pt`，通过 Ultralytics Bo
 
 本阶段暂不包含：
 
-- Torchreid/OSNet；
-- ReID embedding；
 - 离开画面后的身份恢复；
+- LOST / RECOVER；
+- Track ID 重绑定；
 - Person ID；
 - TargetGallery；
 - SQLite；
+- 自动识别目标库；
 - BoxMOT；
 - RTSP。
 
@@ -46,14 +54,39 @@ MVP-2 的逐帧主链路只调用一次 `model.track(frame, ...)`，不对同一
 python -m pip install -r requirements.txt
 ```
 
-`pip-freeze.txt` 仅是本机环境快照，不作为安装入口。MVP-3 不安装、不加载、也不
-调用 Torchreid/OSNet。
+`pip-freeze.txt` 仅是本机环境快照，不作为安装入口。正式依赖中的 Torchreid
+使用官方 Git 来源 `KaiyangZhou/deep-person-reid`，不使用 PyPI 上同名的旧包。
+`requirements.txt` 中固定为当前已验证的官方 commit：
+
+```text
+torchreid @ git+https://github.com/KaiyangZhou/deep-person-reid.git@f8cd150fdf77e8d9e1ed143b7f308c2c609ded50
+```
+
+ReID checkpoint 必须由用户预先放置到：
+
+```text
+weights/reid/osnet_x0_25_msmt17.pth
+```
+
+程序不会在正常运行时联网下载 checkpoint，也不会回退到 ImageNet-only 权重。
 
 项目已包含正式模型权重：
 
 ```text
-weights/yolov8n.pt
+weights/yolo/yolov8n.pt
 ```
+
+## ReID smoke test
+
+准备三张图片：A1、A2 为同一个人，B1 为另一个人，然后运行：
+
+```bash
+python -m tools.reid_smoke_test A1.jpg A2.jpg B1.jpg
+```
+
+工具会输出每张图片的 embedding shape、dtype、L2 norm，以及
+`cos(A1, A2)` 和 `cos(A1, B1)`。同一人与不同人的相似度关系仅作为当前素材的
+验证结果，不在 MVP-4 中硬编码最终阈值。
 
 ## 运行
 
@@ -87,19 +120,21 @@ python -m unittest discover -s tests -p "test_*.py"
 3. 按 `Enter` 或 `Space` 结束 ADD 会话并恢复视频；按 `Esc` 只取消当前未完成的拖框。
 4. 按 `R` 进入 REMOVE 会话；框选一个或多个已选目标，只有对应目标取消高亮，其他目标不受影响。
 5. 按 `R` 框选普通 Track 或空白区域；当前目标集合不应改变，并会记录日志提示。
-6. 按 `C` 清除全部目标，所有 Track 恢复普通显示。
+6. 按 `C` 清除全部目标，所有 `TARGET` 特殊框消失；普通 Track 默认仍不显示，
+   只有 `ui.show_unselected_tracks=true` 时才显示普通绿色 Track。
 7. 目标短暂遮挡后，如果 BoT-SORT 恢复相同 Track ID，应继续特殊高亮。
 8. 目标完全离开后以新 Track ID 返回时，MVP-3.1 不自动重新绑定；该能力留给后续 ReID。
 
 ## 代码结构
 
 ```text
-app.py                      # MVP-3 入口和主循环
-config/config.yaml          # MVP-3 配置
+app.py                      # MVP-3.1 入口和主循环
+config/config.yaml          # MVP-4 配置
 src/config.py               # 配置和设备选择
 src/video_source.py         # 摄像头/视频读取
 src/detector.py             # 保留的 MVP-1 检测模块
 src/tracking_pipeline.py    # YOLOv8n + BoT-SORT
+src/reid.py                 # Torchreid OSNet embedding 提取
 src/roi_selector.py         # ROI 与 Track 的 IoU 匹配
 src/target_manager.py       # 多目标 Track ID 选择状态
 src/models.py               # Detection / Track 数据类
@@ -107,5 +142,6 @@ src/visualization.py        # 普通框和目标高亮绘制
 src/logging_utils.py        # logging 配置
 ui/opencv_ui.py             # OpenCV 窗口和按键 Action
 ui/roi_editor.py            # 暂停编辑会话和鼠标拖框
-tests/                      # MVP-1/MVP-2/MVP-3/MVP-3.1 单元测试
+tools/reid_smoke_test.py    # 三图 ReID embedding 验证工具
+tests/                      # MVP-1/MVP-2/MVP-3/MVP-3.1/MVP-4 单元测试
 ```

@@ -37,7 +37,7 @@ class _FakeModel:
 
 def _configs() -> tuple[ModelConfig, RuntimeConfig, TrackingConfig]:
     return (
-        ModelConfig(Path("weights/yolov8n.pt"), "cpu", 0, 0.35, 0.50, 640),
+        ModelConfig(Path("weights/yolo/yolov8n.pt"), "cpu", 0, 0.35, 0.50, 640),
         RuntimeConfig(0, "INFO"),
         TrackingConfig("botsort.yaml", True, True),
     )

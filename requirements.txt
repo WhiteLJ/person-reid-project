@@ -4,3 +4,4 @@ torchvision==0.14.1
 opencv-python==4.10.0.84
 numpy==1.26.4
 PyYAML==6.0.3
+torchreid @ git+https://github.com/KaiyangZhou/deep-person-reid.git@f8cd150fdf77e8d9e1ed143b7f308c2c609ded50

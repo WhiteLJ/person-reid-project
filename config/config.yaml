@@ -2,7 +2,7 @@ video:
   source: 0
 
 model:
-  yolo_weight: "weights/yolov8n.pt"
+  yolo_weight: "weights/yolo/yolov8n.pt"
   device: "auto"
   person_class_id: 0
   conf_threshold: 0.35
@@ -21,8 +21,16 @@ tracking:
 selection:
   min_iou: 0.20
 
+reid:
+  model_name: "osnet_x0_25"
+  weight: "weights/reid/osnet_x0_25_msmt17.pth"
+  image_height: 256
+  image_width: 128
+  min_crop_width: 40
+  min_crop_height: 100
+
 ui:
-  window_name: "Person Tracking - MVP-3"
+  window_name: "Person Tracking - MVP-4"
   wait_key_ms: 1
   show_class_name: true
   show_confidence: true

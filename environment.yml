@@ -189,7 +189,7 @@ dependencies:
       - pyparsing==3.3.2
       - python-dateutil==2.9.0.post0
       - scipy==1.15.3
-      - torchreid==1.4.0
+      - torchreid @ git+https://github.com/KaiyangZhou/deep-person-reid.git@f8cd150fdf77e8d9e1ed143b7f308c2c609ded50
       - torchvision==0.14.1
       - ultralytics==8.4.138
       - ultralytics-thop==2.1.6

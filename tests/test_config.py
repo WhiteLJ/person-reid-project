@@ -19,6 +19,13 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.tracking.tracker, "botsort.yaml")
         self.assertTrue(config.tracking.persist)
         self.assertAlmostEqual(config.selection.min_iou, 0.20)
+        self.assertEqual(config.reid.model_name, "osnet_x0_25")
+        self.assertEqual(
+            config.reid.weight,
+            Path("weights/reid/osnet_x0_25_msmt17.pth").resolve(),
+        )
+        self.assertEqual((config.reid.image_height, config.reid.image_width), (256, 128))
+        self.assertEqual((config.reid.min_crop_width, config.reid.min_crop_height), (40, 100))
         self.assertFalse(config.ui.show_unselected_tracks)
 
     def test_auto_device_is_supported(self) -> None:

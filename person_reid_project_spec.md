@@ -252,7 +252,8 @@ GitHub：
 osnet_x0_25
 ```
 
-固定使用 Torchreid 1.4.0；该组件从 MVP-4 开始接入，MVP-1 不加载 ReID 模型。
+固定使用官方 Torchreid 1.4.0；该组件从 MVP-4 开始接入，MVP-1 至 MVP-3.1
+不加载 ReID 模型。
 
 如果 GPU 性能充足，可换更大 OSNet。
 
@@ -264,7 +265,19 @@ person crop -> normalized embedding
 
 OSNet 专门针对 Person Re-Identification，比直接拿 ImageNet ResNet50 当人员特征提取器更合适。
 
-第一版直接使用公开预训练权重，不训练 ReID。
+MVP-4 固定使用官方 Model Zoo 的 MSMT17 `combineall` ReID checkpoint：
+
+```text
+原始文件名：
+osnet_x0_25_msmt17_combineall_256x128_amsgrad_ep150_stp60_lr0.0015_b64_fb10_softmax_labelsmooth_flip_jitter.pth
+
+项目本地路径：
+weights/reid/osnet_x0_25_msmt17.pth
+```
+
+该 checkpoint 是 Person ReID 训练权重，不等同于 ImageNet-only pretrained
+weights。运行时必须使用本地 checkpoint；文件缺失或 backbone 参数无法匹配时
+应明确报错，不得静默联网下载或回退到 ImageNet 权重。
 
 ---
 
@@ -920,7 +933,7 @@ person-reid-project/
     └── boxmot/
 ```
 
-上述目录按 MVP 阶段逐步落地。MVP-1 复用现有 `weights/yolov8n.pt`，只创建检测
+上述目录按 MVP 阶段逐步落地。MVP-1 复用现有 `weights/yolo/yolov8n.pt`，只创建检测
 所需的基础模块；ReID、Gallery、TargetManager、SQLite 和复杂 UI 模块在对应阶段再加入。
 
 ---
@@ -944,6 +957,10 @@ class Track:
     person_id: str | None = None
     similarity: float | None = None
 ```
+
+上面的 `person_id` 和 `similarity` 字段属于后续 Person ID / Gallery 阶段的设计；
+MVP-4 的实际 `Track` 数据结构仍只包含 `track_id`、`bbox`、`confidence` 和
+`class_id`。ReID embedding 独立于 `Track` 保存和传递。
 
 可再增加：
 
@@ -1191,8 +1208,7 @@ video:
   source: 0
 
 model:
-  yolo_weight: "weights/yolov8n.pt"
-  reid_weight: "weights/reid/osnet_x0_25.pth"
+  yolo_weight: "weights/yolo/yolov8n.pt"
   device: "auto"
   person_class_id: 0
   conf_threshold: 0.35
@@ -1212,6 +1228,12 @@ selection:
   min_iou: 0.20
 
 reid:
+  model_name: "osnet_x0_25"
+  weight: "weights/reid/osnet_x0_25_msmt17.pth"
+  image_height: 256
+  image_width: 128
+  min_crop_width: 40
+  min_crop_height: 100
   gallery_threshold: 0.70
   selected_target_threshold: 0.70
   max_embeddings_per_person: 50
@@ -1423,7 +1445,13 @@ frozen frame/frozen tracks 和主窗口 mouse callback，编辑期间不读取�
 
 ### MVP-4：OSNet
 
-验收：能够输出 normalized embedding；同一人分数整体高于不同人。
+只实现 Person ReID 特征提取和相似度验证：使用官方 Torchreid 1.4.0 的
+`osnet_x0_25`，加载本地 MSMT17 combineall checkpoint，输出 normalized 512-D
+`float32` embedding，并提供 cosine similarity 验证工具。MVP-4 不实现 LOST、
+RECOVER、Track ID 重绑定、Person ID、TargetGallery、SQLite 或自动识别目标库。
+
+验收：能够输出 shape 为 `(512,)` 或 `(N, 512)` 的 normalized embedding；在合理
+测试素材上，同一人的相似度通常高于不同人的相似度，但不在本阶段固定最终阈值。
 
 ### MVP-5：LOST / RECOVER
 
@@ -1564,8 +1592,15 @@ PyYAML==6.0.3
 MVP-4 接入 ReID 时使用官方
 `https://github.com/KaiyangZhou/deep-person-reid` 项目提供的 Torchreid 1.4.0
 实现/API；不能把 PyPI 上名称相同但来源和版本不确定的 `torchreid` 包作为正式
-依赖。MVP-3 不安装、不加载或调用 Torchreid/OSNet。Pillow 由实际依赖链提供，
-在正式接入 ReID 前不单独声明它。
+依赖。正式 requirements 使用固定的官方 Git commit，不写成普通
+`torchreid==1.4.0`。MVP-3.1 及之前不安装、不加载或调用 Torchreid/OSNet。
+Pillow 由实际依赖链提供。
+
+正式 requirements 中的固定条目为：
+
+```text
+torchreid @ git+https://github.com/KaiyangZhou/deep-person-reid.git@f8cd150fdf77e8d9e1ed143b7f308c2c609ded50
+```
 
 SQLite 使用 Python 标准库 `sqlite3`，无需额外 pip 安装。
 
