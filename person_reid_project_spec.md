@@ -554,25 +554,29 @@ TargetManager.select(...) 或 TargetManager.deselect(...)
 ```
 
 如果最大 IoU 过低，则视为没有选中有效人物。
-MVP-3 只保存临时 `Track ID`，不提取 crop、不运行 OSNet/ReID，也不创建 Person ID。
+MVP-3 只保存临时 `Track ID`，不提取 crop、不运行 OSNet/ReID，也不创建 Person ID；
+MVP-5 的选择入口在当前 Track crop 上提取首个 ReID reference，并创建仅限当前
+进程的 `SessionTarget`。
 
 ---
 
 ### 9.3 当前目标 TRACKING
 
-如果某个 `selected_track_id` 仍然存在：
+如果某个 SessionTarget 的 `current_track_id` 仍然存在：
 
 - 直接跟随该 Track；
 - 绘制特殊颜色框；
-- 当前 Track 暂时消失时保留其 Track ID；
+- 当前 Track 暂时消失时保留 `last_track_id`；
 - 如果 BoT-SORT 恢复相同 Track ID，则继续高亮；
-- MVP-3 不进行 embedding 或全库搜索。
+- MVP-5 只按配置间隔为 ACTIVE 目标低频采样，并在一致性阈值通过时更新
+  bounded reference bank。
 
 ---
 
 ### 9.4 当前目标 LOST
 
-当连续若干帧没有找到 `selected_track_id`：
+当连续若干帧没有找到 SessionTarget 的 `current_track_id`，且超过配置的 grace
+period：
 
 ```text
 TRACKING -> LOST
@@ -581,20 +585,21 @@ TRACKING -> LOST
 保留：
 
 ```text
+target_id（仅当前进程）
+last_track_id
 reference_embeddings
-selected_person_id（若已入库）
-last_seen_frame
-last_seen_timestamp
-last_bbox
+centroid
+missing_frames
 ```
 
-然后进入 ReID Search。
+然后按 recovery interval 检查未被 ACTIVE target 占用的 candidate Tracks；没有
+足够相似或 margin 不足时保持 LOST，不强制绑定。
 
 ---
 
 ### 9.5 目标重新进入
 
-对于新 Track：
+对于新 Track，且存在 LOST SessionTarget：
 
 ```text
 new track
@@ -605,17 +610,17 @@ OSNet
  ↓
 query embedding
  ↓
-与 selected target references 比较
+与 LOST target 的 normalized centroid 比较
 ```
 
 达到阈值：
 
 ```text
-new_track_id -> 当前 Target
-LOST -> TRACKING
+new_track_id -> 原 SessionTarget
+LOST -> ACTIVE
 ```
 
-如果当前目标已是 P001：
+如果当前目标已有后续阶段的 Person ID：
 
 ```text
 P001 -> new_track_id
@@ -831,49 +836,39 @@ SQLite 保存 metadata
 
 ## 14. TargetManager 状态机
 
-```text
-NONE
- │
- │ 用户框选
- ▼
-TRACKING
- │
- │ 连续 N 帧消失
- ▼
-LOST
- │
- │ ReID match
- └──────────────> TRACKING
+MVP-5 的 `TargetManager` 管理多个当前会话目标；这里的 `target_id` 只在本次
+程序运行期间有效，不是 Person ID。每个 SessionTarget 独立维护自己的 Track
+绑定、状态和 ReID reference bank。MVP-5 的实际状态流转为：
 
-用户取消：任意状态 -> NONE
+```text
+SessionTarget 1 -> current Track 3 -> ACTIVE
+SessionTarget 2 -> current Track 8 -> ACTIVE
+
+SessionTarget 1 -> current Track None, last Track 3 -> LOST
+                         │
+                         │ ReID recovery
+                         ▼
+                 current Track 11 -> ACTIVE
+
+用户取消某个目标：删除整个 SessionTarget 及其 references
+用户清除全部：删除全部 SessionTargets 及其 references
 ```
 
-如果只是临时锁定：
+SessionTarget 至少包含：
 
 ```text
-state = TRACKING
-person_id = None
-```
-
-如果已经入库：
-
-```text
-state = TRACKING
-person_id = P001
-```
-
-推荐字段：
-
-```text
-state
-selected_track_id
-selected_person_id
+target_id
+current_track_id
+last_track_id
+state = ACTIVE / LOST
 reference_embeddings
-last_seen_frame
-last_seen_timestamp
-last_bbox
-lost_frame_count
+normalized centroid
+missing_frames
 ```
+
+短暂缺失只增加 `missing_frames`；达到配置的 grace period 后才进入 LOST。恢复
+必须经过 ReID threshold 和双侧 margin，不满足条件时保持 LOST。MVP-5 不在
+SessionTarget 中加入 Person ID、Gallery ID 或持久化字段。
 
 ---
 
@@ -1017,12 +1012,12 @@ class TargetGallery:
 
 ```python
 class TargetManager:
-    def select_track(self, track, embedding): ...
-    def update_visible(self, track): ...
-    def mark_lost(self): ...
-    def try_recover(self, track, embedding) -> bool: ...
-    def enroll_current_target(self, gallery) -> str: ...
-    def cancel(self): ...
+    def select(self, track, embedding, frame_index=0) -> SessionTarget: ...
+    def deselect(self, track) -> bool: ...
+    def update_visibility(self, tracks, lost_grace_frames, frame_index): ...
+    def add_reference(self, target_id, embedding, ...): ...
+    def recover(self, target_id, track, embedding, ...): ...
+    def clear(self): ...
 ```
 
 ### 17.5 DatabaseRepository
@@ -1241,8 +1236,17 @@ reid:
   min_bbox_width: 40
   min_bbox_height: 100
 
+reid_recovery:
+  lost_grace_frames: 10
+  reference_update_interval_frames: 15
+  recovery_interval_frames: 10
+  max_reference_embeddings: 8
+  recovery_threshold: 0.75
+  recovery_margin: 0.05
+  reference_update_threshold: 0.80
+
 ui:
-  window_name: "Person Tracking - MVP-3"
+  window_name: "Person Tracking - MVP-5"
   show_class_name: true
   show_confidence: true
   show_track_id: true
@@ -1455,7 +1459,33 @@ RECOVER、Track ID 重绑定、Person ID、TargetGallery、SQLite 或自动识�
 
 ### MVP-5：LOST / RECOVER
 
-验收：目标离开再返回，即使 Track ID 变了也恢复锁定。
+当前 MVP-5 只实现当前进程内的 SessionTarget，不实现持久化 Person ID、历史
+TargetGallery 或 SQLite。
+
+用户选择 Track 时，先由 `crop_person` 提取合法人物 crop，再通过已加载一次的
+Torchreid OSNet 建立 normalized 512-D reference。SessionTarget 至少保存：
+
+```text
+target_id
+current_track_id
+last_track_id
+state = ACTIVE / LOST
+reference_embeddings
+normalized centroid
+missing_frames
+```
+
+ACTIVE 目标按 `reference_update_interval_frames` 低频更新 reference，但新特征
+必须达到 `reference_update_threshold` 的 centroid 一致性检查，并受
+`max_reference_embeddings` 限制。current Track 连续缺失达到
+`lost_grace_frames` 后进入 LOST；恢复时只检查未被 ACTIVE target 占用的候选，按
+batch ReID 与 normalized centroid similarity 进行一对一匹配。匹配必须同时满足
+`recovery_threshold`；存在 second-best 时，target-side 和 candidate-side 都必须
+满足 `best - second >= recovery_margin`，单候选/单目标的一侧自动通过 margin。
+不满足条件时保持 LOST。
+
+验收：目标离开再返回，即使 Track ID 变了也恢复原 SessionTarget 的锁定；短暂
+遮挡在 grace period 内不触发重绑定；错误候选或模糊匹配不强行恢复。
 
 ### MVP-6：内存 TargetGallery
 

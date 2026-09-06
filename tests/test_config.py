@@ -26,6 +26,13 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual((config.reid.image_height, config.reid.image_width), (256, 128))
         self.assertEqual((config.reid.min_crop_width, config.reid.min_crop_height), (40, 100))
+        self.assertEqual(config.reid_recovery.lost_grace_frames, 10)
+        self.assertEqual(config.reid_recovery.reference_update_interval_frames, 15)
+        self.assertEqual(config.reid_recovery.recovery_interval_frames, 10)
+        self.assertEqual(config.reid_recovery.max_reference_embeddings, 8)
+        self.assertAlmostEqual(config.reid_recovery.recovery_threshold, 0.75)
+        self.assertAlmostEqual(config.reid_recovery.recovery_margin, 0.05)
+        self.assertAlmostEqual(config.reid_recovery.reference_update_threshold, 0.80)
         self.assertFalse(config.ui.show_unselected_tracks)
 
     def test_auto_device_is_supported(self) -> None:

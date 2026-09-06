@@ -1,11 +1,9 @@
-# Person ReID Project — MVP-4
+# Person ReID Project — MVP-5
 
-MVP-4 在 MVP-3.1 的基础上增加 Torchreid 1.4.0 / OSNet `osnet_x0_25` 的
-Person ReID 特征提取和相似度验证。YOLOv8 使用 `weights/yolo/yolov8n.pt`，
-BoT-SORT 仍然只生成临时 Track ID。
-
-MVP-4 的 ReID 验证通过独立 smoke test 使用，不会把 OSNet 接入视频主循环，也不会
-对每帧所有 Track 执行 ReID。
+MVP-5 在 MVP-4 的 OSNet 特征提取基础上，将 ReID 接入视频主流程，用于当前程序
+运行期间的目标 LOST / RECOVER。YOLOv8 使用 `weights/yolo/yolov8n.pt`，BoT-SORT
+继续生成临时 Track ID；`SessionTarget.target_id` 也只在当前进程内有效，不是
+持久化 Person ID。
 
 本阶段支持：
 
@@ -23,7 +21,10 @@ MVP-4 的 ReID 验证通过独立 smoke test 使用，不会把 OSNet 接入视�
 - 按 `q` 或 `Q` 退出；
 - Torchreid / OSNet ReID feature extraction；
 - normalized 512-D ReID embedding；
-- cosine similarity validation。
+- cosine similarity validation；
+- ACTIVE / LOST / RECOVER session target；
+- 受 grace period、批量 ReID、threshold 和双侧 margin 约束的 Track ID 恢复；
+- 受一致性阈值保护且有最大长度的 reference embedding bank。
 
 按 `S` 或 `R` 后进入暂停编辑会话。编辑会话使用进入模式时冻结的当前帧和
 `tracks` 列表，允许连续拖动多个 ROI；Enter/Space 结束会话，Esc 取消当前未完成
@@ -32,13 +33,13 @@ MVP-4 的 ReID 验证通过独立 smoke test 使用，不会把 OSNet 接入视�
 
 本阶段暂不包含：
 
-- 离开画面后的身份恢复；
-- LOST / RECOVER；
-- Track ID 重绑定；
-- Person ID；
-- TargetGallery；
 - SQLite；
-- 自动识别目标库；
+- Person ID（当前只有临时的 SessionTarget）；
+- 持久化 Person ID；
+- 跨程序启动后的身份恢复；
+- 历史 TargetGallery；
+- 自动识别历史目标库；
+- 训练或微调模型；
 - BoxMOT；
 - RTSP。
 
@@ -76,6 +77,13 @@ weights/reid/osnet_x0_25_msmt17.pth
 weights/yolo/yolov8n.pt
 ```
 
+MVP-5 的恢复参数位于 `reid_recovery` 配置节。当前值是保守的工程初值，需结合
+实际视频调整：`lost_grace_frames=10`、`reference_update_interval_frames=15`、
+`recovery_interval_frames=10`、`max_reference_embeddings=8`、
+`recovery_threshold=0.75`、`recovery_margin=0.05`、
+`reference_update_threshold=0.80`。恢复使用 normalized centroid similarity，
+不会因单个异常历史 embedding 的高分直接绑定。
+
 ## ReID smoke test
 
 准备三张图片：A1、A2 为同一个人，B1 为另一个人，然后运行：
@@ -86,7 +94,8 @@ python -m tools.reid_smoke_test A1.jpg A2.jpg B1.jpg
 
 工具会输出每张图片的 embedding shape、dtype、L2 norm，以及
 `cos(A1, A2)` 和 `cos(A1, B1)`。同一人与不同人的相似度关系仅作为当前素材的
-验证结果，不在 MVP-4 中硬编码最终阈值。
+验证结果。MVP-5 的恢复阈值、margin 和 reference 更新阈值只是可调工程初值，
+不代表通用最优值。
 
 ## 运行
 
@@ -113,7 +122,7 @@ python app.py --source data/demo.mp4
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-## 人工验证多目标选择
+## 人工验证 MVP-5
 
 1. 启动程序，按 `S`；主窗口暂停，在主窗口中拖动第一个 ROI，完成后该目标应立即显示 `TARGET | ID n`。
 2. 不要重新按 `S`，继续拖动第二个、第三个 ROI；多个目标应同时特殊高亮，重复框选同一人不会产生重复目标。
@@ -122,26 +131,34 @@ python -m unittest discover -s tests -p "test_*.py"
 5. 按 `R` 框选普通 Track 或空白区域；当前目标集合不应改变，并会记录日志提示。
 6. 按 `C` 清除全部目标，所有 `TARGET` 特殊框消失；普通 Track 默认仍不显示，
    只有 `ui.show_unselected_tracks=true` 时才显示普通绿色 Track。
-7. 目标短暂遮挡后，如果 BoT-SORT 恢复相同 Track ID，应继续特殊高亮。
-8. 目标完全离开后以新 Track ID 返回时，MVP-3.1 不自动重新绑定；该能力留给后续 ReID。
+7. 目标短暂遮挡后，如果 BoT-SORT 恢复相同 Track ID，应继续特殊高亮，且不应发生
+   不必要的重绑定。
+8. 目标完全离开后，观察日志中的 `TARGET_LOST target=... old_track_id=...`；以新
+   Track ID 返回并满足阈值/双侧 margin 后，应记录 `TARGET_RECOVERED`，红框继续跟随。
+9. 在 A 离开期间让 B/C 活动，确认 A 不会恢复到已被 ACTIVE 目标占用的 Track。
+10. 使用明显不同的人作为候选；相似度不足时目标保持 LOST，不发生误绑定。
+11. 选择 A/B，单独让 A 离开再回来，确认只恢复 A，B 的 SessionTarget 不变化。
+12. 目标离开后按 `R` 删除仍可见的其他目标或按 `C` 清除；删除/清除后不再执行其
+    后续恢复。
 
 ## 代码结构
 
 ```text
-app.py                      # MVP-3.1 入口和主循环
-config/config.yaml          # MVP-4 配置
+app.py                      # MVP-5 入口和主循环
+config/config.yaml          # MVP-5 配置
 src/config.py               # 配置和设备选择
 src/video_source.py         # 摄像头/视频读取
 src/detector.py             # 保留的 MVP-1 检测模块
 src/tracking_pipeline.py    # YOLOv8n + BoT-SORT
 src/reid.py                 # Torchreid OSNet embedding 提取
 src/roi_selector.py         # ROI 与 Track 的 IoU 匹配
-src/target_manager.py       # 多目标 Track ID 选择状态
-src/models.py               # Detection / Track 数据类
+src/target_manager.py       # SessionTarget 状态和 Track 绑定
+src/target_recovery.py      # reference bank 和 LOST/RECOVER 协调
+src/models.py               # Detection / Track / SessionTarget 数据类
 src/visualization.py        # 普通框和目标高亮绘制
 src/logging_utils.py        # logging 配置
 ui/opencv_ui.py             # OpenCV 窗口和按键 Action
 ui/roi_editor.py            # 暂停编辑会话和鼠标拖框
 tools/reid_smoke_test.py    # 三图 ReID embedding 验证工具
-tests/                      # MVP-1/MVP-2/MVP-3/MVP-3.1/MVP-4 单元测试
+tests/                      # MVP-1 至 MVP-5 单元测试
 ```

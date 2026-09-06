@@ -77,6 +77,17 @@ allow multiple ROI edits before Enter/Space, and clear the callback in a `finall
 block. Unselected Tracks remain tracked but are hidden by default; Q from an edit
 session must propagate to application shutdown.
 
+In MVP-5, the authoritative selection state is a set of in-memory `SessionTarget`
+records, not a mutable selected-Track-ID set. Each record keeps a temporary session
+`target_id`, `current_track_id`, `last_track_id`, ACTIVE/LOST state, a bounded
+normalized reference bank, and centroid. User selection must create the initial ReID
+reference from the selected crop; invalid crops must not create a recoverable target.
+The main loop may create one OSNet/ReID extractor, update ACTIVE references only at a
+configured interval after a centroid-consistency check, and attempt recovery only for
+due LOST targets and unbound candidate Tracks. Recovery must use batch ReID, a
+configurable threshold and explicitly defined two-sided margin, with one-to-one
+assignments. MVP-5 still does not implement Person ID, TargetGallery, or SQLite.
+
 ---
 
 ## 4. Critical Identity Rule

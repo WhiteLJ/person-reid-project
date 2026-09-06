@@ -1,4 +1,4 @@
-"""MVP-3 entry point: multi-target ROI selection over BoT-SORT Tracks."""
+"""MVP-5 entry point: BoT-SORT tracks with in-session ReID recovery."""
 
 from __future__ import annotations
 
@@ -10,8 +10,10 @@ from typing import Sequence
 
 from src.config import AppConfig, load_config, parse_source
 from src.logging_utils import configure_logging
+from src.reid import ReIDExtractor
 from src.roi_selector import find_track_by_roi
 from src.target_manager import TargetManager
+from src.target_recovery import TargetRecoveryCoordinator
 from src.tracking_pipeline import TrackingPipeline
 from src.video_source import VideoSource
 from src.visualization import draw_tracks
@@ -23,7 +25,7 @@ LOGGER = logging.getLogger(__name__)
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="MVP-3 YOLOv8n person tracking with multi-target ROI selection"
+        description="MVP-5 YOLOv8n/BoT-SORT tracking with session-target ReID recovery"
     )
     parser.add_argument(
         "--config",
@@ -60,10 +62,25 @@ def run(config: AppConfig) -> int:
         config.tracking.tracker,
         config.tracking.persist,
     )
+    reid_extractor = ReIDExtractor(config.reid, config.model.device)
+    LOGGER.info(
+        "REID_MODEL_LOADED name=%s checkpoint=%s device=%s",
+        config.reid.model_name,
+        config.reid.weight,
+        reid_extractor.device,
+    )
 
     source = VideoSource(config.video.source)
     ui = OpenCVUI(config.ui)
     target_manager = TargetManager()
+    target_recovery = TargetRecoveryCoordinator(
+        target_manager=target_manager,
+        reid_extractor=reid_extractor,
+        reid_config=config.reid,
+        recovery_config=config.reid_recovery,
+    )
+    frame_index = 0
+    current_frame_index = -1
 
     def render_tracks(render_frame, render_tracks):
         return draw_tracks(
@@ -93,24 +110,27 @@ def run(config: AppConfig) -> int:
             return
 
         if mode == EditMode.ADD_TARGETS:
-            already_selected = target_manager.is_selected(track.track_id)
-            target_manager.select(track)
-            LOGGER.info(
-                "TARGET_SELECTED track=%d already_selected=%s",
-                track.track_id,
-                already_selected,
+            target_recovery.select_from_track(
+                frame,
+                track,
+                current_frame_index,
             )
             return
 
         if mode == EditMode.REMOVE_TARGETS:
-            if not target_manager.is_selected(track.track_id):
+            target = target_manager.target_for_track(track.track_id)
+            if target is None:
                 LOGGER.info(
                     "TARGET_REMOVAL_IGNORED track=%d reason=not_selected",
                     track.track_id,
                 )
             else:
                 target_manager.deselect(track)
-                LOGGER.info("TARGET_REMOVED track=%d", track.track_id)
+                LOGGER.info(
+                    "TARGET_REMOVED target=%d track=%d",
+                    target.target_id,
+                    track.track_id,
+                )
 
     try:
         source.open()
@@ -121,14 +141,17 @@ def run(config: AppConfig) -> int:
                 LOGGER.info("SOURCE_END source=%s", config.video.source)
                 break
 
+            current_frame_index = frame_index
             tracks = tracking_pipeline.process(frame)
+            target_recovery.process_frame(frame, tracks, current_frame_index)
+            frame_index += 1
             annotated = render_tracks(frame, tracks)
             action = ui.show(annotated)
             if action == UIAction.QUIT:
                 LOGGER.info("USER_QUIT key=q")
                 break
             if action == UIAction.CLEAR_TARGETS:
-                selected_count = len(target_manager.selected_track_ids)
+                selected_count = len(target_manager.targets)
                 target_manager.clear()
                 LOGGER.info("TARGETS_CLEARED count=%d", selected_count)
                 continue

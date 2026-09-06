@@ -54,6 +54,19 @@ class ReIDConfig:
 
 
 @dataclass(frozen=True)
+class ReIDRecoveryConfig:
+    """Runtime controls for in-memory target recovery in MVP-5."""
+
+    lost_grace_frames: int
+    reference_update_interval_frames: int
+    recovery_interval_frames: int
+    max_reference_embeddings: int
+    recovery_threshold: float
+    recovery_margin: float
+    reference_update_threshold: float
+
+
+@dataclass(frozen=True)
 class UIConfig:
     window_name: str
     wait_key_ms: int
@@ -71,6 +84,7 @@ class AppConfig:
     tracking: TrackingConfig
     selection: SelectionConfig
     reid: ReIDConfig
+    reid_recovery: ReIDRecoveryConfig
     ui: UIConfig
 
 
@@ -139,6 +153,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     tracking = _section(raw, "tracking")
     selection = _section(raw, "selection")
     reid = _section(raw, "reid")
+    reid_recovery = _section(raw, "reid_recovery")
     ui = _section(raw, "ui")
 
     source = parse_source(video.get("source", 0))
@@ -175,6 +190,42 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     if min_crop_width <= 0 or min_crop_height <= 0:
         raise ValueError("reid minimum crop dimensions must be positive")
 
+    lost_grace_frames = int(reid_recovery.get("lost_grace_frames", 10))
+    reference_update_interval_frames = int(
+        reid_recovery.get("reference_update_interval_frames", 15)
+    )
+    recovery_interval_frames = int(
+        reid_recovery.get("recovery_interval_frames", 10)
+    )
+    max_reference_embeddings = int(
+        reid_recovery.get("max_reference_embeddings", 8)
+    )
+    recovery_threshold = float(
+        reid_recovery.get("recovery_threshold", 0.75)
+    )
+    recovery_margin = float(reid_recovery.get("recovery_margin", 0.05))
+    reference_update_threshold = float(
+        reid_recovery.get("reference_update_threshold", 0.80)
+    )
+    if lost_grace_frames < 1:
+        raise ValueError("reid_recovery.lost_grace_frames must be positive")
+    if reference_update_interval_frames < 1:
+        raise ValueError(
+            "reid_recovery.reference_update_interval_frames must be positive"
+        )
+    if recovery_interval_frames < 1:
+        raise ValueError("reid_recovery.recovery_interval_frames must be positive")
+    if max_reference_embeddings < 1:
+        raise ValueError("reid_recovery.max_reference_embeddings must be positive")
+    for name, value in (
+        ("recovery_threshold", recovery_threshold),
+        ("reference_update_threshold", reference_update_threshold),
+    ):
+        if not 0.0 < value <= 1.0:
+            raise ValueError(f"reid_recovery.{name} must be greater than 0 and at most 1")
+    if recovery_margin < 0.0:
+        raise ValueError("reid_recovery.recovery_margin must be non-negative")
+
     return AppConfig(
         project_root=project_root,
         video=VideoConfig(source=source),
@@ -204,8 +255,17 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             min_crop_width=min_crop_width,
             min_crop_height=min_crop_height,
         ),
+        reid_recovery=ReIDRecoveryConfig(
+            lost_grace_frames=lost_grace_frames,
+            reference_update_interval_frames=reference_update_interval_frames,
+            recovery_interval_frames=recovery_interval_frames,
+            max_reference_embeddings=max_reference_embeddings,
+            recovery_threshold=recovery_threshold,
+            recovery_margin=recovery_margin,
+            reference_update_threshold=reference_update_threshold,
+        ),
         ui=UIConfig(
-            window_name=str(ui.get("window_name", "Person Tracking - MVP-4")),
+            window_name=str(ui.get("window_name", "Person Tracking - MVP-5")),
             wait_key_ms=max(1, int(ui.get("wait_key_ms", 1))),
             show_class_name=bool(ui.get("show_class_name", True)),
             show_confidence=bool(ui.get("show_confidence", True)),
