@@ -1,4 +1,4 @@
-"""In-memory TargetGallery for explicit MVP-6 enrollment."""
+"""In-memory TargetGallery for explicit enrollment and runtime restoration."""
 
 from __future__ import annotations
 
@@ -46,6 +46,41 @@ class TargetGallery:
         self._people: dict[int, GalleryPerson] = {}
         self._session_target_to_person: dict[int, int] = {}
         self._next_person_id = 1
+
+    def restore_people(
+        self,
+        people: Iterable[GalleryPerson],
+        next_person_id: int | None = None,
+    ) -> None:
+        """Replace people from persistence without restoring old session mappings.
+
+        The repository owns persistence.  This method only restores validated
+        GalleryPerson values into memory and deliberately starts with an empty
+        ``SessionTarget`` association map because session targets are process
+        lifetime state.
+        """
+
+        restored: dict[int, GalleryPerson] = {}
+        for person in people:
+            if person.person_id < 1:
+                raise ValueError("GalleryPerson person_id must be positive")
+            if person.person_id in restored:
+                raise ValueError(
+                    f"duplicate GalleryPerson person_id: {person.person_id}"
+                )
+            restored[person.person_id] = _copy_gallery_person(person)
+
+        minimum_next_id = max(restored, default=0) + 1
+        if next_person_id is None:
+            restored_next_id = minimum_next_id
+        else:
+            if next_person_id < 1:
+                raise ValueError("next_person_id must be positive")
+            restored_next_id = max(next_person_id, minimum_next_id)
+
+        self._people = restored
+        self._session_target_to_person.clear()
+        self._next_person_id = restored_next_id
 
     def enroll(self, session_target: SessionTarget) -> GalleryPerson:
         """Snapshot a valid SessionTarget into the Gallery, idempotently."""
@@ -158,6 +193,57 @@ def _copy_reference_bank(session_target: SessionTarget) -> list[np.ndarray]:
             )
         references.append(normalized.astype(np.float32, copy=True))
     return references
+
+
+def _copy_gallery_person(person: GalleryPerson) -> GalleryPerson:
+    """Deep-copy a GalleryPerson while preserving the normalized contract."""
+
+    if not isinstance(person.label, str) or not person.label.strip():
+        raise ValueError(f"GalleryPerson {person.person_id} has an invalid label")
+    if not person.reference_embeddings:
+        raise ValueError(
+            f"GalleryPerson {person.person_id} has no reference embeddings"
+        )
+
+    references: list[np.ndarray] = []
+    expected_shape: tuple[int, ...] | None = None
+    for index, reference in enumerate(person.reference_embeddings):
+        try:
+            normalized = normalize_embedding(reference)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"GalleryPerson {person.person_id} has invalid reference "
+                f"embedding at index {index}"
+            ) from exc
+        if normalized.ndim != 1:
+            raise ValueError(
+                f"GalleryPerson {person.person_id} references must have shape (D,)"
+            )
+        if expected_shape is None:
+            expected_shape = normalized.shape
+        elif normalized.shape != expected_shape:
+            raise ValueError(
+                f"GalleryPerson {person.person_id} reference dimensions do not match"
+            )
+        references.append(normalized.astype(np.float32, copy=True))
+
+    try:
+        centroid = normalize_embedding(person.centroid)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"GalleryPerson {person.person_id} has an invalid centroid"
+        ) from exc
+    if centroid.ndim != 1 or centroid.shape != references[0].shape:
+        raise ValueError(
+            f"GalleryPerson {person.person_id} centroid dimension does not match references"
+        )
+
+    return GalleryPerson(
+        person_id=person.person_id,
+        label=person.label,
+        reference_embeddings=references,
+        centroid=centroid.astype(np.float32, copy=True),
+    )
 
 
 def _copy_centroid(

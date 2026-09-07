@@ -67,6 +67,13 @@ class ReIDRecoveryConfig:
 
 
 @dataclass(frozen=True)
+class DatabaseConfig:
+    """SQLite persistence settings."""
+
+    path: Path
+
+
+@dataclass(frozen=True)
 class UIConfig:
     window_name: str
     wait_key_ms: int
@@ -85,6 +92,7 @@ class AppConfig:
     selection: SelectionConfig
     reid: ReIDConfig
     reid_recovery: ReIDRecoveryConfig
+    database: DatabaseConfig
     ui: UIConfig
 
 
@@ -154,6 +162,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     selection = _section(raw, "selection")
     reid = _section(raw, "reid")
     reid_recovery = _section(raw, "reid_recovery")
+    database = _section(raw, "database")
     ui = _section(raw, "ui")
 
     source = parse_source(video.get("source", 0))
@@ -226,6 +235,13 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     if recovery_margin < 0.0:
         raise ValueError("reid_recovery.recovery_margin must be non-negative")
 
+    database_value = database.get("path", "database/person_reid.db")
+    database_path = Path(database_value)
+    if not str(database_path).strip():
+        raise ValueError("database.path cannot be empty")
+    if not database_path.is_absolute():
+        database_path = project_root / database_path
+
     return AppConfig(
         project_root=project_root,
         video=VideoConfig(source=source),
@@ -264,8 +280,9 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             recovery_margin=recovery_margin,
             reference_update_threshold=reference_update_threshold,
         ),
+        database=DatabaseConfig(path=database_path),
         ui=UIConfig(
-            window_name=str(ui.get("window_name", "Person Tracking - MVP-6")),
+            window_name=str(ui.get("window_name", "Person Tracking - MVP-7")),
             wait_key_ms=max(1, int(ui.get("wait_key_ms", 1))),
             show_class_name=bool(ui.get("show_class_name", True)),
             show_confidence=bool(ui.get("show_confidence", True)),

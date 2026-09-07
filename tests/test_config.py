@@ -33,6 +33,10 @@ class ConfigTests(unittest.TestCase):
         self.assertAlmostEqual(config.reid_recovery.recovery_threshold, 0.75)
         self.assertAlmostEqual(config.reid_recovery.recovery_margin, 0.05)
         self.assertAlmostEqual(config.reid_recovery.reference_update_threshold, 0.80)
+        self.assertEqual(
+            config.database.path,
+            Path("database/person_reid.db").resolve(),
+        )
         self.assertFalse(config.ui.show_unselected_tracks)
 
     def test_auto_device_is_supported(self) -> None:

@@ -210,6 +210,28 @@ class TargetGalleryTests(unittest.TestCase):
         self.assertIsNone(gallery.person_for_session_target(target_a.target_id))
         self.assertIsNone(gallery.person_for_session_target(target_b.target_id))
 
+    def test_restore_people_clears_old_session_mappings_and_restores_next_id(self) -> None:
+        source_gallery = TargetGallery()
+        source_target = _session_target(3, (1, 0))
+        source_person = source_gallery.enroll(source_target)
+        restored_gallery = TargetGallery()
+        old_target = _session_target(99, (0, 1))
+        restored_gallery.enroll(old_target)
+
+        restored_gallery.restore_people(
+            source_gallery.all_people(),
+            next_person_id=5,
+        )
+
+        restored_person = restored_gallery.get(source_person.person_id)
+        self.assertIsNotNone(restored_person)
+        self.assertIsNone(restored_gallery.person_for_session_target(old_target.target_id))
+        assert restored_person is not None
+        restored_person.centroid[0] = 0.0
+        self.assertNotEqual(float(source_person.centroid[0]), 0.0)
+        new_person = restored_gallery.enroll(_session_target(4, (0, 1)))
+        self.assertEqual(new_person.person_id, 5)
+
 
 if __name__ == "__main__":
     unittest.main()

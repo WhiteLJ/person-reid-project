@@ -1262,7 +1262,7 @@ reid_recovery:
   reference_update_threshold: 0.80
 
 ui:
-  window_name: "Person Tracking - MVP-6"
+  window_name: "Person Tracking - MVP-7"
   show_class_name: true
   show_confidence: true
   show_track_id: true
@@ -1271,9 +1271,8 @@ ui:
   show_similarity: true
   show_fps: true
 
-storage:
-  database: "data/gallery.db"
-  thumbnails_dir: "data/thumbnails"
+database:
+  path: "database/person_reid.db"
 ```
 
 所有阈值和路径都放配置，不写死在业务代码中。
@@ -1524,9 +1523,42 @@ YOLO、BoT-SORT 或 OSNet。Gallery 不参与 MVP-5 recovery，也不对普通 T
 enrollment 幂等；删除 GalleryPerson、SessionTarget 或全部 SessionTargets 时边界
 行为符合上述规则。
 
-### MVP-7：SQLite
+### MVP-7：SQLite 持久化
 
-验收：关闭再启动后 Gallery 仍存在。
+MVP-7 在不改变 MVP-6 `TargetGallery` 业务模型的前提下增加独立的
+`GalleryRepository` SQLite 持久化层。SQLite 只保存 `GalleryPerson` 的
+`person_id`、`label`、reference embeddings 和 normalized centroid；不保存
+Track、SessionTarget、ACTIVE/LOST、current_track_id、missing_frames 或
+session-target 映射。
+
+embedding 使用固定的 float32、512-D BLOB 格式，不使用 pickle。每个 SQLite
+connection 都启用 `PRAGMA foreign_keys = ON`，删除 GalleryPerson 时通过外键
+级联删除其 embeddings。数据库父目录由 Repository 自动创建，默认相对路径为：
+
+```yaml
+database:
+  path: "database/person_reid.db"
+```
+
+`gallery_meta.next_person_id` 只用于维护跨重启且删除后不复用的 person ID 序列。
+新增 GalleryPerson、全部 embeddings 和序列更新在同一事务中提交，任一步失败都
+整体回滚。启动时先初始化数据库、加载 GalleryPerson，再恢复内存 Gallery；历史
+SessionTarget 映射不恢复。
+
+G enrollment 仍然只能针对已经存在的 SessionTarget，且不重新运行 ReID。重复
+enrollment 在当前进程内幂等，不会重复写入数据库。删除或清空 Gallery 时，内存
+和磁盘由持久化协调层按明确顺序更新，失败不会静默制造不一致。
+
+MVP-7 不实现 Gallery 自动识别。数据库加载出的 P001/P002 只存在于 Gallery，
+不会自动绑定新的 SessionTarget，也不会对普通 Track 执行 ReID。`tools/gallery_admin.py`
+提供离线的 `list`、`remove P001` 和 `clear` 管理操作；执行修改操作前应关闭主程序。
+
+验收：关闭再启动后 Gallery 仍存在，person ID、label 和 512-D 特征保持不变；
+新增人员继续使用下一个未分配 ID。
+
+最终 Gallery UI 需求留待后续阶段实现：当前红框目标直接添加到库、已入库目标
+从库中移除、独立 Gallery 侧栏/管理页、查看人员、单个删除、批量删除、清空和
+label 编辑。
 
 ### MVP-8：自动目标库识别
 

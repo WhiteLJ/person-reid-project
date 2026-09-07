@@ -3,3 +3,7 @@ __pycache__/
 .pytest_cache/
 runs/
 *.log
+database/*.db
+database/*.sqlite
+database/*.sqlite3
+.test_tmp/

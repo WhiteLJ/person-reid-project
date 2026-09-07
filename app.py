@@ -1,4 +1,4 @@
-"""MVP-6 entry point: session-target ReID recovery and Gallery enrollment."""
+"""MVP-7 entry point: ReID recovery and persistent Gallery enrollment."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Sequence
 
 from src.config import AppConfig, load_config, parse_source
+from src.database import GalleryRepository
 from src.gallery import TargetGallery, format_person_id
+from src.gallery_service import GalleryPersistenceService
 from src.logging_utils import configure_logging
 from src.reid import ReIDExtractor
 from src.roi_selector import find_track_by_roi
@@ -26,7 +28,7 @@ LOGGER = logging.getLogger(__name__)
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="MVP-6 tracking, session-target ReID recovery, and Gallery enrollment"
+        description="MVP-7 tracking, session-target ReID recovery, and persistent Gallery"
     )
     parser.add_argument(
         "--config",
@@ -47,6 +49,17 @@ def _override_source(config: AppConfig, source: str | None) -> AppConfig:
 
 
 def run(config: AppConfig) -> int:
+    repository = GalleryRepository(config.database.path)
+    repository.initialize()
+    gallery = TargetGallery()
+    gallery_service = GalleryPersistenceService(gallery, repository)
+    loaded_people = gallery_service.load()
+    LOGGER.info(
+        "GALLERY_LOADED path=%s people=%d",
+        repository.path,
+        len(loaded_people),
+    )
+
     LOGGER.info(
         "APP_START device=%s workers=%d",
         config.model.device,
@@ -74,7 +87,6 @@ def run(config: AppConfig) -> int:
     source = VideoSource(config.video.source)
     ui = OpenCVUI(config.ui)
     target_manager = TargetManager()
-    gallery = TargetGallery()
     target_recovery = TargetRecoveryCoordinator(
         target_manager=target_manager,
         reid_extractor=reid_extractor,
@@ -155,7 +167,15 @@ def run(config: AppConfig) -> int:
                 )
                 return
             already_enrolled = gallery.person_for_session_target(target.target_id)
-            person = gallery.enroll(target)
+            try:
+                person = gallery_service.enroll(target)
+            except Exception:
+                LOGGER.exception(
+                    "GALLERY_ENROLL_FAILED target=%d track=%d",
+                    target.target_id,
+                    track.track_id,
+                )
+                return
             LOGGER.info(
                 "GALLERY_ENROLLED person=%s target=%d track=%d already_enrolled=%s",
                 format_person_id(person.person_id),

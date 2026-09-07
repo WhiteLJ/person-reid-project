@@ -96,6 +96,21 @@ GalleryPerson records; removing a GalleryPerson must remove all reverse mappings
 leaving SessionTargets intact. MVP-6 must not add persistence or automatic Gallery
 recognition.
 
+In MVP-7, SQLite persistence is isolated in `src/database.py` as a
+`GalleryRepository`; SQL must not be added to `TargetGallery`. Only GalleryPerson
+fields (person_id, label, reference embeddings, and centroid) are persisted. Each
+connection must execute `PRAGMA foreign_keys = ON`, embeddings use validated float32
+512-D BLOBs without pickle, and the database parent directory is created from the
+configured relative path. The person records, all embeddings, and the monotonic
+`gallery_meta.next_person_id` update must commit in one transaction. SessionTarget,
+Track, runtime state, and session-target mappings are never persisted or restored.
+Startup loads GalleryPerson records before video processing; it does not automatically
+recognize ordinary Tracks. G enrollment must persist only a newly created person, and
+must roll back that new in-memory person if persistence fails without damaging an
+existing duplicate enrollment. Gallery remove/clear operations must coordinate memory
+and disk without silently leaving them inconsistent. `tools/gallery_admin.py` is an
+offline management tool, so the main application must be closed before remove/clear.
+
 ---
 
 ## 4. Critical Identity Rule

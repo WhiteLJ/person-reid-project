@@ -39,8 +39,11 @@ reid_recovery:
   recovery_margin: 0.05
   reference_update_threshold: 0.80
 
+database:
+  path: "database/person_reid.db"
+
 ui:
-  window_name: "Person Tracking - MVP-6"
+  window_name: "Person Tracking - MVP-7"
   wait_key_ms: 1
   show_class_name: true
   show_confidence: true
