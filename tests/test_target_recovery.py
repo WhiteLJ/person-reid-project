@@ -178,6 +178,54 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(extractor.extract_calls, 1)
         self.assertIs(manager.targets[1], target)
 
+    def test_accepted_reference_emits_one_drained_update_event(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        _manager, coordinator = self._coordinator(
+            extractor,
+            reference_update_interval_frames=1,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+
+        coordinator.process_frame(self.frame, [self.track_a], 1)
+
+        events = coordinator.drain_reference_updates()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].target_id, target.target_id)
+        self.assertEqual(events[0].frame_index, 1)
+        self.assertEqual(len(events[0].reference_embeddings), 2)
+        self.assertEqual(events[0].centroid.shape, (2,))
+        self.assertEqual(coordinator.drain_reference_updates(), ())
+
+    def test_rejected_reference_emits_no_update_event(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((0, 1)))
+        _manager, coordinator = self._coordinator(
+            extractor,
+            reference_update_interval_frames=1,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+
+        coordinator.process_frame(self.frame, [self.track_a], 1)
+
+        self.assertEqual(len(target.reference_embeddings), 1)
+        self.assertEqual(coordinator.drain_reference_updates(), ())
+
+    def test_recovery_reference_is_not_emitted_as_gallery_update(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        _manager, coordinator = self._coordinator(
+            extractor,
+            recovery_confirmation_hits=1,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+
+        matches = coordinator.process_frame(self.frame, [self.track_b], 2)
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(coordinator.drain_reference_updates(), ())
+
     def test_invalid_or_small_selection_crop_does_not_create_target(self) -> None:
         extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
         manager, coordinator = self._coordinator(extractor)

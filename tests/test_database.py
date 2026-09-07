@@ -217,6 +217,57 @@ class GalleryRepositoryTests(unittest.TestCase):
             connection.close()
         self.assertEqual((person_count, embedding_count, next_id), (0, 0, 1))
 
+    def test_update_features_preserves_person_label_and_next_id(self) -> None:
+        self.repository.save_person(_person(1))
+        self.repository.update_person_features(
+            1,
+            [_embedding(0), _embedding(1), _embedding(2)],
+            _embedding(2),
+        )
+
+        reopened = GalleryRepository(self.database_path)
+        people = reopened.load_all()
+        self.assertEqual(len(people), 1)
+        self.assertEqual(people[0].person_id, 1)
+        self.assertEqual(people[0].label, "Person 1")
+        self.assertEqual(len(people[0].reference_embeddings), 3)
+        self.assertTrue(np.array_equal(people[0].centroid, _embedding(2)))
+        self.assertEqual(reopened.load_next_person_id(), 2)
+
+    def test_update_unknown_person_raises_clear_error(self) -> None:
+        with self.assertRaises(RepositoryError):
+            self.repository.update_person_features(99, [_embedding(0)], _embedding(0))
+
+    def test_update_features_is_atomic_on_embedding_failure(self) -> None:
+        self.repository.save_person(_person(1))
+        connection = self.repository._connect()
+        try:
+            connection.execute(
+                """
+                CREATE TRIGGER fail_update_second_embedding
+                BEFORE INSERT ON gallery_embedding
+                WHEN NEW.person_id = 1 AND NEW.embedding_index = 1
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced update failure');
+                END
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with self.assertRaises(RepositoryError):
+            self.repository.update_person_features(
+                1,
+                [_embedding(0), _embedding(1)],
+                _embedding(1),
+            )
+
+        persisted = self.repository.load_all()[0]
+        self.assertEqual(len(persisted.reference_embeddings), 1)
+        self.assertTrue(np.array_equal(persisted.reference_embeddings[0], _embedding(0)))
+        self.assertTrue(np.array_equal(persisted.centroid, _embedding(0)))
+
     def test_schema_does_not_persist_session_or_track_state(self) -> None:
         self.repository.initialize()
         connection = self.repository._connect()

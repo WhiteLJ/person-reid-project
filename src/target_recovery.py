@@ -44,6 +44,17 @@ class _PendingRecovery:
     last_attempt_frame: int
 
 
+@dataclass(frozen=True)
+class ReferenceUpdateEvent:
+    """One accepted ACTIVE reference-bank update for downstream enrichment."""
+
+    target_id: int
+    frame_index: int
+    reference_embeddings: tuple[np.ndarray, ...]
+    centroid: np.ndarray
+    target_state: TargetState = TargetState.ACTIVE
+
+
 def recovery_score(target: SessionTarget, embedding: np.ndarray) -> float:
     """Score a candidate against the normalized centroid, not max bank score.
 
@@ -201,6 +212,7 @@ class TargetRecoveryCoordinator:
         self.recovery_accepted_count = 0
         self.quality_rejected_count = 0
         self.reid_batch_count = 0
+        self._reference_updates: list[ReferenceUpdateEvent] = []
 
     @property
     def pending(self) -> dict[tuple[int, int], int]:
@@ -211,6 +223,13 @@ class TargetRecoveryCoordinator:
     @property
     def track_ages(self) -> dict[int, int]:
         return dict(self._track_ages)
+
+    def drain_reference_updates(self) -> tuple[ReferenceUpdateEvent, ...]:
+        """Consume accepted reference events exactly once."""
+
+        events = tuple(self._reference_updates)
+        self._reference_updates.clear()
+        return events
 
     def select_from_track(
         self,
@@ -350,13 +369,28 @@ class TargetRecoveryCoordinator:
         for job, embedding in resolved_jobs:
             kind, owner_id, track, _crop = job
             if kind == "reference":
-                self.target_manager.add_reference(
+                accepted = self.target_manager.add_reference(
                     owner_id,
                     embedding,
                     frame_index,
                     self.recovery_config.max_reference_embeddings,
                     self.recovery_config.reference_update_threshold,
                 )
+                if accepted:
+                    target = self.target_manager.targets.get(owner_id)
+                    if target is not None:
+                        self._reference_updates.append(
+                            ReferenceUpdateEvent(
+                                target_id=target.target_id,
+                                frame_index=frame_index,
+                                reference_embeddings=tuple(
+                                    reference.copy()
+                                    for reference in target.reference_embeddings
+                                ),
+                                centroid=target.centroid.copy(),
+                                target_state=target.state,
+                            )
+                        )
             elif track is not None:
                 recovery_candidates.append(RecoveryCandidate(track, embedding.copy()))
 

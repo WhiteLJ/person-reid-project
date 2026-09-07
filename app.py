@@ -1,4 +1,4 @@
-"""MVP-8.1 entry point: crowded-scene tracking and conservative ReID."""
+"""MVP-8.2 entry point: conservative tracking, recognition, and enrichment."""
 
 from __future__ import annotations
 
@@ -33,8 +33,8 @@ LOGGER = logging.getLogger(__name__)
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "MVP-8.1 crowded-scene tracking, session-target ReID recovery, "
-            "and persistent Gallery recognition"
+            "MVP-8.2 tracking, session-target recovery, Gallery recognition, "
+            "and safe persistent feature enrichment"
         )
     )
     parser.add_argument(
@@ -59,7 +59,11 @@ def run(config: AppConfig) -> int:
     repository = GalleryRepository(config.database.path)
     repository.initialize()
     gallery = TargetGallery()
-    gallery_service = GalleryPersistenceService(gallery, repository)
+    gallery_service = GalleryPersistenceService(
+        gallery,
+        repository,
+        enrichment_config=config.gallery_enrichment,
+    )
     loaded_people = gallery_service.load()
     LOGGER.info(
         "GALLERY_LOADED path=%s people=%d",
@@ -224,6 +228,13 @@ def run(config: AppConfig) -> int:
             tracks = tracking_pipeline.process(frame)
             diagnostics.observe_tracks(tracks, current_frame_index)
             target_recovery.process_frame(frame, tracks, current_frame_index)
+            gallery_service.update_runtime_state(
+                target_manager.targets.values(),
+                current_frame_index,
+            )
+            gallery_service.enrich_reference_updates(
+                target_recovery.drain_reference_updates()
+            )
             gallery_recognition.process_frame(
                 frame,
                 tracks,

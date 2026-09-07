@@ -1,16 +1,17 @@
-# Person ReID Project - MVP-8.1
+# Person ReID Project - MVP-8.2
 
 This project is an OpenCV prototype for person detection, temporary tracking,
 session target recovery, persistent Gallery enrollment, and automatic recognition
 of persisted Gallery people.
 
-## Current MVP-8.1 behavior
+## Current MVP-8.2 behavior
 
 The runtime pipeline is:
 
 ```text
 VideoSource -> YOLOv8n person detection -> Ultralytics BoT-SORT
-           -> Track[] -> MVP-5 LOST/recovery -> MVP-8 Gallery recognition
+           -> Track[] -> MVP-5 LOST/recovery -> accepted reference events
+           -> MVP-8.2 safe Gallery enrichment -> MVP-8 Gallery recognition
            -> OpenCV display
 ```
 
@@ -20,7 +21,7 @@ The three identity layers remain separate:
 - `SessionTarget.target_id`: current-process target identity used by LOST/recovery;
 - `GalleryPerson.person_id`: persistent logical identity displayed as `P001`, `P002`, ... .
 
-MVP-8.1 supports:
+The MVP-8.1 foundation supports:
 
 - camera and local video input;
 - YOLOv8 person detection and BoT-SORT temporary Track IDs;
@@ -42,14 +43,29 @@ Crowded-scene safeguards add:
 - lightweight Track lifecycle, recovery, recognition, quality-rejection, and FPS
   diagnostics.
 
+MVP-8.2 adds safe persistent Gallery feature enrichment:
+
+- S then G can create a Gallery person immediately, even with one reference;
+- later accepted ACTIVE runtime references can update that explicitly enrolled
+  person's bounded Gallery snapshot without another OSNet inference;
+- each accepted reference update is consumed once, and SQLite feature replacement
+  is atomic before the in-memory snapshot is replaced;
+- after recovery, enrichment waits for the configured stable ACTIVE cooldown;
+- a person recognized automatically from the persisted Gallery is not enriched
+  until the user explicitly presses G for that current SessionTarget.
+
+Enrichment is single-threaded and does not change the SQLite schema. LOST targets,
+recovery candidates, rejected/low-quality references, and pending recovery attempts
+never update persistent Gallery features.
+
 The priority in this stage is conservative identity behavior: a valid Track may
 remain LOST rather than being rebound to a similar-looking person. The application
 does not claim a Track ID change is ground-truth fragmentation, and it does not
 automatically classify a recovery as true or false identity without manual video
 annotation.
 
-Automatic recognition reads the in-memory Gallery loaded at startup. It does not
-write SQLite or update persistent Gallery features. It does not create a new
+Automatic recognition reads the in-memory Gallery loaded at startup. Recognition
+itself does not write SQLite, update persistent Gallery features, or create a new
 `GalleryPerson` during recognition.
 
 Ordinary unselected Tracks remain tracked in the background. By default they are
@@ -85,7 +101,7 @@ ImageNet-only or random weights.
 
 ## Configuration
 
-The default configuration is in `config/config.yaml`. Important MVP-8.1 settings are:
+The default configuration is in `config/config.yaml`. Important MVP-8.2 settings are:
 
 ```yaml
 gallery_recognition:
@@ -104,10 +120,14 @@ reid_recovery:
   recovery_confirmation_hits: 2
   recovery_pending_max_age_frames: 60
 
+gallery_enrichment:
+  # Engineering starting value, not a universal optimum.
+  post_recovery_stable_frames: 30
+
 reid_quality:
   min_track_confidence: 0.35
   max_edge_truncation_ratio: 0.30
-  max_person_overlap_ratio: 0.50
+  max_person_overlap_ratio: 0.60
 
 diagnostics:
   enabled: true
@@ -159,6 +179,8 @@ Controls:
 - `S`: pause and add one or more current Tracks as SessionTargets;
 - `R`: pause and remove one or more current SessionTargets;
 - `G`: pause and explicitly enroll existing SessionTargets into the Gallery;
+  for an automatically recognized target this grants enrichment for the current
+  session and keeps the existing person ID;
 - `C`: clear all current SessionTargets and their runtime associations;
 - `Enter`/`Space`: finish an edit session;
 - `Q`: exit the entire application, including from an edit session.
@@ -169,7 +191,7 @@ set that option to `true` to show them.
 
 ## Offline Gallery administration
 
-The lightweight MVP-7/MVP-8.1 development tool supports listing and deleting
+The lightweight MVP-7/MVP-8.2 development tool supports listing and deleting
 persistent Gallery people:
 
 ```bash
@@ -195,8 +217,10 @@ python -m unittest discover -s tests -p "test_*.py"
 
 ## Not implemented yet
 
-MVP-8.1 does not include PySide/Qt UI, RTSP, face recognition, training/fine-tuning,
-BoxMOT, automatic persistent Gallery feature updates, or complex Gallery editing.
+MVP-8.2 does not include PySide/Qt UI, RTSP, face recognition, training/fine-tuning,
+BoxMOT, unrestricted automatic/adaptive Gallery feature updates, or complex Gallery
+editing. Automatically recognized targets remain excluded from persistent enrichment
+until explicit G enrollment in the current run.
 False recovery counts require manual review against the fixed regression video; the
 program reports attempts, pending proposals, accepted recoveries, and Track
 created/ended events only. The next stage may address live-stream robustness and

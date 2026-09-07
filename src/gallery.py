@@ -113,6 +113,72 @@ class TargetGallery:
     def get(self, person_id: int) -> GalleryPerson | None:
         return self._people.get(person_id)
 
+    def feature_snapshot(
+        self,
+        person_id: int,
+        reference_embeddings: Iterable[np.ndarray],
+        centroid: np.ndarray,
+    ) -> GalleryPerson:
+        """Build a validated, detached feature snapshot without mutating state."""
+
+        current = self._people.get(person_id)
+        if current is None:
+            raise KeyError(f"unknown Gallery person: {person_id}")
+        return _copy_gallery_person(
+            GalleryPerson(
+                person_id=current.person_id,
+                label=current.label,
+                reference_embeddings=[
+                    np.asarray(reference).copy()
+                    for reference in reference_embeddings
+                ],
+                centroid=np.asarray(centroid).copy(),
+            )
+        )
+
+    def apply_feature_snapshot(self, snapshot: GalleryPerson) -> GalleryPerson:
+        """Apply a previously validated snapshot while preserving associations."""
+
+        current = self._people.get(snapshot.person_id)
+        if current is None:
+            raise KeyError(f"unknown Gallery person: {snapshot.person_id}")
+        if snapshot.label != current.label:
+            raise ValueError(
+                f"feature update cannot change label for person_id={snapshot.person_id}"
+            )
+        updated = _copy_gallery_person(snapshot)
+        self._people[snapshot.person_id] = updated
+        return updated
+
+    def update_person_features(
+        self,
+        person_id: int,
+        reference_embeddings: Iterable[np.ndarray],
+        centroid: np.ndarray,
+    ) -> GalleryPerson:
+        """Replace one person's bounded normalized feature snapshot in memory."""
+
+        snapshot = self.feature_snapshot(
+            person_id,
+            reference_embeddings,
+            centroid,
+        )
+        return self.apply_feature_snapshot(snapshot)
+
+    def restore_person(self, person: GalleryPerson) -> GalleryPerson:
+        """Replace one person from persistence without changing session mappings."""
+
+        current = self._people.get(person.person_id)
+        if current is None:
+            raise KeyError(f"unknown Gallery person: {person.person_id}")
+        if person.label != current.label:
+            raise ValueError(
+                f"restored person label differs for person_id={person.person_id}"
+            )
+        restored = _copy_gallery_person(person)
+        self._people[person.person_id] = restored
+        return restored
+
     def all_people(self) -> tuple[GalleryPerson, ...]:
         """Return people in stable person_id order."""
 

@@ -8,6 +8,7 @@ for person IDs; runtime SessionTarget and Track state is never persisted.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Iterator
 import sqlite3
@@ -241,6 +242,103 @@ class GalleryRepository:
             raise RepositoryError(
                 f"failed to save person_id={person_id} in {self.path}"
             ) from exc
+
+    def update_person_features(
+        self,
+        person_id: int,
+        reference_embeddings: Sequence[np.ndarray],
+        centroid: np.ndarray,
+    ) -> None:
+        """Atomically replace one person's centroid and reference embeddings.
+
+        The person row and its child rows are updated in one transaction.  The
+        stable person ID, label, and monotonic ID allocator are intentionally
+        untouched.
+        """
+
+        person_id = self._validate_person_id(person_id)
+        centroid_blob = self._encode_embedding(
+            centroid,
+            context=f"person_id={person_id} centroid",
+        )
+        reference_blobs = [
+            self._encode_embedding(
+                reference,
+                context=f"person_id={person_id} embedding_index={index}",
+            )
+            for index, reference in enumerate(reference_embeddings)
+        ]
+        if not reference_blobs:
+            raise RepositoryError(
+                f"person_id={person_id} must contain at least one embedding"
+            )
+
+        self.initialize()
+        try:
+            with self._transaction() as connection:
+                exists = connection.execute(
+                    "SELECT 1 FROM gallery_person WHERE person_id = ?",
+                    (person_id,),
+                ).fetchone()
+                if exists is None:
+                    raise RepositoryError(
+                        f"cannot update unknown person_id={person_id}"
+                    )
+
+                connection.execute(
+                    """
+                    UPDATE gallery_person
+                    SET centroid = ?, centroid_dim = ?, centroid_dtype = ?
+                    WHERE person_id = ?
+                    """,
+                    (
+                        centroid_blob,
+                        EMBEDDING_DIMENSION,
+                        EMBEDDING_DTYPE,
+                        person_id,
+                    ),
+                )
+                connection.execute(
+                    "DELETE FROM gallery_embedding WHERE person_id = ?",
+                    (person_id,),
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO gallery_embedding(
+                        person_id, embedding_index, embedding,
+                        embedding_dim, embedding_dtype
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            person_id,
+                            index,
+                            blob,
+                            EMBEDDING_DIMENSION,
+                            EMBEDDING_DTYPE,
+                        )
+                        for index, blob in enumerate(reference_blobs)
+                    ],
+                )
+        except RepositoryError:
+            raise
+        except sqlite3.IntegrityError as exc:
+            raise RepositoryError(
+                f"failed to update person_id={person_id}: database constraint error"
+            ) from exc
+        except sqlite3.Error as exc:
+            raise RepositoryError(
+                f"failed to update person_id={person_id} in {self.path}"
+            ) from exc
+
+    def load_person(self, person_id: int) -> GalleryPerson | None:
+        """Load one persisted person for consistency recovery after an apply error."""
+
+        person_id = self._validate_person_id(person_id)
+        return next(
+            (person for person in self.load_all() if person.person_id == person_id),
+            None,
+        )
 
     def delete_person(self, person_id: int) -> bool:
         """Delete one person; SQLite cascades to all of its embeddings."""

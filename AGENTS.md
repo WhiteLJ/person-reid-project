@@ -148,6 +148,20 @@ diagnostics report Track created/ended events, target LOST/RECOVERED events, ReI
 attempt/pending/accepted counts, quality rejections, Gallery recognitions, and
 average FPS. The application must not automatically label a recovery true/false.
 
+In MVP-8.2, explicitly G-enrolled SessionTargets may safely enrich their mapped
+GalleryPerson using only accepted runtime reference-update events from the existing
+MVP-5/8.1 pipeline; enrichment never runs an extra ReID inference. Reference-update
+events are drained once, and rejected references, LOST targets, recovery candidates,
+and recovery-pending states never update persistent Gallery features. Initial S->G
+enrollment is immediate, while a target must remain stably ACTIVE for the configured
+post-recovery cooldown before enrichment resumes after recovery. A target recognized
+automatically from the persisted Gallery is not eligible until the user explicitly G
+enrolls it in the current process. Repository feature replacement is an atomic
+SQLite transaction, followed by applying the same validated deep-copied snapshot to
+memory; any unexpected apply failure must be logged and repaired from Repository.
+MVP-8.2 remains single-threaded, does not change the SQLite schema, and does not
+automatically update Gallery features for automatically recognized targets.
+
 ---
 
 ## 4. Critical Identity Rule
@@ -409,6 +423,7 @@ MVP-6 in-memory TargetGallery
 MVP-7 SQLite persistence
 MVP-8 automatic gallery recognition
 MVP-8.1 crowded-scene and occlusion robustness
+MVP-8.2 safe persistent Gallery feature enrichment
 MVP-9 RTSP input and live-stream robustness
 MVP-10 presentation/UI/performance polish
 ```

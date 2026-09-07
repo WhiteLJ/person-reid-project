@@ -1253,9 +1253,9 @@ reid:
   min_bbox_height: 100
 
 reid_recovery:
-  lost_grace_frames: 10
+  lost_grace_frames: 5
   reference_update_interval_frames: 15
-  recovery_interval_frames: 10
+  recovery_interval_frames: 5
   max_reference_embeddings: 8
   recovery_threshold: 0.75
   recovery_margin: 0.05
@@ -1267,7 +1267,7 @@ reid_recovery:
 reid_quality:
   min_track_confidence: 0.35
   max_edge_truncation_ratio: 0.30
-  max_person_overlap_ratio: 0.50
+  max_person_overlap_ratio: 0.60
 
 gallery_recognition:
   enabled: true
@@ -1277,8 +1277,11 @@ gallery_recognition:
   recognition_margin: 0.05
   confirmation_hits: 2
 
+gallery_enrichment:
+  post_recovery_stable_frames: 30
+
 ui:
-  window_name: "Person Tracking - MVP-8.1"
+  window_name: "Person Tracking - MVP-8.2"
   show_class_name: true
   show_confidence: true
   show_track_id: true
@@ -1654,7 +1657,41 @@ pending/accepted、quality rejected、Gallery recognized 和平均 FPS。false r
 默认工程初值为 `recovery_min_track_age_frames=3`、
 `recovery_confirmation_hits=2`、`recovery_pending_max_age_frames=60`、
 `min_track_confidence=0.35`、`max_edge_truncation_ratio=0.30` 和
-`max_person_overlap_ratio=0.50`；这些均为可调的工程起点，不是通用最优值。
+`max_person_overlap_ratio=0.60`；这些均为可调的工程起点，不是通用最优值。
+
+### MVP-8.2：安全的持久化 Gallery 特征增量
+
+MVP-8.2 只实现安全的 Gallery feature enrichment，不改变 SQLite schema，也不
+增加后台写库线程。用户在当前运行中通过 `S` 选择目标并通过 `G` 显式入库时，
+GalleryPerson 立即创建，即使当时只有一份有效 reference。之后只有该
+SessionTarget 在本次运行中明确 G enrollment 后，被 TargetManager 接受的、
+已经通过 MVP-5/MVP-8.1 quality gate 和 centroid 一致性检查的新 reference，才
+可以用于更新对应的 GalleryPerson。
+
+reference 更新由已有 ReID 流程产生，不为 Gallery enrichment 额外运行 OSNet。
+`TargetRecoveryCoordinator` 在 `add_reference()` 成功后产生一次性的
+`ReferenceUpdateEvent`；主循环通过 drain API 消费，旧事件不会在后续帧重复写库。
+被拒绝的 reference、LOST 期间、recovery pending 期间和 recovery candidate
+不会更新持久化 Gallery。自动识别得到的 SessionTarget 默认没有本次运行的
+enrichment 资格；用户随后按 `G` 时，只为已有的 P001 等目标授予资格，不创建
+新的 GalleryPerson。
+
+Gallery 更新采用当前 SessionTarget 的有界 reference bank 和 normalized centroid
+作为 deep-copied feature snapshot。Repository 先在同一 SQLite transaction 中
+替换该 person 的 centroid 和 embedding rows；事务成功后才将同一份已校验 snapshot
+应用到内存 TargetGallery。数据库失败时保留旧的内存和磁盘版本；若内存应用发生
+异常则记录 consistency error，并从 Repository 重新加载该 person 恢复一致性。
+`person_id`、label、session-target mapping 和 `next_person_id` 均不改变。
+
+目标从 LOST 恢复后，必须连续 ACTIVE 达到配置的
+`gallery_enrichment.post_recovery_stable_frames`（初始工程值 30）才恢复 enrichment；
+再次 LOST 会重新阻止。该 cooldown 只影响 recovery 后的增量更新，不影响首次
+S->G 入库。所有数值均为可调工程初值，不声明为通用最优值。
+
+验收：S 后立即 G 可以创建 P001；目标继续稳定活动并接受新 reference 后，P001 的
+embedding 数量逐步增加且不超过 runtime 最大值；关闭遮挡、LOST、recovery pending
+或低质量期间不增加；重启后自动识别 P001 仍不会自动更新其持久化特征，除非本次
+运行用户再次明确 G。
 
 ### MVP-9：真实 RTSP
 

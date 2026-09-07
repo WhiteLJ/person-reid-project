@@ -261,6 +261,33 @@ class TargetGalleryTests(unittest.TestCase):
         )
         self.assertEqual(gallery.attached_person_ids(), frozenset({person.person_id}))
 
+    def test_feature_update_preserves_identity_mapping_and_copies_arrays(self) -> None:
+        target = _session_target(4, (1, 0))
+        gallery = TargetGallery()
+        person = gallery.enroll(target)
+        references = [
+            np.asarray((1, 0), dtype=np.float32),
+            np.asarray((0, 1), dtype=np.float32),
+        ]
+        centroid = np.asarray((0, 1), dtype=np.float32)
+
+        updated = gallery.update_person_features(
+            person.person_id,
+            references,
+            centroid,
+        )
+        references[0][0] = 0.0
+        centroid[1] = 0.0
+
+        self.assertEqual(updated.person_id, person.person_id)
+        self.assertEqual(updated.label, person.label)
+        self.assertEqual(len(updated.reference_embeddings), 2)
+        self.assertEqual(
+            gallery.session_target_for_person_id(person.person_id), target.target_id
+        )
+        self.assertNotEqual(float(updated.reference_embeddings[0][0]), 0.0)
+        self.assertNotEqual(float(updated.centroid[1]), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

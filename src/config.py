@@ -70,6 +70,13 @@ class ReIDRecoveryConfig:
 
 
 @dataclass(frozen=True)
+class GalleryEnrichmentConfig:
+    """Runtime policy for explicitly enrolled Gallery feature enrichment."""
+
+    post_recovery_stable_frames: int = 30
+
+
+@dataclass(frozen=True)
 class ReIDQualityConfig:
     """Quality gates for ReID decisions in crowded scenes.
 
@@ -127,6 +134,7 @@ class AppConfig:
     selection: SelectionConfig
     reid: ReIDConfig
     reid_recovery: ReIDRecoveryConfig
+    gallery_enrichment: GalleryEnrichmentConfig
     reid_quality: ReIDQualityConfig
     gallery_recognition: GalleryRecognitionConfig
     database: DatabaseConfig
@@ -200,6 +208,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     selection = _section(raw, "selection")
     reid = _section(raw, "reid")
     reid_recovery = _section(raw, "reid_recovery")
+    gallery_enrichment = _section(raw, "gallery_enrichment")
     reid_quality = _section(raw, "reid_quality")
     gallery_recognition = _section(raw, "gallery_recognition")
     database = _section(raw, "database")
@@ -295,6 +304,14 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     if recovery_pending_max_age_frames < 1:
         raise ValueError(
             "reid_recovery.recovery_pending_max_age_frames must be positive"
+        )
+
+    post_recovery_stable_frames = int(
+        gallery_enrichment.get("post_recovery_stable_frames", 30)
+    )
+    if post_recovery_stable_frames < 0:
+        raise ValueError(
+            "gallery_enrichment.post_recovery_stable_frames must be non-negative"
         )
 
     min_track_confidence = float(
@@ -402,6 +419,9 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             recovery_confirmation_hits=recovery_confirmation_hits,
             recovery_pending_max_age_frames=recovery_pending_max_age_frames,
         ),
+        gallery_enrichment=GalleryEnrichmentConfig(
+            post_recovery_stable_frames=post_recovery_stable_frames,
+        ),
         reid_quality=ReIDQualityConfig(
             min_track_confidence=min_track_confidence,
             max_edge_truncation_ratio=max_edge_truncation_ratio,
@@ -417,7 +437,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         ),
         database=DatabaseConfig(path=database_path),
         ui=UIConfig(
-            window_name=str(ui.get("window_name", "Person Tracking - MVP-8.1")),
+            window_name=str(ui.get("window_name", "Person Tracking - MVP-8.2")),
             wait_key_ms=max(1, int(ui.get("wait_key_ms", 1))),
             show_class_name=bool(ui.get("show_class_name", True)),
             show_confidence=bool(ui.get("show_confidence", True)),
