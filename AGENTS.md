@@ -111,6 +111,21 @@ existing duplicate enrollment. Gallery remove/clear operations must coordinate m
 and disk without silently leaving them inconsistent. `tools/gallery_admin.py` is an
 offline management tool, so the main application must be closed before remove/clear.
 
+In MVP-8, `src/gallery_recognition.py` may automatically match ordinary current
+person Tracks against the in-memory Gallery loaded at startup. It must not query or
+write SQLite during recognition, enroll new GalleryPerson records, or update
+persistent Gallery features. Recovery runs before Gallery recognition; only Tracks
+successfully claimed by Recovery, currently owned by an ACTIVE SessionTarget, or
+otherwise occupied are excluded. A Track merely inspected and rejected by Recovery
+remains eligible, and a shared `ReIDFrameCache` may reuse its embedding only within
+the same frame index. Recognition uses centroid similarity, configurable threshold
+and two-sided margin, deterministic one-to-one matching, and configurable repeated
+confirmation before binding. A loaded GalleryPerson is occupied while attached to
+either an ACTIVE or LOST SessionTarget. An already selected but Gallery-unbound
+SessionTarget must be attached in place rather than replaced by a second target.
+Track-age and recognition-interval controls limit ReID work; no Gallery recognition
+is performed when the Gallery is empty or no eligible candidates exist.
+
 ---
 
 ## 4. Critical Identity Rule
@@ -258,11 +273,13 @@ src/
 ├── tracking_pipeline.py
 ├── reid.py
 ├── gallery.py
+├── gallery_recognition.py
 ├── target_manager.py
 ├── database.py
 ├── video_source.py
 ├── visualization.py
 ├── roi_selector.py
+├── reid_frame_cache.py
 └── utils.py
 
 ui/
@@ -316,6 +333,18 @@ Must support:
 - search
 - add/update/delete
 - bounded embedding count
+
+### `gallery_recognition.py`
+
+Owns scheduled automatic matching of eligible current Tracks against the in-memory
+Gallery. It performs batch ReID extraction, centroid similarity, threshold/margin
+checks, confirmation, and one-to-one assignment; it must not own SQLite or enroll
+new Gallery people.
+
+### `reid_frame_cache.py`
+
+Owns only same-frame embedding reuse between Recovery and Gallery recognition. A
+different frame index must invalidate the cache.
 
 ### `target_manager.py`
 

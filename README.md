@@ -1,146 +1,147 @@
-# Person ReID Project — MVP-7
+# Person ReID Project - MVP-8
 
-本项目是一个基于 YOLOv8、Ultralytics BoT-SORT、Torchreid/OSNet 和 OpenCV 的
-交互式行人跟踪与重识别工程原型。
+This project is an OpenCV prototype for person detection, temporary tracking,
+session target recovery, persistent Gallery enrollment, and automatic recognition
+of persisted Gallery people.
 
-MVP-7 在 MVP-6 的内存 `TargetGallery` 基础上增加 SQLite 持久化。当前严格区分：
+## Current MVP-8 behavior
 
-- `Track ID`：BoT-SORT 生成的临时轨迹身份；
-- `SessionTarget.target_id`：当前进程内的临时目标身份；
-- `GalleryPerson.person_id`：目标库中的长期逻辑身份，例如 `P001`。
+The runtime pipeline is:
 
-## 当前支持
+```text
+VideoSource -> YOLOv8n person detection -> Ultralytics BoT-SORT
+           -> Track[] -> MVP-5 LOST/recovery -> MVP-8 Gallery recognition
+           -> OpenCV display
+```
 
-- 摄像头和本地视频输入；
-- YOLOv8 person detection + Ultralytics BoT-SORT temporary Track ID；
-- OpenCV 多目标 ROI 选择、删除和清除；
-- Torchreid 1.4.0 / OSNet `osnet_x0_25` ReID embedding；
-- ACTIVE / LOST / RECOVER SessionTarget；
-- 通过 ReID 恢复发生 Track ID 变化的当前目标；
-- `G` 显式将已有 SessionTarget 加入 Gallery 并持久化；
-- `GalleryPerson`、reference embeddings 和 centroid 的 SQLite 持久化；
-- 程序重启后保留 Gallery person ID、label 和特征；
-- 离线 `gallery_admin` 管理工具。
+The three identity layers remain separate:
 
-SQLite 默认路径来自配置：
+- `Track ID`: temporary BoT-SORT trajectory identity;
+- `SessionTarget.target_id`: current-process target identity used by LOST/recovery;
+- `GalleryPerson.person_id`: persistent logical identity displayed as `P001`, `P002`, ... .
+
+MVP-8 supports:
+
+- camera and local video input;
+- YOLOv8 person detection and BoT-SORT temporary Track IDs;
+- multi-target manual selection and LOST -> ReID recovery;
+- explicit Gallery enrollment with SQLite persistence;
+- automatic, conservative recognition of loaded Gallery people using normalized
+  512-D Torchreid/OSNet embeddings;
+- centroid similarity, threshold/margin checks, one-to-one matching, and repeated
+  confirmation before automatic binding.
+
+Automatic recognition reads the in-memory Gallery loaded at startup. It does not
+write SQLite or update persistent Gallery features. It does not create a new
+`GalleryPerson` during recognition.
+
+Ordinary unselected Tracks remain tracked in the background. By default they are
+not drawn. Set this option to `true` for green debugging boxes:
 
 ```yaml
-database:
-  path: "database/person_reid.db"
+ui:
+  show_unselected_tracks: false
 ```
 
-Repository 会自动创建数据库父目录。数据库中不保存 Track、SessionTarget、ACTIVE/LOST
-状态或 session-target 映射；程序重启后只恢复 GalleryPerson。已经加载的 Gallery
-不会在 MVP-7 中自动识别普通 Track，也不会触发额外 ReID。
+Selected or automatically recognized active targets are drawn in red, for example
+`TARGET P001 | ID 17`. A target without a Gallery identity is shown as
+`TARGET | ID 17`.
 
-## 仍不支持
+## Environment and weights
 
-- Gallery 自动识别普通 Track（MVP-8）；
-- 程序重启后自动绑定新的 SessionTarget；
-- SQLite 中保存 SessionTarget 或 Track 状态；
-- 最终 PySide/Qt Gallery 管理界面；
-- RTSP、训练或微调模型、BoxMOT。
+The formal installation entry point is `requirements.txt`; `pip-freeze.txt` is only
+a local environment snapshot. Torchreid is sourced from the official
+[`KaiyangZhou/deep-person-reid`](https://github.com/KaiyangZhou/deep-person-reid)
+Git repository, not from the unrelated/old PyPI package with the same name.
 
-最终 UI 需求（本阶段不实现）包括：当前红框目标直接“添加到库”、已入库目标“从库中
-移除”、独立目标库侧栏、查看人员、单个/批量删除、清空和修改 label。
-
-## 环境和依赖
-
-正式安装入口是 `requirements.txt`：
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-`pip-freeze.txt` 仅为本机环境快照，不是安装入口。Torchreid 使用官方 Git 来源
-`KaiyangZhou/deep-person-reid`，不使用 PyPI 上同名旧包；项目不会因此升级当前
-PyTorch、CUDA 或 Ultralytics。
-
-运行前请准备：
+Do not upgrade the already validated PyTorch, CUDA, or Ultralytics environment for
+this MVP. Before running the application, prepare:
 
 ```text
 weights/yolo/yolov8n.pt
 weights/reid/osnet_x0_25_msmt17.pth
 ```
 
-程序不会在正常运行时联网下载 ReID checkpoint，也不会回退到 ImageNet-only 权重。
+The ReID checkpoint is the official OSNet x0.25 MSMT17 combineall checkpoint. The
+application fails clearly when it is missing and never silently falls back to
+ImageNet-only or random weights.
 
-## 运行
+## Configuration
 
-默认读取摄像头 `0`：
+The default configuration is in `config/config.yaml`. Important MVP-8 settings are:
+
+```yaml
+gallery_recognition:
+  enabled: true
+  recognition_interval_frames: 10
+  min_track_age_frames: 5
+  recognition_threshold: 0.80
+  recognition_margin: 0.05
+  confirmation_hits: 2
+
+database:
+  path: "database/person_reid.db"
+```
+
+These are conservative, configurable engineering starting values, not universal
+thresholds. Recognition uses the in-memory Gallery and does not query SQLite per
+frame.
+
+## Run
+
+Use the default camera:
 
 ```bash
 python app.py
 ```
 
-读取本地视频：
+Use a local video:
 
 ```bash
 python app.py --source data/demo.mp4
 ```
 
-常用按键：
+Controls:
 
-- `S`：选择当前 SessionTarget；
-- `R`：删除当前 SessionTarget；
-- `G`：将已选择的 SessionTarget 显式加入 Gallery 并持久化，不重新运行 ReID；
-- `C`：清除当前 SessionTargets，但不删除 GalleryPerson；
-- `Q`：退出。
+- `S`: pause and add one or more current Tracks as SessionTargets;
+- `R`: pause and remove one or more current SessionTargets;
+- `G`: pause and explicitly enroll existing SessionTargets into the Gallery;
+- `C`: clear all current SessionTargets and their runtime associations;
+- `Enter`/`Space`: finish an edit session;
+- `Q`: exit the entire application, including from an edit session.
 
-## Gallery 管理工具
+`C` removes all TARGET special boxes. With the default
+`show_unselected_tracks: false`, ordinary green Track boxes still remain hidden;
+set that option to `true` to show them.
 
-`gallery_admin.py` 是 MVP-7 的离线开发/验收工具：
+## Offline Gallery administration
+
+The lightweight MVP-7/MVP-8 development tool supports listing and deleting
+persistent Gallery people:
 
 ```bash
 python -m tools.gallery_admin list
 python -m tools.gallery_admin remove P001
 python -m tools.gallery_admin clear
-```
-
-也可以指定临时数据库：
-
-```bash
 python -m tools.gallery_admin --db path/to/test.db list
 ```
 
-执行 `remove`、`clear` 等修改操作前必须关闭正在运行的主程序，避免 SQLite 数据与
-主程序内存中的 `TargetGallery` 不同步。删除 GalleryPerson 不会删除当前进程中的
-SessionTarget；主程序重启后会按数据库内容重新加载 Gallery。
+This is an offline management tool. Close the running main application before
+`remove` or `clear`, otherwise its in-memory `TargetGallery` can differ from the
+SQLite database until restart. Removing a Gallery person does not delete an
+existing in-memory SessionTarget in a running application.
 
-## ReID smoke test
+## Tests
 
-准备 A1、A2（同一个人）和 B1（另一个人）：
-
-```bash
-python -m tools.reid_smoke_test A1.jpg A2.jpg B1.jpg
-```
-
-工具输出 embedding shape、dtype、L2 norm 以及 cosine similarity。MVP-5 的恢复阈值
-和 margin 都是可调工程初值，不代表通用最优值。
-
-## 测试
-
-测试不启动真实摄像头或 GPU 推理；SQLite 测试使用临时数据库：
+The normal test suite uses fake ReID extractors and temporary SQLite files; it does
+not require a camera, GUI, GPU inference, or network downloads:
 
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-### 代码结构
+## Not implemented yet
 
-```text
-app.py                      # MVP-7 主入口和视频循环
-config/config.yaml          # 应用配置
-src/config.py               # 配置和设备选择
-src/tracking_pipeline.py    # YOLOv8n + BoT-SORT
-src/reid.py                 # OSNet embedding 提取
-src/target_recovery.py      # SessionTarget LOST/RECOVER
-src/gallery.py              # 纯内存 TargetGallery 业务层
-src/gallery_service.py      # 内存 Gallery 与持久化协调
-src/database.py             # SQLite GalleryRepository
-src/models.py               # Detection / Track / SessionTarget
-src/visualization.py        # Track 和目标绘制
-ui/roi_editor.py            # OpenCV 暂停 ROI 编辑会话
-tools/gallery_admin.py      # 离线 Gallery 管理工具
-tests/                      # MVP-1 至 MVP-7 测试
-```
+MVP-8 does not include PySide/Qt UI, RTSP, face recognition, training/fine-tuning,
+BoxMOT, automatic persistent Gallery feature updates, or complex Gallery editing.
+The next stage may address live-stream robustness and later presentation/UI work.

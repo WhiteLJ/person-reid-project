@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Sequence
 from logging import getLogger
 
 import numpy as np
@@ -62,6 +62,68 @@ class TargetManager:
             state=TargetState.ACTIVE,
             reference_embeddings=[reference.copy()],
             centroid=reference.copy(),
+            missing_frames=0,
+            last_reference_frame=frame_index,
+        )
+        self.targets[target.target_id] = target
+        self._next_target_id += 1
+        return target
+
+    def select_from_reference_bank(
+        self,
+        track: Track,
+        candidate_embedding: np.ndarray,
+        reference_embeddings: Sequence[np.ndarray],
+        centroid: np.ndarray,
+        frame_index: int,
+        max_reference_embeddings: int,
+    ) -> SessionTarget:
+        """Create a target from copied Gallery references and a live crop.
+
+        This method knows nothing about Gallery or persistence.  It is the
+        generic bridge used when an existing in-memory identity is recognized:
+        all incoming arrays are normalized and copied, and the bounded runtime
+        bank is independent from the Gallery arrays.
+        """
+
+        if max_reference_embeddings < 1:
+            raise ValueError("max_reference_embeddings must be positive")
+        existing = self.target_for_track(track.track_id)
+        if existing is not None:
+            return existing
+
+        candidate = _normalize_single_embedding(candidate_embedding)
+        normalized_centroid = _normalize_single_embedding(centroid)
+        references: list[np.ndarray] = []
+        for index, reference in enumerate(reference_embeddings):
+            try:
+                normalized = _normalize_single_embedding(reference)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"reference embedding at index {index} is invalid"
+                ) from exc
+            if normalized.shape != normalized_centroid.shape:
+                raise ValueError("reference and centroid dimensions must match")
+            references.append(normalized.copy())
+        if not references:
+            raise ValueError("reference_embeddings cannot be empty")
+        if candidate.shape != normalized_centroid.shape:
+            raise ValueError("candidate and centroid dimensions must match")
+
+        # Keep the persisted references plus this current observation.  When
+        # the bank is full, retain the newest bounded suffix.  The centroid is
+        # recomputed from the copied runtime bank, never aliased to Gallery.
+        references.append(candidate.copy())
+        if len(references) > max_reference_embeddings:
+            references = references[-max_reference_embeddings:]
+        runtime_centroid = _centroid(references)
+        target = SessionTarget(
+            target_id=self._next_target_id,
+            current_track_id=track.track_id,
+            last_track_id=track.track_id,
+            state=TargetState.ACTIVE,
+            reference_embeddings=references,
+            centroid=runtime_centroid,
             missing_frames=0,
             last_reference_frame=frame_index,
         )

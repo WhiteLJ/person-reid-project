@@ -124,8 +124,8 @@ Person ID 依靠 ReID + Target Gallery 维护。
 
 MVP-5 引入的 `SessionTarget.target_id` 是当前程序运行期的临时目标身份，用于
 维护 ACTIVE/LOST/RECOVER 和当前 Track 绑定。MVP-6 引入的 `GalleryPerson.person_id`
-是用户显式 enrollment 后产生的内存目标库身份，例如 P001。两者均不是跨程序持久
-身份；MVP-7 才实现 SQLite 持久化。
+是用户显式 enrollment 后产生的目标库身份，例如 P001；MVP-7 起其特征和长期 ID
+由 SQLite 持久化。SessionTarget 仍然只属于当前进程，不跨程序恢复。
 
 ```text
 Track 17 -> SessionTarget 3 -> GalleryPerson P001
@@ -1261,8 +1261,16 @@ reid_recovery:
   recovery_margin: 0.05
   reference_update_threshold: 0.80
 
+gallery_recognition:
+  enabled: true
+  recognition_interval_frames: 10
+  min_track_age_frames: 5
+  recognition_threshold: 0.80
+  recognition_margin: 0.05
+  confirmation_hits: 2
+
 ui:
-  window_name: "Person Tracking - MVP-7"
+  window_name: "Person Tracking - MVP-8"
   show_class_name: true
   show_confidence: true
   show_track_id: true
@@ -1562,7 +1570,43 @@ label 编辑。
 
 ### MVP-8：自动目标库识别
 
-验收：目标库人员无需再次手动框选即可自动显示 Person ID。
+MVP-8 在 MVP-7 启动加载的内存 `TargetGallery` 上增加独立的
+`GalleryRecognitionCoordinator`。主循环顺序固定为：
+
+```text
+TrackingPipeline
+    -> TargetRecoveryCoordinator（先处理已有 SessionTarget 的 LOST/RECOVER）
+    -> GalleryRecognitionCoordinator
+    -> visualization
+```
+
+Gallery recognition 只读取内存中的 `GalleryPerson`，不逐帧查询 SQLite，不调用
+`TargetGallery.enroll()`，不创建新的 GalleryPerson，也不把新的 runtime feature
+写回持久化 Gallery。只有当前没有 Gallery 绑定、有效且达到最小 Track 年龄的
+person Track 才是候选；成功 Recovery、已被 ACTIVE SessionTarget 占用或其他明确
+被占用的 Track 不参与。仅被 Recovery 检查但未成功认领的 Track 仍可参与，并可
+复用同一 `frame_index` 的 `ReIDFrameCache` embedding。
+
+识别采用 candidate embedding 与 Gallery normalized centroid 的 cosine similarity，
+使用可配置 threshold、双侧 margin、确定性一对一匹配和 confirmation hits。单候选
+或单目标一侧不存在 second-best 时，该侧 margin 自动通过；只有存在 second-best
+才计算 `best - second >= margin`。pending 只在真正执行下一次 recognition 后结果
+失败/身份变化，或 Track 消失时清除；识别间隔中的普通帧不清除 pending。缓存严格
+限制在单个 frame index 内。
+
+识别成功时，如果当前 Track 已由用户手动创建了未绑定 Gallery 的 SessionTarget，
+就在该 SessionTarget 上 attach 现有 `person_id`；否则创建新的 SessionTarget，并
+从 Gallery references 与当前 candidate embedding 深拷贝初始化 runtime reference
+bank。`TargetGallery.attach_session_target()` 严格保持 target/person 一对一，Track
+ID 改变不影响关系。MVP-8 不自动更新 SQLite 中的 Gallery features。
+
+默认初始工程参数为 `recognition_interval_frames=10`、`min_track_age_frames=5`、
+`recognition_threshold=0.80`、`recognition_margin=0.05`、`confirmation_hits=2`；
+这些值是保守的可调初值，不是通用最优值。
+
+验收：程序重启后无需再次 S/G，已持久化的 P001/P002 在重新出现且通过保守匹配
+后自动创建/绑定当前 SessionTarget，并显示 `TARGET P001 | ID n`。普通路人不应
+被错误绑定；已识别目标后续仍由 MVP-5 Recovery 处理 Track 变化。
 
 ### MVP-9：真实 RTSP
 

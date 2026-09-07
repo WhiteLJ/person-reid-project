@@ -11,6 +11,7 @@ import numpy as np
 from .config import ReIDConfig, ReIDRecoveryConfig
 from .models import SessionTarget, TargetState, Track
 from .reid import ReIDExtractor, cosine_similarity, crop_person
+from .reid_frame_cache import ReIDFrameCache
 from .target_manager import TargetManager
 
 
@@ -166,11 +167,14 @@ class TargetRecoveryCoordinator:
         reid_extractor: ReIDExtractor,
         reid_config: ReIDConfig,
         recovery_config: ReIDRecoveryConfig,
+        embedding_cache: ReIDFrameCache | None = None,
     ) -> None:
         self.target_manager = target_manager
         self.reid_extractor = reid_extractor
         self.reid_config = reid_config
         self.recovery_config = recovery_config
+        self.embedding_cache = embedding_cache
+        self.last_recovered_track_ids: frozenset[int] = frozenset()
 
     def select_from_track(
         self,
@@ -214,6 +218,10 @@ class TargetRecoveryCoordinator:
         frame_index: int,
     ) -> list[RecoveryMatch]:
         """Update visibility and run only due, eligible ReID work for a frame."""
+
+        self.last_recovered_track_ids = frozenset()
+        if self.embedding_cache is not None:
+            self.embedding_cache.begin_frame(frame_index)
 
         self.target_manager.update_visibility(
             tracks,
@@ -274,6 +282,12 @@ class TargetRecoveryCoordinator:
         recovery_candidates: list[RecoveryCandidate] = []
         for job, embedding in zip(embedding_jobs, embeddings):
             kind, owner_id, track, _crop = job
+            if self.embedding_cache is not None and track is not None:
+                self.embedding_cache.put(
+                    track.track_id,
+                    embedding,
+                    frame_index,
+                )
             if kind == "reference":
                 self.target_manager.add_reference(
                     owner_id,
@@ -304,6 +318,9 @@ class TargetRecoveryCoordinator:
                 max_reference_embeddings=self.recovery_config.max_reference_embeddings,
                 reference_update_threshold=self.recovery_config.reference_update_threshold,
             )
+        self.last_recovered_track_ids = frozenset(
+            match.candidate.track.track_id for match in matches
+        )
         return matches
 
     def _crop(self, frame: np.ndarray, track: Track) -> np.ndarray | None:

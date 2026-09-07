@@ -148,6 +148,54 @@ class TargetGallery:
             del self._session_target_to_person[target_id]
         return person
 
+    def attach_session_target(self, target_id: int, person_id: int) -> bool:
+        """Attach one current-session target to an existing Gallery person.
+
+        The association is deliberately independent from Track IDs.  A target
+        and a person may each have at most one active association.  Repeating
+        the exact same association is idempotent; either side of a conflicting
+        association raises ``ValueError`` instead of silently rebinding it.
+        """
+
+        if not isinstance(target_id, int) or isinstance(target_id, bool) or target_id < 1:
+            raise ValueError("target_id must be a positive integer")
+        if not isinstance(person_id, int) or isinstance(person_id, bool) or person_id < 1:
+            raise ValueError("person_id must be a positive integer")
+        if person_id not in self._people:
+            raise KeyError(f"unknown Gallery person: {person_id}")
+
+        mapped_person_id = self._session_target_to_person.get(target_id)
+        if mapped_person_id is not None:
+            if mapped_person_id == person_id:
+                return True
+            raise ValueError(
+                f"session target {target_id} is already attached to "
+                f"Gallery person {mapped_person_id}"
+            )
+
+        mapped_target_id = self.session_target_for_person_id(person_id)
+        if mapped_target_id is not None:
+            raise ValueError(
+                f"Gallery person {person_id} is already attached to "
+                f"session target {mapped_target_id}"
+            )
+
+        self._session_target_to_person[target_id] = person_id
+        return True
+
+    def session_target_for_person_id(self, person_id: int) -> int | None:
+        """Return the current-session target attached to ``person_id``."""
+
+        for target_id, mapped_person_id in self._session_target_to_person.items():
+            if mapped_person_id == person_id:
+                return target_id
+        return None
+
+    def attached_person_ids(self) -> frozenset[int]:
+        """Return Gallery person IDs occupied by current session targets."""
+
+        return frozenset(self._session_target_to_person.values())
+
     def detach_session_target(self, target_id: int) -> bool:
         """Remove one target mapping while retaining its GalleryPerson."""
 

@@ -1,4 +1,4 @@
-"""MVP-7 entry point: ReID recovery and persistent Gallery enrollment."""
+"""MVP-8 entry point: tracking, ReID recovery, and Gallery recognition."""
 
 from __future__ import annotations
 
@@ -12,8 +12,10 @@ from src.config import AppConfig, load_config, parse_source
 from src.database import GalleryRepository
 from src.gallery import TargetGallery, format_person_id
 from src.gallery_service import GalleryPersistenceService
+from src.gallery_recognition import GalleryRecognitionCoordinator
 from src.logging_utils import configure_logging
 from src.reid import ReIDExtractor
+from src.reid_frame_cache import ReIDFrameCache
 from src.roi_selector import find_track_by_roi
 from src.target_manager import TargetManager
 from src.target_recovery import TargetRecoveryCoordinator
@@ -28,7 +30,10 @@ LOGGER = logging.getLogger(__name__)
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="MVP-7 tracking, session-target ReID recovery, and persistent Gallery"
+        description=(
+            "MVP-8 tracking, session-target ReID recovery, and automatic "
+            "persistent Gallery recognition"
+        )
     )
     parser.add_argument(
         "--config",
@@ -87,11 +92,23 @@ def run(config: AppConfig) -> int:
     source = VideoSource(config.video.source)
     ui = OpenCVUI(config.ui)
     target_manager = TargetManager()
+    embedding_cache = ReIDFrameCache()
     target_recovery = TargetRecoveryCoordinator(
         target_manager=target_manager,
         reid_extractor=reid_extractor,
         reid_config=config.reid,
         recovery_config=config.reid_recovery,
+        embedding_cache=embedding_cache,
+    )
+    gallery_recognition = GalleryRecognitionCoordinator(
+        target_manager=target_manager,
+        gallery=gallery,
+        reid_extractor=reid_extractor,
+        reid_config=config.reid,
+        recognition_config=config.gallery_recognition,
+        recovery_config=config.reid_recovery,
+        person_class_id=config.model.person_class_id,
+        embedding_cache=embedding_cache,
     )
     frame_index = 0
     current_frame_index = -1
@@ -196,6 +213,12 @@ def run(config: AppConfig) -> int:
             current_frame_index = frame_index
             tracks = tracking_pipeline.process(frame)
             target_recovery.process_frame(frame, tracks, current_frame_index)
+            gallery_recognition.process_frame(
+                frame,
+                tracks,
+                current_frame_index,
+                protected_track_ids=target_recovery.last_recovered_track_ids,
+            )
             frame_index += 1
             annotated = render_tracks(frame, tracks)
             action = ui.show(annotated)

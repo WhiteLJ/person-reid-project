@@ -6,4 +6,7 @@ runs/
 database/*.db
 database/*.sqlite
 database/*.sqlite3
+database/*-wal
+database/*-shm
+database/*-journal
 .test_tmp/

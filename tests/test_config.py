@@ -33,6 +33,12 @@ class ConfigTests(unittest.TestCase):
         self.assertAlmostEqual(config.reid_recovery.recovery_threshold, 0.75)
         self.assertAlmostEqual(config.reid_recovery.recovery_margin, 0.05)
         self.assertAlmostEqual(config.reid_recovery.reference_update_threshold, 0.80)
+        self.assertTrue(config.gallery_recognition.enabled)
+        self.assertEqual(config.gallery_recognition.recognition_interval_frames, 10)
+        self.assertEqual(config.gallery_recognition.min_track_age_frames, 5)
+        self.assertAlmostEqual(config.gallery_recognition.recognition_threshold, 0.80)
+        self.assertAlmostEqual(config.gallery_recognition.recognition_margin, 0.05)
+        self.assertEqual(config.gallery_recognition.confirmation_hits, 2)
         self.assertEqual(
             config.database.path,
             Path("database/person_reid.db").resolve(),

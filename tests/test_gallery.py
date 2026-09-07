@@ -232,6 +232,35 @@ class TargetGalleryTests(unittest.TestCase):
         new_person = restored_gallery.enroll(_session_target(4, (0, 1)))
         self.assertEqual(new_person.person_id, 5)
 
+    def test_attach_is_idempotent_and_strictly_one_to_one(self) -> None:
+        gallery = TargetGallery()
+        target_a = _session_target(1, (1, 0))
+        target_b = _session_target(2, (0, 1))
+        person_a = gallery.enroll(target_a)
+        gallery.detach_session_target(target_a.target_id)
+        person_b = gallery.enroll(target_b)
+        gallery.detach_session_target(target_b.target_id)
+
+        self.assertTrue(gallery.attach_session_target(target_a.target_id, person_a.person_id))
+        self.assertTrue(gallery.attach_session_target(target_a.target_id, person_a.person_id))
+        with self.assertRaises(ValueError):
+            gallery.attach_session_target(target_a.target_id, person_b.person_id)
+        with self.assertRaises(ValueError):
+            gallery.attach_session_target(target_b.target_id, person_a.person_id)
+
+    def test_attach_requires_existing_gallery_person(self) -> None:
+        with self.assertRaises(KeyError):
+            TargetGallery().attach_session_target(1, 99)
+
+    def test_attached_person_and_target_reverse_lookups_are_available(self) -> None:
+        gallery = TargetGallery()
+        target = _session_target(4, (1, 0))
+        person = gallery.enroll(target)
+        self.assertEqual(
+            gallery.session_target_for_person_id(person.person_id), target.target_id
+        )
+        self.assertEqual(gallery.attached_person_ids(), frozenset({person.person_id}))
+
 
 if __name__ == "__main__":
     unittest.main()

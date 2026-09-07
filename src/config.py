@@ -67,6 +67,18 @@ class ReIDRecoveryConfig:
 
 
 @dataclass(frozen=True)
+class GalleryRecognitionConfig:
+    """Runtime controls for automatic recognition of persisted Gallery people."""
+
+    enabled: bool
+    recognition_interval_frames: int
+    min_track_age_frames: int
+    recognition_threshold: float
+    recognition_margin: float
+    confirmation_hits: int
+
+
+@dataclass(frozen=True)
 class DatabaseConfig:
     """SQLite persistence settings."""
 
@@ -92,6 +104,7 @@ class AppConfig:
     selection: SelectionConfig
     reid: ReIDConfig
     reid_recovery: ReIDRecoveryConfig
+    gallery_recognition: GalleryRecognitionConfig
     database: DatabaseConfig
     ui: UIConfig
 
@@ -162,6 +175,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     selection = _section(raw, "selection")
     reid = _section(raw, "reid")
     reid_recovery = _section(raw, "reid_recovery")
+    gallery_recognition = _section(raw, "gallery_recognition")
     database = _section(raw, "database")
     ui = _section(raw, "ui")
 
@@ -235,6 +249,38 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     if recovery_margin < 0.0:
         raise ValueError("reid_recovery.recovery_margin must be non-negative")
 
+    recognition_interval_frames = int(
+        gallery_recognition.get("recognition_interval_frames", 10)
+    )
+    min_track_age_frames = int(
+        gallery_recognition.get("min_track_age_frames", 5)
+    )
+    recognition_threshold = float(
+        gallery_recognition.get("recognition_threshold", 0.80)
+    )
+    recognition_margin = float(
+        gallery_recognition.get("recognition_margin", 0.05)
+    )
+    confirmation_hits = int(gallery_recognition.get("confirmation_hits", 2))
+    if recognition_interval_frames < 1:
+        raise ValueError(
+            "gallery_recognition.recognition_interval_frames must be positive"
+        )
+    if min_track_age_frames < 1:
+        raise ValueError(
+            "gallery_recognition.min_track_age_frames must be positive"
+        )
+    if not 0.0 < recognition_threshold <= 1.0:
+        raise ValueError(
+            "gallery_recognition.recognition_threshold must be greater than 0 and at most 1"
+        )
+    if recognition_margin < 0.0:
+        raise ValueError(
+            "gallery_recognition.recognition_margin must be non-negative"
+        )
+    if confirmation_hits < 1:
+        raise ValueError("gallery_recognition.confirmation_hits must be positive")
+
     database_value = database.get("path", "database/person_reid.db")
     database_path = Path(database_value)
     if not str(database_path).strip():
@@ -280,9 +326,17 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             recovery_margin=recovery_margin,
             reference_update_threshold=reference_update_threshold,
         ),
+        gallery_recognition=GalleryRecognitionConfig(
+            enabled=bool(gallery_recognition.get("enabled", True)),
+            recognition_interval_frames=recognition_interval_frames,
+            min_track_age_frames=min_track_age_frames,
+            recognition_threshold=recognition_threshold,
+            recognition_margin=recognition_margin,
+            confirmation_hits=confirmation_hits,
+        ),
         database=DatabaseConfig(path=database_path),
         ui=UIConfig(
-            window_name=str(ui.get("window_name", "Person Tracking - MVP-7")),
+            window_name=str(ui.get("window_name", "Person Tracking - MVP-8")),
             wait_key_ms=max(1, int(ui.get("wait_key_ms", 1))),
             show_class_name=bool(ui.get("show_class_name", True)),
             show_confidence=bool(ui.get("show_confidence", True)),
