@@ -1230,7 +1230,7 @@ runtime:
   num_workers: 0
 
 tracking:
-  tracker: "botsort.yaml"
+  tracker: "config/trackers/botsort_baseline.yaml"
   persist: true
   show_track_id: true
   lost_frames: 15
@@ -1260,6 +1260,14 @@ reid_recovery:
   recovery_threshold: 0.75
   recovery_margin: 0.05
   reference_update_threshold: 0.80
+  recovery_min_track_age_frames: 3
+  recovery_confirmation_hits: 2
+  recovery_pending_max_age_frames: 60
+
+reid_quality:
+  min_track_confidence: 0.35
+  max_edge_truncation_ratio: 0.30
+  max_person_overlap_ratio: 0.50
 
 gallery_recognition:
   enabled: true
@@ -1270,7 +1278,7 @@ gallery_recognition:
   confirmation_hits: 2
 
 ui:
-  window_name: "Person Tracking - MVP-8"
+  window_name: "Person Tracking - MVP-8.1"
   show_class_name: true
   show_confidence: true
   show_track_id: true
@@ -1281,6 +1289,10 @@ ui:
 
 database:
   path: "database/person_reid.db"
+
+diagnostics:
+  enabled: true
+  log_interval_frames: 300
 ```
 
 所有阈值和路径都放配置，不写死在业务代码中。
@@ -1443,7 +1455,7 @@ YOLO -> BoT-SORT -> Track ID
 验收：连续运动下 ID 基本稳定。
 
 当前实现约束：主循环复用同一个 `TrackingPipeline`，模型只加载一次；每帧只调用
-一次 `model.track()`，使用 `persist=True`、`tracker="botsort.yaml"` 和 `classes=[0]`。
+一次 `model.track()`，使用 `persist=True`、配置中的 BoT-SORT profile 和 `classes=[0]`。
 MVP-2 不启用 BoT-SORT appearance ReID，不传 `workers`，不实现 ROI、OSNet/ReID、
 TargetGallery、Person ID 或 SQLite。
 
@@ -1607,6 +1619,42 @@ ID 改变不影响关系。MVP-8 不自动更新 SQLite 中的 Gallery features�
 验收：程序重启后无需再次 S/G，已持久化的 P001/P002 在重新出现且通过保守匹配
 后自动创建/绑定当前 SessionTarget，并显示 `TARGET P001 | ID n`。普通路人不应
 被错误绑定；已识别目标后续仍由 MVP-5 Recovery 处理 Track 变化。
+
+### MVP-8.1：拥挤场景与遮挡鲁棒性
+
+本阶段优先处理两类不同现象：原 Track 消失并产生新 Track ID 的 Track
+fragmentation，以及 Track fragmentation 后 Recovery 将相似衣着路人错误绑定的
+false recovery。没有人工 ground truth 时，只记录 `TRACK_CREATED`、`TRACK_ENDED`、
+`TARGET_LOST` 和 `TARGET_RECOVERED old_track_id -> new_track_id`，不把任意 Track
+ID 变化自动命名为确定的 fragmentation，也不自动判断 Recovery 的真假。
+
+Recovery 增加连续 Track age、可配置的 ReID crop quality gate，以及同一
+`target_id + candidate_track_id` 的多次有效确认；第一次达标只进入 pending，默认
+两次真正的、高质量且通过 threshold 和双侧 margin 的 Recovery attempt 后才恢复。
+质量拒绝不是 identity mismatch，不清除 pending；candidate 消失、后续有效 attempt
+失败或候选身份改变时才清除，并通过最大 pending 寿命避免 stale 状态。quality gate
+至少检查 Track confidence、crop 大小、frame-edge 截断和
+`intersection(target, other_person) / area(target)` 的最大 person overlap ratio。
+不合格 crop 仍可用于 tracker，但不能用于 reference update、Recovery confirmation
+或 Gallery recognition confirmation。
+
+Recovery 先于 Gallery recognition 执行。Recovery 只成功占用的 Track 才会传给后者
+排除；仅被 Recovery 检查但没有成功认领的 Track 仍可参加 Gallery recognition，并
+复用同一帧的 `ReIDFrameCache`，缓存不跨帧复用。MVP-8.1 暂不把 ActiveIdentityGuard
+接入主链，避免在尚未观察到 Track ID 不变但人物切换时增加每帧 OSNet 开销或误触发
+LOST。
+
+提供 `config/trackers/` 下的 baseline、crowd 和可选 appearance-ReID BoT-SORT
+配置。检测 conf、`track_buffer`、`imgsz` 和 `with_reid` 按固定 crowd regression
+video、固定目标和固定时间段做单变量 A/B；不直接宣称某组参数最优。运行诊断输出
+processed frames、Track 创建/结束、TARGET LOST/RECOVERED、Recovery attempted/
+pending/accepted、quality rejected、Gallery recognized 和平均 FPS。false recovery
+由人工结合视频标记，评价优先级为 false recovery > temporary LOST > recovery 速度。
+
+默认工程初值为 `recovery_min_track_age_frames=3`、
+`recovery_confirmation_hits=2`、`recovery_pending_max_age_frames=60`、
+`min_track_confidence=0.35`、`max_edge_truncation_ratio=0.30` 和
+`max_person_overlap_ratio=0.50`；这些均为可调的工程起点，不是通用最优值。
 
 ### MVP-9：真实 RTSP
 

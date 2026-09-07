@@ -8,10 +8,11 @@ from logging import getLogger
 
 import numpy as np
 
-from .config import ReIDConfig, ReIDRecoveryConfig
+from .config import ReIDConfig, ReIDQualityConfig, ReIDRecoveryConfig
 from .models import SessionTarget, TargetState, Track
-from .reid import ReIDExtractor, cosine_similarity, crop_person
+from .reid import ReIDExtractor, cosine_similarity
 from .reid_frame_cache import ReIDFrameCache
+from .reid_quality import ReIDQualityResult, assess_reid_quality
 from .target_manager import TargetManager
 
 
@@ -33,6 +34,14 @@ class RecoveryMatch:
     target_id: int
     candidate: RecoveryCandidate
     similarity: float
+
+
+@dataclass
+class _PendingRecovery:
+    """A valid recovery proposal awaiting repeated confirmation."""
+
+    hits: int
+    last_attempt_frame: int
 
 
 def recovery_score(target: SessionTarget, embedding: np.ndarray) -> float:
@@ -159,7 +168,12 @@ def assign_recovery_matches(
 
 
 class TargetRecoveryCoordinator:
-    """Coordinate target state, limited crop extraction, and recovery matching."""
+    """Coordinate conservative, quality-gated ReID recovery.
+
+    Recovery is deliberately confirmation-based in crowded scenes.  A valid
+    candidate match is a pending proposal first; only repeated valid attempts
+    for the same target/Track pair can change a LOST target back to ACTIVE.
+    """
 
     def __init__(
         self,
@@ -168,13 +182,35 @@ class TargetRecoveryCoordinator:
         reid_config: ReIDConfig,
         recovery_config: ReIDRecoveryConfig,
         embedding_cache: ReIDFrameCache | None = None,
+        quality_config: ReIDQualityConfig | None = None,
+        person_class_id: int = 0,
     ) -> None:
         self.target_manager = target_manager
         self.reid_extractor = reid_extractor
         self.reid_config = reid_config
         self.recovery_config = recovery_config
         self.embedding_cache = embedding_cache
+        self.quality_config = quality_config or ReIDQualityConfig()
+        self.person_class_id = person_class_id
         self.last_recovered_track_ids: frozenset[int] = frozenset()
+        self._track_ages: dict[int, int] = {}
+        self._last_seen_frame: dict[int, int] = {}
+        self._pending: dict[tuple[int, int], _PendingRecovery] = {}
+        self.recovery_attempted_count = 0
+        self.recovery_pending_count = 0
+        self.recovery_accepted_count = 0
+        self.quality_rejected_count = 0
+        self.reid_batch_count = 0
+
+    @property
+    def pending(self) -> dict[tuple[int, int], int]:
+        """Return pending recovery hits as a diagnostic/test snapshot."""
+
+        return {key: value.hits for key, value in self._pending.items()}
+
+    @property
+    def track_ages(self) -> dict[int, int]:
+        return dict(self._track_ages)
 
     def select_from_track(
         self,
@@ -193,15 +229,16 @@ class TargetRecoveryCoordinator:
             )
             return existing
 
-        crop = self._crop(frame, track)
-        if crop is None:
+        quality = self._quality(frame, track, (track,))
+        if not quality.accepted or quality.crop is None:
             LOGGER.info(
-                "TARGET_SELECTION_REJECTED track=%d reason=invalid_or_small_crop",
+                "TARGET_SELECTION_REJECTED track=%d reason=%s",
                 track.track_id,
+                quality.reason or "quality_rejected",
             )
             return None
 
-        embedding = self.reid_extractor.extract(crop)
+        embedding = self.reid_extractor.extract(quality.crop)
         target = self.target_manager.select(track, embedding, frame_index)
         LOGGER.info(
             "TARGET_SELECTED target=%d track_id=%d reference_count=%d",
@@ -217,11 +254,14 @@ class TargetRecoveryCoordinator:
         tracks: Sequence[Track],
         frame_index: int,
     ) -> list[RecoveryMatch]:
-        """Update visibility and run only due, eligible ReID work for a frame."""
+        """Update visibility and run only due, quality-valid ReID work."""
 
         self.last_recovered_track_ids = frozenset()
+        self._update_track_ages(tracks, frame_index)
         if self.embedding_cache is not None:
             self.embedding_cache.begin_frame(frame_index)
+
+        self._expire_pending(frame_index)
 
         self.target_manager.update_visibility(
             tracks,
@@ -229,7 +269,7 @@ class TargetRecoveryCoordinator:
             frame_index=frame_index,
         )
 
-        embedding_jobs: list[tuple[str, int, Track | None, np.ndarray]] = []
+        embedding_jobs: list[tuple[str, int, Track, np.ndarray]] = []
         visible_ids = {track.track_id for track in tracks}
 
         for target in self.target_manager.active_targets():
@@ -247,9 +287,17 @@ class TargetRecoveryCoordinator:
                 for track in tracks
                 if track.track_id == target.current_track_id
             )
-            crop = self._crop(frame, track)
-            if crop is not None:
-                embedding_jobs.append(("reference", target.target_id, track, crop))
+            quality = self._quality(frame, track, tracks)
+            if not quality.accepted or quality.crop is None:
+                self.quality_rejected_count += 1
+                LOGGER.debug(
+                    "REID_QUALITY_REJECTED kind=reference target=%d track=%d reason=%s",
+                    target.target_id,
+                    track.track_id,
+                    quality.reason or "unknown",
+                )
+                continue
+            embedding_jobs.append(("reference", target.target_id, track, quality.crop))
 
         due_lost_targets = [
             target
@@ -263,31 +311,44 @@ class TargetRecoveryCoordinator:
         for target in due_lost_targets:
             self.target_manager.mark_recovery_attempt(target, frame_index)
 
-        candidate_tracks = self.target_manager.recovery_candidates(tracks)
+        candidate_tracks = [
+            track
+            for track in self.target_manager.recovery_candidates(tracks)
+            if track.class_id == self.person_class_id
+            and self._track_ages.get(track.track_id, 0)
+            >= self.recovery_config.recovery_min_track_age_frames
+        ]
+        valid_candidate_ids: set[int] = set()
         for track in (candidate_tracks if due_lost_targets else ()):
-            crop = self._crop(frame, track)
-            if crop is not None:
-                embedding_jobs.append(("candidate", track.track_id, track, crop))
+            quality = self._quality(frame, track, tracks)
+            if not quality.accepted or quality.crop is None:
+                self.quality_rejected_count += 1
+                LOGGER.debug(
+                    "REID_QUALITY_REJECTED kind=recovery track=%d reason=%s",
+                    track.track_id,
+                    quality.reason or "unknown",
+                )
+                continue
+            valid_candidate_ids.add(track.track_id)
+            embedding_jobs.append(("candidate", track.track_id, track, quality.crop))
+
+        if due_lost_targets and valid_candidate_ids:
+            self.recovery_attempted_count += len(due_lost_targets)
+            LOGGER.debug(
+                "TARGET_RECOVERY_ATTEMPT targets=%d candidates=%d frame=%d",
+                len(due_lost_targets),
+                len(valid_candidate_ids),
+                frame_index,
+            )
 
         if not embedding_jobs:
             return []
 
-        embeddings = np.asarray(
-            self.reid_extractor.extract_batch([job[3] for job in embedding_jobs]),
-            dtype=np.float32,
-        )
-        if embeddings.ndim != 2 or embeddings.shape[0] != len(embedding_jobs):
-            raise ValueError("ReID batch output does not match requested jobs")
+        resolved_jobs = self._ensure_embeddings(embedding_jobs, frame_index)
 
         recovery_candidates: list[RecoveryCandidate] = []
-        for job, embedding in zip(embedding_jobs, embeddings):
+        for job, embedding in resolved_jobs:
             kind, owner_id, track, _crop = job
-            if self.embedding_cache is not None and track is not None:
-                self.embedding_cache.put(
-                    track.track_id,
-                    embedding,
-                    frame_index,
-                )
             if kind == "reference":
                 self.target_manager.add_reference(
                     owner_id,
@@ -308,7 +369,34 @@ class TargetRecoveryCoordinator:
             recovery_threshold=self.recovery_config.recovery_threshold,
             recovery_margin=self.recovery_config.recovery_margin,
         )
+        accepted_pairs = {
+            (match.target_id, match.candidate.track.track_id) for match in matches
+        }
+        due_target_ids = {target.target_id for target in due_lost_targets}
+        for key in list(self._pending):
+            if key[0] in due_target_ids and key not in accepted_pairs:
+                del self._pending[key]
+
+        recovered_matches: list[RecoveryMatch] = []
         for match in matches:
+            key = (match.target_id, match.candidate.track.track_id)
+            pending = self._pending.get(key)
+            hits = 1 if pending is None else pending.hits + 1
+            if hits < self.recovery_config.recovery_confirmation_hits:
+                self._pending[key] = _PendingRecovery(
+                    hits=hits,
+                    last_attempt_frame=frame_index,
+                )
+                self.recovery_pending_count += 1
+                LOGGER.debug(
+                    "TARGET_RECOVERY_PENDING target=%d track=%d hits=%d/%d similarity=%.4f",
+                    match.target_id,
+                    match.candidate.track.track_id,
+                    hits,
+                    self.recovery_config.recovery_confirmation_hits,
+                    match.similarity,
+                )
+                continue
             self.target_manager.recover(
                 target_id=match.target_id,
                 track=match.candidate.track,
@@ -318,15 +406,94 @@ class TargetRecoveryCoordinator:
                 max_reference_embeddings=self.recovery_config.max_reference_embeddings,
                 reference_update_threshold=self.recovery_config.reference_update_threshold,
             )
+            self._pending.pop(key, None)
+            self.recovery_accepted_count += 1
+            recovered_matches.append(match)
         self.last_recovered_track_ids = frozenset(
-            match.candidate.track.track_id for match in matches
+            match.candidate.track.track_id for match in recovered_matches
         )
-        return matches
+        return recovered_matches
 
-    def _crop(self, frame: np.ndarray, track: Track) -> np.ndarray | None:
-        return crop_person(
+    def _update_track_ages(
+        self,
+        tracks: Sequence[Track],
+        frame_index: int,
+    ) -> None:
+        visible_ids = {track.track_id for track in tracks}
+        for track_id in list(self._track_ages):
+            if track_id not in visible_ids:
+                del self._track_ages[track_id]
+                self._last_seen_frame.pop(track_id, None)
+                for key in [key for key in self._pending if key[1] == track_id]:
+                    del self._pending[key]
+
+        for track in tracks:
+            previous_frame = self._last_seen_frame.get(track.track_id)
+            if previous_frame == frame_index - 1:
+                self._track_ages[track.track_id] = (
+                    self._track_ages.get(track.track_id, 0) + 1
+                )
+            else:
+                self._track_ages[track.track_id] = 1
+            self._last_seen_frame[track.track_id] = frame_index
+
+    def _expire_pending(self, frame_index: int) -> None:
+        max_age = self.recovery_config.recovery_pending_max_age_frames
+        for key, pending in list(self._pending.items()):
+            if frame_index - pending.last_attempt_frame > max_age:
+                del self._pending[key]
+
+    def _ensure_embeddings(
+        self,
+        jobs: Sequence[tuple[str, int, Track, np.ndarray]],
+        frame_index: int,
+    ) -> list[tuple[tuple[str, int, Track, np.ndarray], np.ndarray]]:
+        resolved: list[tuple[tuple[str, int, Track, np.ndarray], np.ndarray] | None] = [
+            None
+        ] * len(jobs)
+        missing_indices: list[int] = []
+        missing_crops: list[np.ndarray] = []
+        for index, job in enumerate(jobs):
+            track = job[2]
+            cached = (
+                self.embedding_cache.get(track.track_id, frame_index)
+                if self.embedding_cache is not None
+                else None
+            )
+            if cached is not None:
+                resolved[index] = (job, cached)
+            else:
+                missing_indices.append(index)
+                missing_crops.append(job[3])
+
+        if missing_crops:
+            self.reid_batch_count += 1
+            embeddings = np.asarray(
+                self.reid_extractor.extract_batch(missing_crops),
+                dtype=np.float32,
+            )
+            if embeddings.ndim != 2 or embeddings.shape[0] != len(missing_crops):
+                raise ValueError("ReID batch output does not match recovery jobs")
+            for index, embedding in zip(missing_indices, embeddings):
+                track = jobs[index][2]
+                embedding_copy = np.asarray(embedding, dtype=np.float32).copy()
+                if self.embedding_cache is not None:
+                    self.embedding_cache.put(track.track_id, embedding_copy, frame_index)
+                resolved[index] = (jobs[index], embedding_copy)
+
+        return [item for item in resolved if item is not None]
+
+    def _quality(
+        self,
+        frame: np.ndarray,
+        track: Track,
+        tracks: Sequence[Track],
+    ) -> ReIDQualityResult:
+        return assess_reid_quality(
             frame,
-            track.bbox,
-            min_crop_width=self.reid_config.min_crop_width,
-            min_crop_height=self.reid_config.min_crop_height,
+            track,
+            tracks,
+            self.reid_config,
+            self.quality_config,
+            person_class_id=self.person_class_id,
         )

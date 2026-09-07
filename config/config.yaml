@@ -14,7 +14,8 @@ runtime:
   log_level: "INFO"
 
 tracking:
-  tracker: "botsort.yaml"
+  # Project-owned baseline; change this path for a controlled crowd A/B run.
+  tracker: "config/trackers/botsort_baseline.yaml"
   persist: true
   show_track_id: true
 
@@ -38,6 +39,15 @@ reid_recovery:
   recovery_threshold: 0.75
   recovery_margin: 0.05
   reference_update_threshold: 0.80
+  recovery_min_track_age_frames: 3
+  recovery_confirmation_hits: 2
+  recovery_pending_max_age_frames: 60
+
+reid_quality:
+  # Crowded-scene engineering starting values; not universal optima.
+  min_track_confidence: 0.35
+  max_edge_truncation_ratio: 0.30
+  max_person_overlap_ratio: 0.50
 
 gallery_recognition:
   # Conservative, configurable engineering starting values; not universal optima.
@@ -52,8 +62,12 @@ database:
   path: "database/person_reid.db"
 
 ui:
-  window_name: "Person Tracking - MVP-8"
+  window_name: "Person Tracking - MVP-8.1"
   wait_key_ms: 1
   show_class_name: true
   show_confidence: true
   show_unselected_tracks: false
+
+diagnostics:
+  enabled: true
+  log_interval_frames: 300

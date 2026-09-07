@@ -8,11 +8,17 @@ from logging import getLogger
 
 import numpy as np
 
-from .config import GalleryRecognitionConfig, ReIDConfig, ReIDRecoveryConfig
+from .config import (
+    GalleryRecognitionConfig,
+    ReIDConfig,
+    ReIDQualityConfig,
+    ReIDRecoveryConfig,
+)
 from .gallery import GalleryPerson, TargetGallery
 from .models import Track
-from .reid import ReIDExtractor, cosine_similarity, crop_person
+from .reid import ReIDExtractor, cosine_similarity
 from .reid_frame_cache import ReIDFrameCache
+from .reid_quality import assess_reid_quality
 from .target_manager import TargetManager
 
 
@@ -170,6 +176,7 @@ class GalleryRecognitionCoordinator:
         *,
         person_class_id: int = 0,
         embedding_cache: ReIDFrameCache | None = None,
+        quality_config: ReIDQualityConfig | None = None,
     ) -> None:
         self.target_manager = target_manager
         self.gallery = gallery
@@ -179,10 +186,14 @@ class GalleryRecognitionCoordinator:
         self.recovery_config = recovery_config
         self.person_class_id = person_class_id
         self.embedding_cache = embedding_cache
+        self.quality_config = quality_config or ReIDQualityConfig()
         self._track_ages: dict[int, int] = {}
         self._last_seen_frame: dict[int, int] = {}
         self._pending: dict[tuple[int, int], _PendingRecognition] = {}
         self._last_recognition_frame: int | None = None
+        self.recognized_count = 0
+        self.quality_rejected_count = 0
+        self.reid_batch_count = 0
 
     @property
     def pending(self) -> dict[tuple[int, int], int]:
@@ -278,6 +289,7 @@ class GalleryRecognitionCoordinator:
 
             if self._bind_match(match, frame_index):
                 recognized.append(match)
+                self.recognized_count += 1
             self._pending.pop(key, None)
 
         return recognized
@@ -330,10 +342,23 @@ class GalleryRecognitionCoordinator:
                 is not None
             ):
                 continue
-            crop = self._crop(frame, track)
-            if crop is None:
+            quality = assess_reid_quality(
+                frame,
+                track,
+                tracks,
+                self.reid_config,
+                self.quality_config,
+                person_class_id=self.person_class_id,
+            )
+            if not quality.accepted or quality.crop is None:
+                self.quality_rejected_count += 1
+                LOGGER.debug(
+                    "REID_QUALITY_REJECTED kind=gallery track=%d reason=%s",
+                    track.track_id,
+                    quality.reason or "unknown",
+                )
                 continue
-            candidates.append((track, crop))
+            candidates.append((track, quality.crop))
         return candidates
 
     def _ensure_embeddings(
@@ -356,6 +381,7 @@ class GalleryRecognitionCoordinator:
             missing_crops.append(crop)
 
         if missing_crops:
+            self.reid_batch_count += 1
             embeddings = np.asarray(
                 self.reid_extractor.extract_batch(missing_crops),
                 dtype=np.float32,

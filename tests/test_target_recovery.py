@@ -7,6 +7,7 @@ import numpy as np
 
 from src.config import ReIDConfig, ReIDRecoveryConfig
 from src.models import SessionTarget, TargetState, Track
+from src.reid_frame_cache import ReIDFrameCache
 from src.target_manager import TargetManager
 from src.target_recovery import (
     RecoveryCandidate,
@@ -34,6 +35,20 @@ class _FakeReIDExtractor:
         return np.repeat(self.batch_embedding[None, :], len(crops), axis=0)
 
 
+class _SequenceReIDExtractor(_FakeReIDExtractor):
+    def __init__(self, initial: np.ndarray, batch_embeddings: list[np.ndarray]) -> None:
+        super().__init__(initial, batch_embeddings[0])
+        self.batch_embeddings = [embedding.astype(np.float32) for embedding in batch_embeddings]
+
+    def extract_batch(self, crops: list[np.ndarray]) -> np.ndarray:
+        self.batch_calls += 1
+        self.batch_sizes.append(len(crops))
+        if not self.batch_embeddings:
+            raise AssertionError("fake extractor ran out of outputs")
+        embedding = self.batch_embeddings.pop(0)
+        return np.repeat(embedding[None, :], len(crops), axis=0)
+
+
 def _reid_config() -> ReIDConfig:
     return ReIDConfig(
         model_name="osnet_x0_25",
@@ -54,6 +69,11 @@ def _recovery_config(**overrides: object) -> ReIDRecoveryConfig:
         "recovery_threshold": 0.75,
         "recovery_margin": 0.05,
         "reference_update_threshold": 0.80,
+        # These tests retain focused MVP-5 behavior; dedicated MVP-8.1 tests
+        # below enable age and confirmation explicitly.
+        "recovery_min_track_age_frames": 1,
+        "recovery_confirmation_hits": 1,
+        "recovery_pending_max_age_frames": 60,
     }
     values.update(overrides)
     return ReIDRecoveryConfig(**values)  # type: ignore[arg-type]
@@ -253,6 +273,107 @@ class CoordinatorTests(unittest.TestCase):
         coordinator.process_frame(self.frame, [self.track_a, self.track_b], 0)
 
         self.assertEqual(extractor.batch_calls, 0)
+
+    def test_recovery_requires_two_valid_attempts_when_configured(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        manager, coordinator = self._coordinator(
+            extractor,
+            recovery_confirmation_hits=2,
+            recovery_min_track_age_frames=1,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+
+        coordinator.process_frame(self.frame, [], 1)
+        self.assertEqual(coordinator.process_frame(self.frame, [self.track_b], 2), [])
+        self.assertEqual(coordinator.pending, {(target.target_id, 8): 1})
+        matches = coordinator.process_frame(self.frame, [self.track_b], 3)
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(target.current_track_id, 8)
+        self.assertEqual(coordinator.pending, {})
+
+    def test_recovery_candidate_age_is_continuous(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        manager, coordinator = self._coordinator(
+            extractor,
+            recovery_min_track_age_frames=3,
+            recovery_confirmation_hits=1,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+
+        coordinator.process_frame(self.frame, [self.track_b], 2)
+        coordinator.process_frame(self.frame, [self.track_b], 3)
+        self.assertEqual(extractor.batch_calls, 0)
+        matches = coordinator.process_frame(self.frame, [self.track_b], 4)
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(coordinator.track_ages[8], 3)
+
+    def test_quality_rejection_does_not_count_as_recovery_mismatch(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        manager, coordinator = self._coordinator(
+            extractor,
+            recovery_confirmation_hits=2,
+            recovery_min_track_age_frames=1,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+        coordinator.process_frame(self.frame, [self.track_b], 2)
+        self.assertEqual(coordinator.pending, {(target.target_id, 8): 1})
+
+        overlapping = Track(9, (60, 0, 90, 110), 0.9, 0)
+        coordinator.process_frame(self.frame, [self.track_b, overlapping], 3)
+
+        self.assertEqual(coordinator.pending, {(target.target_id, 8): 1})
+        self.assertEqual(target.state, TargetState.LOST)
+
+    def test_lost_target_recovery_reuses_current_frame_cache(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        manager = TargetManager()
+        coordinator = TargetRecoveryCoordinator(
+            manager,
+            extractor,  # type: ignore[arg-type]
+            _reid_config(),
+            _recovery_config(recovery_confirmation_hits=1),
+            embedding_cache=ReIDFrameCache(),
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+        cache = coordinator.embedding_cache
+        assert cache is not None
+        cache.begin_frame(2)
+        cache.put(8, np.asarray((1, 0), dtype=np.float32), 2)
+
+        matches = coordinator.process_frame(self.frame, [self.track_b], 2)
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(extractor.batch_calls, 0)
+
+    def test_valid_failed_recovery_attempt_clears_pending(self) -> None:
+        extractor = _SequenceReIDExtractor(
+            np.asarray((1, 0)),
+            [np.asarray((1, 0)), np.asarray((0, 1))],
+        )
+        manager, coordinator = self._coordinator(
+            extractor,
+            recovery_confirmation_hits=2,
+            recovery_min_track_age_frames=1,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+        coordinator.process_frame(self.frame, [self.track_b], 2)
+        self.assertEqual(coordinator.pending, {(target.target_id, 8): 1})
+
+        coordinator.process_frame(self.frame, [self.track_b], 3)
+
+        self.assertEqual(coordinator.pending, {})
+        self.assertEqual(target.state, TargetState.LOST)
 
 
 if __name__ == "__main__":

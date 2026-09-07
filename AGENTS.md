@@ -61,9 +61,9 @@ OSNet, TargetGallery, and SQLite start in later MVPs and must not be pulled into
 runtime behavior.
 
 In MVP-2, the main loop must reuse one `TrackingPipeline` instance. That instance loads
-one YOLO model and calls `model.track(..., persist=True, tracker="botsort.yaml")` once
-per frame. Do not run `predict()` and `track()` on the same frame, and do not pass
-`workers` for NumPy-frame tracking input.
+one YOLO model and calls `model.track(..., persist=True, tracker=<configured BoT-SORT
+profile>)` once per frame. Do not run `predict()` and `track()` on the same frame, and
+do not pass `workers` for NumPy-frame tracking input.
 
 In MVP-3, manual selection is multi-target: `TargetManager` stores a set of temporary
 Track IDs. ROI selection and removal must use the current frame's existing `tracks`
@@ -125,6 +125,28 @@ either an ACTIVE or LOST SessionTarget. An already selected but Gallery-unbound
 SessionTarget must be attached in place rather than replaced by a second target.
 Track-age and recognition-interval controls limit ReID work; no Gallery recognition
 is performed when the Gallery is empty or no eligible candidates exist.
+
+In MVP-8.1, prioritize crowded-scene Track fragmentation and false LOST recovery.
+Do not treat a Track ID change as confirmed fragmentation without ground truth, and
+do not add an ACTIVE identity guard to the main chain; the current observed failure
+mode is Track loss followed by an incorrect recovery. Recovery candidates must be
+continuously tracked for a configurable minimum age, pass a configurable ReID
+quality gate, and require repeated valid attempts for the same target/Track pair
+before recovery. A quality-rejected frame is not an identity mismatch and must not
+clear recovery pending state; candidate disappearance, a later valid failed attempt,
+or a changed candidate may clear it. The gate must consider confidence, crop size,
+frame-edge truncation, and the maximum intersection-over-target-area overlap with
+other person boxes. Recovery-inspected but unmatched Tracks remain eligible for
+Gallery recognition and may reuse only the current frame's `ReIDFrameCache` entry;
+successfully recovered or otherwise occupied Tracks remain excluded.
+
+MVP-8.1 keeps the default BoT-SORT profile as a baseline and provides project-owned
+crowd A/B profiles under `config/trackers/`. Detection confidence, tracker buffer,
+image size, and optional BoT-SORT appearance ReID are tested as controlled
+single-variable experiments; no profile is declared universally optimal. Runtime
+diagnostics report Track created/ended events, target LOST/RECOVERED events, ReID
+attempt/pending/accepted counts, quality rejections, Gallery recognitions, and
+average FPS. The application must not automatically label a recovery true/false.
 
 ---
 
@@ -386,6 +408,7 @@ MVP-5 LOST -> ReID -> RECOVER
 MVP-6 in-memory TargetGallery
 MVP-7 SQLite persistence
 MVP-8 automatic gallery recognition
+MVP-8.1 crowded-scene and occlusion robustness
 MVP-9 RTSP input and live-stream robustness
 MVP-10 presentation/UI/performance polish
 ```

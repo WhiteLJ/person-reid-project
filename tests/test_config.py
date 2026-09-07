@@ -16,7 +16,10 @@ class ConfigTests(unittest.TestCase):
         config = load_config(Path("config/config.yaml"))
         self.assertEqual(config.runtime.num_workers, 0)
         self.assertEqual(config.video.source, 0)
-        self.assertEqual(config.tracking.tracker, "botsort.yaml")
+        self.assertEqual(
+            config.tracking.tracker,
+            str(Path("config/trackers/botsort_baseline.yaml").resolve()),
+        )
         self.assertTrue(config.tracking.persist)
         self.assertAlmostEqual(config.selection.min_iou, 0.20)
         self.assertEqual(config.reid.model_name, "osnet_x0_25")
@@ -33,6 +36,12 @@ class ConfigTests(unittest.TestCase):
         self.assertAlmostEqual(config.reid_recovery.recovery_threshold, 0.75)
         self.assertAlmostEqual(config.reid_recovery.recovery_margin, 0.05)
         self.assertAlmostEqual(config.reid_recovery.reference_update_threshold, 0.80)
+        self.assertEqual(config.reid_recovery.recovery_min_track_age_frames, 3)
+        self.assertEqual(config.reid_recovery.recovery_confirmation_hits, 2)
+        self.assertEqual(config.reid_recovery.recovery_pending_max_age_frames, 60)
+        self.assertAlmostEqual(config.reid_quality.min_track_confidence, 0.35)
+        self.assertAlmostEqual(config.reid_quality.max_edge_truncation_ratio, 0.30)
+        self.assertAlmostEqual(config.reid_quality.max_person_overlap_ratio, 0.50)
         self.assertTrue(config.gallery_recognition.enabled)
         self.assertEqual(config.gallery_recognition.recognition_interval_frames, 10)
         self.assertEqual(config.gallery_recognition.min_track_age_frames, 5)
@@ -44,6 +53,8 @@ class ConfigTests(unittest.TestCase):
             Path("database/person_reid.db").resolve(),
         )
         self.assertFalse(config.ui.show_unselected_tracks)
+        self.assertTrue(config.diagnostics.enabled)
+        self.assertEqual(config.diagnostics.log_interval_frames, 300)
 
     def test_auto_device_is_supported(self) -> None:
         self.assertIn(resolve_device("auto"), {"cpu", "cuda"})

@@ -1,10 +1,10 @@
-# Person ReID Project - MVP-8
+# Person ReID Project - MVP-8.1
 
 This project is an OpenCV prototype for person detection, temporary tracking,
 session target recovery, persistent Gallery enrollment, and automatic recognition
 of persisted Gallery people.
 
-## Current MVP-8 behavior
+## Current MVP-8.1 behavior
 
 The runtime pipeline is:
 
@@ -20,7 +20,7 @@ The three identity layers remain separate:
 - `SessionTarget.target_id`: current-process target identity used by LOST/recovery;
 - `GalleryPerson.person_id`: persistent logical identity displayed as `P001`, `P002`, ... .
 
-MVP-8 supports:
+MVP-8.1 supports:
 
 - camera and local video input;
 - YOLOv8 person detection and BoT-SORT temporary Track IDs;
@@ -30,6 +30,23 @@ MVP-8 supports:
   512-D Torchreid/OSNet embeddings;
 - centroid similarity, threshold/margin checks, one-to-one matching, and repeated
   confirmation before automatic binding.
+
+Crowded-scene safeguards add:
+
+- Recovery candidate Track age and two-attempt confirmation before a LOST target is
+  rebound;
+- a configurable ReID quality gate for confidence, crop size, frame-edge truncation,
+  and person-bbox overlap;
+- same-frame ReID embedding reuse across Recovery and Gallery recognition;
+- baseline and experimental crowd BoT-SORT profiles under `config/trackers/`;
+- lightweight Track lifecycle, recovery, recognition, quality-rejection, and FPS
+  diagnostics.
+
+The priority in this stage is conservative identity behavior: a valid Track may
+remain LOST rather than being rebound to a similar-looking person. The application
+does not claim a Track ID change is ground-truth fragmentation, and it does not
+automatically classify a recovery as true or false identity without manual video
+annotation.
 
 Automatic recognition reads the in-memory Gallery loaded at startup. It does not
 write SQLite or update persistent Gallery features. It does not create a new
@@ -68,7 +85,7 @@ ImageNet-only or random weights.
 
 ## Configuration
 
-The default configuration is in `config/config.yaml`. Important MVP-8 settings are:
+The default configuration is in `config/config.yaml`. Important MVP-8.1 settings are:
 
 ```yaml
 gallery_recognition:
@@ -81,11 +98,47 @@ gallery_recognition:
 
 database:
   path: "database/person_reid.db"
+
+reid_recovery:
+  recovery_min_track_age_frames: 3
+  recovery_confirmation_hits: 2
+  recovery_pending_max_age_frames: 60
+
+reid_quality:
+  min_track_confidence: 0.35
+  max_edge_truncation_ratio: 0.30
+  max_person_overlap_ratio: 0.50
+
+diagnostics:
+  enabled: true
+  log_interval_frames: 300
 ```
 
 These are conservative, configurable engineering starting values, not universal
 thresholds. Recognition uses the in-memory Gallery and does not query SQLite per
 frame.
+
+### Crowd A/B experiments
+
+Keep the regression video, target, and time range fixed and change one variable at
+a time. The project profiles are:
+
+- `config/trackers/botsort_baseline.yaml`: installed BoT-SORT defaults,
+  `with_reid: false`, `track_buffer: 30`;
+- `config/trackers/botsort_crowd.yaml`: experiment profile,
+  `with_reid: false`, `track_buffer: 60`;
+- `config/trackers/botsort_crowd_reid.yaml`: separate optional appearance-ReID
+  experiment, `with_reid: true`, `model: auto`.
+
+For each profile, vary detection `model.conf_threshold` across `0.35`, `0.20`,
+`0.15`, tracker `track_buffer` across `30`, `60`, `90`, and `image_size` across
+`640`, `960` as separate experiments. Test the appearance-ReID profile last. These
+settings are not declared universally optimal and should not be combined into an
+uncontrolled grid for MVP-8.1.
+
+`ActiveIdentityGuard` is not part of the MVP-8.1 main chain. The observed failure
+mode is Track fragmentation followed by false LOST recovery, so no extra per-frame
+ACTIVE verification is enabled in this stage.
 
 ## Run
 
@@ -116,7 +169,7 @@ set that option to `true` to show them.
 
 ## Offline Gallery administration
 
-The lightweight MVP-7/MVP-8 development tool supports listing and deleting
+The lightweight MVP-7/MVP-8.1 development tool supports listing and deleting
 persistent Gallery people:
 
 ```bash
@@ -142,6 +195,9 @@ python -m unittest discover -s tests -p "test_*.py"
 
 ## Not implemented yet
 
-MVP-8 does not include PySide/Qt UI, RTSP, face recognition, training/fine-tuning,
+MVP-8.1 does not include PySide/Qt UI, RTSP, face recognition, training/fine-tuning,
 BoxMOT, automatic persistent Gallery feature updates, or complex Gallery editing.
-The next stage may address live-stream robustness and later presentation/UI work.
+False recovery counts require manual review against the fixed regression video; the
+program reports attempts, pending proposals, accepted recoveries, and Track
+created/ended events only. The next stage may address live-stream robustness and
+later presentation/UI work.

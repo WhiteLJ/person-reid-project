@@ -25,6 +25,8 @@ class TargetManager:
     def __init__(self) -> None:
         self.targets: dict[int, SessionTarget] = {}
         self._next_target_id = 1
+        self.target_lost_count = 0
+        self.target_recovered_count = 0
 
     @property
     def selected_track_ids(self) -> set[int]:
@@ -229,6 +231,7 @@ class TargetManager:
             target.current_track_id = None
             target.state = TargetState.LOST
             target.last_recovery_frame = None
+            self.target_lost_count += 1
             LOGGER.info(
                 "TARGET_LOST target=%d old_track_id=%d missing_frames=%d frame=%d",
                 target.target_id,
@@ -351,6 +354,7 @@ class TargetManager:
             max_reference_embeddings,
             reference_update_threshold,
         )
+        self.target_recovered_count += 1
         LOGGER.info(
             "TARGET_RECOVERED target=%d old_track_id=%s new_track_id=%d similarity=%.4f",
             target_id,

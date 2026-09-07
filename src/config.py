@@ -64,6 +64,29 @@ class ReIDRecoveryConfig:
     recovery_threshold: float
     recovery_margin: float
     reference_update_threshold: float
+    recovery_min_track_age_frames: int = 3
+    recovery_confirmation_hits: int = 2
+    recovery_pending_max_age_frames: int = 60
+
+
+@dataclass(frozen=True)
+class ReIDQualityConfig:
+    """Quality gates for ReID decisions in crowded scenes.
+
+    These are engineering starting values, not universal operating points.
+    """
+
+    min_track_confidence: float = 0.35
+    max_edge_truncation_ratio: float = 0.30
+    max_person_overlap_ratio: float = 0.50
+
+
+@dataclass(frozen=True)
+class DiagnosticsConfig:
+    """Lightweight runtime statistics controls."""
+
+    enabled: bool = True
+    log_interval_frames: int = 300
 
 
 @dataclass(frozen=True)
@@ -104,9 +127,11 @@ class AppConfig:
     selection: SelectionConfig
     reid: ReIDConfig
     reid_recovery: ReIDRecoveryConfig
+    reid_quality: ReIDQualityConfig
     gallery_recognition: GalleryRecognitionConfig
     database: DatabaseConfig
     ui: UIConfig
+    diagnostics: DiagnosticsConfig
 
 
 def parse_source(value: Any) -> int | str:
@@ -175,9 +200,11 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     selection = _section(raw, "selection")
     reid = _section(raw, "reid")
     reid_recovery = _section(raw, "reid_recovery")
+    reid_quality = _section(raw, "reid_quality")
     gallery_recognition = _section(raw, "gallery_recognition")
     database = _section(raw, "database")
     ui = _section(raw, "ui")
+    diagnostics = _section(raw, "diagnostics")
 
     source = parse_source(video.get("source", 0))
     weight_value = model.get("yolo_weight", "weights/yolo/yolov8n.pt")
@@ -230,6 +257,15 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     reference_update_threshold = float(
         reid_recovery.get("reference_update_threshold", 0.80)
     )
+    recovery_min_track_age_frames = int(
+        reid_recovery.get("recovery_min_track_age_frames", 3)
+    )
+    recovery_confirmation_hits = int(
+        reid_recovery.get("recovery_confirmation_hits", 2)
+    )
+    recovery_pending_max_age_frames = int(
+        reid_recovery.get("recovery_pending_max_age_frames", 60)
+    )
     if lost_grace_frames < 1:
         raise ValueError("reid_recovery.lost_grace_frames must be positive")
     if reference_update_interval_frames < 1:
@@ -248,6 +284,36 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             raise ValueError(f"reid_recovery.{name} must be greater than 0 and at most 1")
     if recovery_margin < 0.0:
         raise ValueError("reid_recovery.recovery_margin must be non-negative")
+    if recovery_min_track_age_frames < 1:
+        raise ValueError(
+            "reid_recovery.recovery_min_track_age_frames must be positive"
+        )
+    if recovery_confirmation_hits < 1:
+        raise ValueError(
+            "reid_recovery.recovery_confirmation_hits must be positive"
+        )
+    if recovery_pending_max_age_frames < 1:
+        raise ValueError(
+            "reid_recovery.recovery_pending_max_age_frames must be positive"
+        )
+
+    min_track_confidence = float(
+        reid_quality.get("min_track_confidence", 0.35)
+    )
+    max_edge_truncation_ratio = float(
+        reid_quality.get("max_edge_truncation_ratio", 0.30)
+    )
+    max_person_overlap_ratio = float(
+        reid_quality.get("max_person_overlap_ratio", 0.50)
+    )
+    if not 0.0 <= min_track_confidence <= 1.0:
+        raise ValueError("reid_quality.min_track_confidence must be in [0, 1]")
+    for name, value in (
+        ("max_edge_truncation_ratio", max_edge_truncation_ratio),
+        ("max_person_overlap_ratio", max_person_overlap_ratio),
+    ):
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"reid_quality.{name} must be in [0, 1]")
 
     recognition_interval_frames = int(
         gallery_recognition.get("recognition_interval_frames", 10)
@@ -288,6 +354,13 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     if not database_path.is_absolute():
         database_path = project_root / database_path
 
+    tracker_value = str(tracking.get("tracker", "botsort.yaml"))
+    tracker_path = Path(tracker_value)
+    if not tracker_path.is_absolute():
+        project_tracker_path = project_root / tracker_path
+        if project_tracker_path.is_file():
+            tracker_value = str(project_tracker_path)
+
     return AppConfig(
         project_root=project_root,
         video=VideoConfig(source=source),
@@ -304,7 +377,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             log_level=str(runtime.get("log_level", "INFO")).upper(),
         ),
         tracking=TrackingConfig(
-            tracker=str(tracking.get("tracker", "botsort.yaml")),
+            tracker=tracker_value,
             persist=bool(tracking.get("persist", True)),
             show_track_id=bool(tracking.get("show_track_id", True)),
         ),
@@ -325,6 +398,14 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             recovery_threshold=recovery_threshold,
             recovery_margin=recovery_margin,
             reference_update_threshold=reference_update_threshold,
+            recovery_min_track_age_frames=recovery_min_track_age_frames,
+            recovery_confirmation_hits=recovery_confirmation_hits,
+            recovery_pending_max_age_frames=recovery_pending_max_age_frames,
+        ),
+        reid_quality=ReIDQualityConfig(
+            min_track_confidence=min_track_confidence,
+            max_edge_truncation_ratio=max_edge_truncation_ratio,
+            max_person_overlap_ratio=max_person_overlap_ratio,
         ),
         gallery_recognition=GalleryRecognitionConfig(
             enabled=bool(gallery_recognition.get("enabled", True)),
@@ -336,10 +417,16 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         ),
         database=DatabaseConfig(path=database_path),
         ui=UIConfig(
-            window_name=str(ui.get("window_name", "Person Tracking - MVP-8")),
+            window_name=str(ui.get("window_name", "Person Tracking - MVP-8.1")),
             wait_key_ms=max(1, int(ui.get("wait_key_ms", 1))),
             show_class_name=bool(ui.get("show_class_name", True)),
             show_confidence=bool(ui.get("show_confidence", True)),
             show_unselected_tracks=bool(ui.get("show_unselected_tracks", False)),
+        ),
+        diagnostics=DiagnosticsConfig(
+            enabled=bool(diagnostics.get("enabled", True)),
+            log_interval_frames=max(
+                1, int(diagnostics.get("log_interval_frames", 300))
+            ),
         ),
     )

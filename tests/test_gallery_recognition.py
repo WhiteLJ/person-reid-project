@@ -64,6 +64,11 @@ def _recovery_config(**overrides: object) -> ReIDRecoveryConfig:
         "recovery_threshold": 0.75,
         "recovery_margin": 0.05,
         "reference_update_threshold": 0.80,
+        # Legacy integration cases focus on Gallery hand-off; dedicated
+        # MVP-8.1 recovery tests exercise the production confirmation values.
+        "recovery_min_track_age_frames": 1,
+        "recovery_confirmation_hits": 1,
+        "recovery_pending_max_age_frames": 60,
     }
     values.update(overrides)
     return ReIDRecoveryConfig(**values)  # type: ignore[arg-type]

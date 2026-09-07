@@ -1,15 +1,17 @@
-"""MVP-8 entry point: tracking, ReID recovery, and Gallery recognition."""
+"""MVP-8.1 entry point: crowded-scene tracking and conservative ReID."""
 
 from __future__ import annotations
 
 import argparse
 import logging
+from time import perf_counter
 from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
 from src.config import AppConfig, load_config, parse_source
 from src.database import GalleryRepository
+from src.diagnostics import RuntimeDiagnostics
 from src.gallery import TargetGallery, format_person_id
 from src.gallery_service import GalleryPersistenceService
 from src.gallery_recognition import GalleryRecognitionCoordinator
@@ -31,8 +33,8 @@ LOGGER = logging.getLogger(__name__)
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "MVP-8 tracking, session-target ReID recovery, and automatic "
-            "persistent Gallery recognition"
+            "MVP-8.1 crowded-scene tracking, session-target ReID recovery, "
+            "and persistent Gallery recognition"
         )
     )
     parser.add_argument(
@@ -99,6 +101,8 @@ def run(config: AppConfig) -> int:
         reid_config=config.reid,
         recovery_config=config.reid_recovery,
         embedding_cache=embedding_cache,
+        quality_config=config.reid_quality,
+        person_class_id=config.model.person_class_id,
     )
     gallery_recognition = GalleryRecognitionCoordinator(
         target_manager=target_manager,
@@ -109,6 +113,11 @@ def run(config: AppConfig) -> int:
         recovery_config=config.reid_recovery,
         person_class_id=config.model.person_class_id,
         embedding_cache=embedding_cache,
+        quality_config=config.reid_quality,
+    )
+    diagnostics = RuntimeDiagnostics(
+        enabled=config.diagnostics.enabled,
+        log_interval_frames=config.diagnostics.log_interval_frames,
     )
     frame_index = 0
     current_frame_index = -1
@@ -205,6 +214,7 @@ def run(config: AppConfig) -> int:
         source.open()
         LOGGER.info("SOURCE_OPENED source=%s", config.video.source)
         while True:
+            frame_started = perf_counter()
             frame = source.read()
             if frame is None:
                 LOGGER.info("SOURCE_END source=%s", config.video.source)
@@ -212,12 +222,17 @@ def run(config: AppConfig) -> int:
 
             current_frame_index = frame_index
             tracks = tracking_pipeline.process(frame)
+            diagnostics.observe_tracks(tracks, current_frame_index)
             target_recovery.process_frame(frame, tracks, current_frame_index)
             gallery_recognition.process_frame(
                 frame,
                 tracks,
                 current_frame_index,
                 protected_track_ids=target_recovery.last_recovered_track_ids,
+            )
+            diagnostics.record_frame(
+                perf_counter() - frame_started,
+                current_frame_index,
             )
             frame_index += 1
             annotated = render_tracks(frame, tracks)
@@ -256,6 +271,18 @@ def run(config: AppConfig) -> int:
     finally:
         source.release()
         ui.close()
+        diagnostics.log_summary(
+            target_lost=target_manager.target_lost_count,
+            target_recovered=target_manager.target_recovered_count,
+            recovery_attempted=target_recovery.recovery_attempted_count,
+            recovery_pending=target_recovery.recovery_pending_count,
+            recovery_accepted=target_recovery.recovery_accepted_count,
+            quality_rejected=(
+                target_recovery.quality_rejected_count
+                + gallery_recognition.quality_rejected_count
+            ),
+            gallery_recognized=gallery_recognition.recognized_count,
+        )
         LOGGER.info("APP_STOP")
     return 0
 
