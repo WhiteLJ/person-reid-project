@@ -1,4 +1,4 @@
-"""Ultralytics YOLOv8 + BoT-SORT tracking pipeline for MVP-2."""
+"""Torch/Ascend detection with a stable BoT-SORT Track output contract."""
 
 from __future__ import annotations
 
@@ -8,7 +8,16 @@ from typing import Any
 import numpy as np
 from ultralytics import YOLO
 
-from .config import ModelConfig, RuntimeConfig, TrackingConfig
+from .ascend_detector import AscendPersonDetector
+from .ascend_runtime import AscendRuntime
+from .ascend_tracker import AscendBotSortTracker
+from .config import (
+    AscendConfig,
+    InferenceConfig,
+    ModelConfig,
+    RuntimeConfig,
+    TrackingConfig,
+)
 from .models import Track
 
 
@@ -84,10 +93,50 @@ class TrackingPipeline:
         runtime_config: RuntimeConfig,
         tracking_config: TrackingConfig,
         model: Any | None = None,
+        inference_config: InferenceConfig | None = None,
+        ascend_config: AscendConfig | None = None,
+        ascend_runtime: AscendRuntime | None = None,
+        ascend_detector: Any | None = None,
+        ascend_tracker: Any | None = None,
     ) -> None:
         self.model_config = model_config
         self.runtime_config = runtime_config
         self.tracking_config = tracking_config
+        self.inference_config = inference_config or InferenceConfig()
+        self._owns_ascend_runtime = False
+        self._ascend_runtime = ascend_runtime
+        self.detector: Any | None = None
+        self.tracker: Any | None = None
+
+        if self.inference_config.backend == "ascend":
+            deployment = ascend_config or AscendConfig()
+            if ascend_runtime is None:
+                ascend_runtime = AscendRuntime(deployment.device_id)
+                self._owns_ascend_runtime = True
+            self._ascend_runtime = ascend_runtime
+            self.detector = (
+                ascend_detector
+                if ascend_detector is not None
+                else AscendPersonDetector(
+                    deployment.yolo_model,
+                    ascend_runtime,
+                    image_size=model_config.image_size,
+                    confidence_threshold=model_config.conf_threshold,
+                    iou_threshold=model_config.iou_threshold,
+                    person_class_id=model_config.person_class_id,
+                )
+            )
+            self.tracker = (
+                ascend_tracker
+                if ascend_tracker is not None
+                else AscendBotSortTracker(
+                    tracking_config.tracker,
+                    persist=tracking_config.persist,
+                )
+            )
+            self.names = {model_config.person_class_id: "person"}
+            self.model = None
+            return
 
         if model is None:
             if not model_config.yolo_weight.is_file():
@@ -102,7 +151,13 @@ class TrackingPipeline:
             self.model.overrides["verbose"] = False
 
     def process(self, frame: np.ndarray) -> list[Track]:
-        """Run exactly one YOLO+BoT-SORT pass for a frame."""
+        """Run one detection/tracking pass for a frame."""
+
+        if self.inference_config.backend == "ascend":
+            if self.detector is None or self.tracker is None:
+                raise RuntimeError("Ascend tracking pipeline is not initialized")
+            detections = self.detector.detect(frame)
+            return self.tracker.update(detections, frame)
 
         results = self.model.track(
             source=frame,
@@ -118,6 +173,14 @@ class TrackingPipeline:
         if not results:
             return []
         return parse_tracks(results[0], self.model_config.person_class_id)
+
+    def close(self) -> None:
+        """Close an internally-created Ascend runtime, if any."""
+
+        if self._owns_ascend_runtime and self._ascend_runtime is not None:
+            self._ascend_runtime.close()
+            self._ascend_runtime = None
+            self._owns_ascend_runtime = False
 
     def class_name(self, class_id: int) -> str:
         if isinstance(self.names, Mapping):

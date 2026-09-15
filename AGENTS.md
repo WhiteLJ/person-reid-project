@@ -592,3 +592,53 @@ The core project is considered functionally complete when all of the following w
 - critical Gallery/TargetManager logic has tests
 
 Presentation polish is secondary to these requirements.
+
+---
+
+## 19. Atlas 310B deployment adaptation
+
+The Atlas work is a deployment variant layered on top of MVP-8.2, not a new
+business MVP. Keep `inference.backend: torch` as the PC default. When the value
+is `ascend`, YOLO and OSNet neural inference must use project-exported ONNX
+opset 11 models converted to OM by ATC and executed through one shared pyACL
+runtime. Never use `torch_npu` on this path.
+
+The Atlas data path is:
+
+```text
+Ascend YOLO OM -> CPU BoT-SORT -> Track[] -> unchanged target/Gallery logic
+Track crop -> Ascend OSNet OM -> unchanged ReID/recovery/recognition logic
+```
+
+`TrackingPipeline.process(frame)` and `ReIDExtractor.extract/extract_batch`
+remain the stable public interfaces. The Ascend backend must not call
+`YOLO.predict`, `YOLO.track`, Torchreid forward, or move tensors to CUDA. It
+may import the installed Ultralytics package for its CPU BoT-SORT implementation
+and must reject a BoT-SORT profile with appearance ReID enabled, so no second
+neural ReID model is loaded.
+
+`src/ascend_runtime.py` owns one ACL lifecycle and reusable OM model handles;
+`src/ascend_detector.py` owns letterbox/decode/NMS; `src/ascend_reid.py` owns
+OSNet preprocessing, dynamic batches, and normalization; and
+`src/ascend_tracker.py` adapts external detections to the installed Ultralytics
+BoT-SORT API. The runtime is initialized once outside the video loop and closed
+once in reverse resource order. ACL status codes must be checked and failures
+must be explicit.
+
+The PC exporter fixes ONNX opset 11, YOLO static input `1x3x640x640`, no ONNX
+NMS, and OSNet feature output `Nx512` with input `Nx3x256x128`. The ATC script
+uses `SOC_VERSION=${SOC_VERSION:-Ascend310B4}` and permits an environment
+override; the SoC version must not be permanently hard-coded in Python. OSNet
+dynamic batches are configured as `[1, 2, 4, 8]` by default and larger requests
+are chunked without fake samples. The dynamic-batch OM control input is
+`ascend_mbatch_shape_data`; obtain its input index from the model descriptor and
+use the installed pyACL `set_dynamic_batch_size(model_id, dataset, index,
+batch_size)` API rather than passing an ad-hoc pointer.
+
+Atlas OM paths and device ID are project-relative/configured under `ascend:`;
+there are no machine-specific absolute paths in project configuration. The
+SQLite schema and all SessionTarget, Recovery, Gallery, enrichment, and UI
+business rules remain unchanged. `deploy/atlas/README.md` is the authoritative
+board conversion, smoke-test, benchmark, and dependency guide. Hardware smoke
+tests and `npu-smi` utilization checks must be reported as hardware checks and
+must not be claimed from the PC test suite.

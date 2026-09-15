@@ -26,6 +26,23 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
+class InferenceConfig:
+    """Select the neural-network inference backend."""
+
+    backend: str = "torch"
+
+
+@dataclass(frozen=True)
+class AscendConfig:
+    """AscendCL model and dynamic-batch settings."""
+
+    device_id: int = 0
+    yolo_model: Path = Path("weights/atlas/yolov8n.om")
+    reid_model: Path = Path("weights/atlas/osnet_x0_25.om")
+    reid_dynamic_batches: tuple[int, ...] = (1, 2, 4, 8)
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     num_workers: int
     log_level: str
@@ -129,6 +146,8 @@ class AppConfig:
     project_root: Path
     video: VideoConfig
     model: ModelConfig
+    inference: InferenceConfig
+    ascend: AscendConfig
     runtime: RuntimeConfig
     tracking: TrackingConfig
     selection: SelectionConfig
@@ -203,6 +222,8 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     project_root = _resolve_project_root(path)
     video = _section(raw, "video")
     model = _section(raw, "model")
+    inference = _section(raw, "inference")
+    ascend = _section(raw, "ascend")
     runtime = _section(raw, "runtime")
     tracking = _section(raw, "tracking")
     selection = _section(raw, "selection")
@@ -216,6 +237,33 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     diagnostics = _section(raw, "diagnostics")
 
     source = parse_source(video.get("source", 0))
+    inference_backend = str(inference.get("backend", "torch")).strip().lower()
+    if inference_backend not in {"torch", "ascend"}:
+        raise ValueError("inference.backend must be 'torch' or 'ascend'")
+
+    ascend_device_id = int(ascend.get("device_id", 0))
+    if ascend_device_id < 0:
+        raise ValueError("ascend.device_id must be non-negative")
+
+    def resolve_project_path(value: Any, default: str) -> Path:
+        resolved = Path(value if value is not None else default)
+        return resolved if resolved.is_absolute() else project_root / resolved
+
+    ascend_yolo_model = resolve_project_path(
+        ascend.get("yolo_model"), "weights/atlas/yolov8n.om"
+    )
+    ascend_reid_model = resolve_project_path(
+        ascend.get("reid_model"), "weights/atlas/osnet_x0_25.om"
+    )
+    dynamic_batch_values = ascend.get("reid_dynamic_batches", [1, 2, 4, 8])
+    if not isinstance(dynamic_batch_values, (list, tuple)):
+        raise ValueError("ascend.reid_dynamic_batches must be a list")
+    reid_dynamic_batches = tuple(sorted({int(value) for value in dynamic_batch_values}))
+    if not reid_dynamic_batches or reid_dynamic_batches[0] != 1:
+        raise ValueError("ascend.reid_dynamic_batches must include batch size 1")
+    if any(value < 1 for value in reid_dynamic_batches):
+        raise ValueError("ascend.reid_dynamic_batches must be positive")
+
     weight_value = model.get("yolo_weight", "weights/yolo/yolov8n.pt")
     weight_path = Path(weight_value)
     if not weight_path.is_absolute():
@@ -388,6 +436,13 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             conf_threshold=float(model.get("conf_threshold", 0.35)),
             iou_threshold=float(model.get("iou_threshold", 0.50)),
             image_size=int(model.get("image_size", 640)),
+        ),
+        inference=InferenceConfig(backend=inference_backend),
+        ascend=AscendConfig(
+            device_id=ascend_device_id,
+            yolo_model=ascend_yolo_model,
+            reid_model=ascend_reid_model,
+            reid_dynamic_batches=reid_dynamic_batches,
         ),
         runtime=RuntimeConfig(
             num_workers=requested_workers,

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Sequence
 
 from src.config import AppConfig, load_config, parse_source
+from src.ascend_runtime import AscendRuntime
 from src.database import GalleryRepository
 from src.diagnostics import RuntimeDiagnostics
 from src.gallery import TargetGallery, format_person_id
@@ -72,26 +73,51 @@ def run(config: AppConfig) -> int:
     )
 
     LOGGER.info(
-        "APP_START device=%s workers=%d",
+        "APP_START backend=%s device=%s workers=%d",
+        config.inference.backend,
         config.model.device,
         config.runtime.num_workers,
     )
-    tracking_pipeline = TrackingPipeline(
-        model_config=config.model,
-        runtime_config=config.runtime,
-        tracking_config=config.tracking,
+    ascend_runtime = None
+    if config.inference.backend == "ascend":
+        ascend_runtime = AscendRuntime(config.ascend.device_id)
+    try:
+        tracking_pipeline = TrackingPipeline(
+            model_config=config.model,
+            runtime_config=config.runtime,
+            tracking_config=config.tracking,
+            inference_config=config.inference,
+            ascend_config=config.ascend,
+            ascend_runtime=ascend_runtime,
+        )
+        reid_extractor = ReIDExtractor(
+            config.reid,
+            config.model.device,
+            backend=config.inference.backend,
+            ascend_config=config.ascend,
+            ascend_runtime=ascend_runtime,
+        )
+    except Exception:
+        if ascend_runtime is not None:
+            ascend_runtime.close()
+        raise
+    detector_model_path = (
+        config.model.yolo_weight
+        if config.inference.backend == "torch"
+        else config.ascend.yolo_model
     )
     LOGGER.info(
-        "MODEL_LOADED path=%s tracker=%s persist=%s",
-        config.model.yolo_weight,
+        "MODEL_LOADED backend=%s path=%s tracker=%s persist=%s",
+        config.inference.backend,
+        detector_model_path,
         config.tracking.tracker,
         config.tracking.persist,
     )
-    reid_extractor = ReIDExtractor(config.reid, config.model.device)
     LOGGER.info(
-        "REID_MODEL_LOADED name=%s checkpoint=%s device=%s",
+        "REID_MODEL_LOADED backend=%s name=%s checkpoint=%s device=%s",
+        config.inference.backend,
         config.reid.model_name,
-        config.reid.weight,
+        config.reid.weight if config.inference.backend == "torch" else config.ascend.reid_model,
         reid_extractor.device,
     )
 
@@ -295,6 +321,8 @@ def run(config: AppConfig) -> int:
             gallery_recognized=gallery_recognition.recognized_count,
         )
         LOGGER.info("APP_STOP")
+        if ascend_runtime is not None:
+            ascend_runtime.close()
     return 0
 
 

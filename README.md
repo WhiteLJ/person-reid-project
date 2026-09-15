@@ -99,6 +99,32 @@ The ReID checkpoint is the official OSNet x0.25 MSMT17 combineall checkpoint. Th
 application fails clearly when it is missing and never silently falls back to
 ImageNet-only or random weights.
 
+## Atlas 310B inference backend
+
+The project also contains a deployment-only Atlas adaptation. It does not change
+the MVP-8.2 identity or persistence behavior. Set `inference.backend: ascend` in
+`config/config_atlas.yaml` to run YOLO and OSNet from locally converted OM models
+through pyACL/AscendCL. BoT-SORT remains the installed Ultralytics CPU
+implementation, and the project does not use `torch_npu`.
+
+The PC default remains `inference.backend: torch`. The Atlas workflow is fully
+documented in [`deploy/atlas/README.md`](deploy/atlas/README.md): export both
+models to ONNX opset 11 on the PC, convert them with ATC on the board, then run:
+
+```bash
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+python app.py --config config/config_atlas.yaml --source data/your_video.mp4
+```
+
+The current repository model is `weights/yolo/yolov8n.pt`, so the default export
+and OM names are `yolov8n.onnx` and `yolov8n.om`. The exporter uses the configured
+weight path, so a later configured YOLO11 checkpoint produces the corresponding
+model stem without changing the backend code. `SOC_VERSION` defaults to
+`Ascend310B4` in the conversion script and can be overridden for another 310B
+variant. Atlas-specific ONNX/OM tools are deployment tooling, not additional
+runtime business dependencies; `requirements.txt` remains the formal PC
+dependency entry point.
+
 ## Configuration
 
 The default configuration is in `config/config.yaml`. Important MVP-8.2 settings are:

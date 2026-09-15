@@ -15,7 +15,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from .config import ReIDConfig, resolve_device
+from .config import AscendConfig, ReIDConfig, resolve_device
 
 
 LOGGER = getLogger(__name__)
@@ -118,10 +118,41 @@ class ReIDExtractor:
         config: ReIDConfig,
         device: str,
         feature_extractor: Any | None = None,
+        *,
+        backend: str = "torch",
+        ascend_config: AscendConfig | None = None,
+        ascend_runtime: Any | None = None,
     ) -> None:
         self.config = config
-        self.device = resolve_device(device)
+        self.backend = backend.strip().lower()
+        if self.backend not in {"torch", "ascend"}:
+            raise ValueError("ReID backend must be 'torch' or 'ascend'")
+        self.device = resolve_device(device) if self.backend == "torch" else device
         self._feature_extractor = feature_extractor
+        self._ascend_extractor: Any | None = None
+        self._ascend_runtime: Any | None = ascend_runtime
+        self._owns_ascend_runtime = False
+
+        if self.backend == "ascend":
+            if feature_extractor is not None:
+                raise ValueError("feature_extractor is only valid for the Torch backend")
+            from .ascend_reid import AscendReIDExtractor
+
+            deployment = ascend_config or AscendConfig()
+            if ascend_runtime is None:
+                from .ascend_runtime import AscendRuntime
+
+                ascend_runtime = AscendRuntime(deployment.device_id)
+                self._owns_ascend_runtime = True
+            self._ascend_runtime = ascend_runtime
+            self.device = f"ascend:{deployment.device_id}"
+            self._ascend_extractor = AscendReIDExtractor(
+                config,
+                deployment.reid_model,
+                deployment.reid_dynamic_batches,
+                ascend_runtime,
+            )
+            return
 
         if self._feature_extractor is not None:
             if not callable(self._feature_extractor):
@@ -233,6 +264,11 @@ class ReIDExtractor:
     def extract_batch(self, crops: Sequence[np.ndarray]) -> np.ndarray:
         """Extract normalized embeddings while preserving crop order."""
 
+        if self.backend == "ascend":
+            if self._ascend_extractor is None:
+                raise RuntimeError("Ascend ReID extractor is not initialized")
+            return self._ascend_extractor.extract_batch(crops)
+
         crop_list = list(crops)
         if not crop_list:
             return np.empty((0, EMBEDDING_DIM), dtype=np.float32)
@@ -258,3 +294,11 @@ class ReIDExtractor:
                 f"got {raw_features.shape[1]}"
             )
         return normalize_embedding(raw_features)
+
+    def close(self) -> None:
+        """Close an Ascend runtime created by this extractor, if any."""
+
+        if self._owns_ascend_runtime and self._ascend_runtime is not None:
+            self._ascend_runtime.close()
+            self._ascend_runtime = None
+            self._owns_ascend_runtime = False

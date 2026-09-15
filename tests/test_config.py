@@ -16,6 +16,17 @@ class ConfigTests(unittest.TestCase):
         config = load_config(Path("config/config.yaml"))
         self.assertEqual(config.runtime.num_workers, 0)
         self.assertEqual(config.video.source, 0)
+        self.assertEqual(config.inference.backend, "torch")
+        self.assertEqual(config.ascend.device_id, 0)
+        self.assertEqual(
+            config.ascend.yolo_model,
+            Path("weights/atlas/yolov8n.om").resolve(),
+        )
+        self.assertEqual(
+            config.ascend.reid_model,
+            Path("weights/atlas/osnet_x0_25.om").resolve(),
+        )
+        self.assertEqual(config.ascend.reid_dynamic_batches, (1, 2, 4, 8))
         self.assertEqual(
             config.tracking.tracker,
             str(Path("config/trackers/botsort_baseline.yaml").resolve()),
@@ -59,6 +70,23 @@ class ConfigTests(unittest.TestCase):
 
     def test_auto_device_is_supported(self) -> None:
         self.assertIn(resolve_device("auto"), {"cpu", "cuda"})
+
+    def test_atlas_config_selects_ascend_without_changing_business_paths(self) -> None:
+        config = load_config(Path("config/config_atlas.yaml"))
+
+        self.assertEqual(config.inference.backend, "ascend")
+        self.assertEqual(config.model.device, "cpu")
+        self.assertEqual(
+            config.ascend.yolo_model,
+            Path("weights/atlas/yolov8n.om").resolve(),
+        )
+        self.assertEqual(
+            config.ascend.reid_model,
+            Path("weights/atlas/osnet_x0_25.om").resolve(),
+        )
+        self.assertEqual(config.ascend.reid_dynamic_batches, (1, 2, 4, 8))
+        self.assertEqual(config.reid_recovery.recovery_threshold, 0.75)
+        self.assertEqual(config.gallery_recognition.recognition_threshold, 0.80)
 
 
 if __name__ == "__main__":

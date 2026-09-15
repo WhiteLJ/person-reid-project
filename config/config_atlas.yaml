@@ -1,21 +1,23 @@
+# Atlas 310B deployment variant.
+# Keep config/config.yaml for the PC/Torch backend.
 video:
   source: 0
 
 model:
+  # The current repository weight is yolov8n.pt. If the configured PC model
+  # changes, export the corresponding ONNX and update ascend.yolo_model.
   yolo_weight: "weights/yolo/yolov8n.pt"
-  device: "auto"
+  device: "cpu"
   person_class_id: 0
   conf_threshold: 0.35
   iou_threshold: 0.50
   image_size: 640
 
 inference:
-  # PC keeps the existing Ultralytics/Torchreid path. Atlas uses OM + pyACL.
-  backend: "torch"
+  backend: "ascend"
 
 ascend:
   device_id: 0
-  # These are project-relative OM paths; conversion output may be overridden here.
   yolo_model: "weights/atlas/yolov8n.om"
   reid_model: "weights/atlas/osnet_x0_25.om"
   reid_dynamic_batches: [1, 2, 4, 8]
@@ -25,7 +27,6 @@ runtime:
   log_level: "INFO"
 
 tracking:
-  # Project-owned baseline; change this path for a controlled crowd A/B run.
   tracker: "config/trackers/botsort_baseline.yaml"
   persist: true
   show_track_id: true
@@ -35,6 +36,7 @@ selection:
 
 reid:
   model_name: "osnet_x0_25"
+  # Not loaded by the Ascend backend; retained for config schema parity.
   weight: "weights/reid/osnet_x0_25_msmt17.pth"
   image_height: 256
   image_width: 128
@@ -42,7 +44,6 @@ reid:
   min_crop_height: 100
 
 reid_recovery:
-  # Conservative, configurable engineering starting values; not universal optima.
   lost_grace_frames: 5
   reference_update_interval_frames: 15
   recovery_interval_frames: 5
@@ -55,17 +56,14 @@ reid_recovery:
   recovery_pending_max_age_frames: 60
 
 gallery_enrichment:
-  # Conservative engineering starting value; not a universal optimum.
   post_recovery_stable_frames: 30
 
 reid_quality:
-  # Crowded-scene engineering starting values; not universal optima.
   min_track_confidence: 0.35
   max_edge_truncation_ratio: 0.30
   max_person_overlap_ratio: 0.60
 
 gallery_recognition:
-  # Conservative, configurable engineering starting values; not universal optima.
   enabled: true
   recognition_interval_frames: 10
   min_track_age_frames: 5
@@ -77,7 +75,7 @@ database:
   path: "database/person_reid.db"
 
 ui:
-  window_name: "Person Tracking - MVP-8.2"
+  window_name: "Person Tracking - Atlas 310B"
   wait_key_ms: 1
   show_class_name: true
   show_confidence: true

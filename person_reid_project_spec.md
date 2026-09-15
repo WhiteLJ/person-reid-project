@@ -1693,6 +1693,45 @@ embedding 数量逐步增加且不超过 runtime 最大值；关闭遮挡、LOST
 或低质量期间不增加；重启后自动识别 P001 仍不会自动更新其持久化特征，除非本次
 运行用户再次明确 G。
 
+### Atlas 310B 部署适配（横切部署变体）
+
+Atlas 适配不是新的业务 MVP，也不改变 MVP-8.2 的身份、Recovery、Gallery、SQLite
+或 OpenCV UI 规则。项目保留双 inference backend：PC 默认使用
+`inference.backend: torch`；Atlas 使用 `inference.backend: ascend`。Atlas 只替换
+YOLO 与 OSNet 的神经网络推理后端：
+
+```text
+视频帧 -> YOLO OM / pyACL -> CPU BoT-SORT -> Track[] -> 既有业务逻辑
+Track crop -> OSNet OM / pyACL -> normalized 512-D embedding
+```
+
+Atlas 路径禁止 `torch_npu`、`YOLO.predict()`、`YOLO.track()`、Torchreid forward
+和 CUDA tensor。Ultralytics 8.4.138 仅作为 CPU BoT-SORT 实现使用，BoT-SORT
+appearance ReID 默认关闭。`TrackingPipeline.process(frame)` 与
+`ReIDExtractor.extract/extract_batch` 的上层接口保持不变；业务层不感知 Torch
+还是 Ascend 后端。
+
+PC 导出脚本固定 ONNX opset 11。YOLO 使用当前配置的模型权重、静态
+`1x3x640x640`、batch=1、`dynamic=false`、`simplify=false`、`nms=false`，输入名为
+`images`，输出保留 raw detection。OSNet 使用官方 MSMT17 checkpoint 的 feature
+输出而非 classifier logits，输入为 `Nx3x256x128`，输出为 `Nx512`，输入/输出名为
+`images`/`embedding`。导出后必须检查 opset、输入名、维度和输出结构；CANN 6.2.RC2
+转换脚本默认 `SOC_VERSION=Ascend310B4`，但允许通过环境变量覆盖，不在代码中永久
+写死 SoC。
+
+`src/ascend_runtime.py` 统一管理 `acl.init`、device/context、OM load/execute 和
+逆序释放；YOLO 与 OSNet 共享一个运行时，模型只加载一次。OSNet 使用配置的动态
+batch `[1,2,4,8]`，超出时按真实 crop 分块，不补假样本。YOLO preprocessing、
+letterbox 坐标映射、raw output decode、person filter 和 CPU NMS 由 Ascend 适配层
+完成。现有 `ReIDFrameCache` 仍只允许同一帧复用 embedding，不跨帧复用。
+
+部署文件位于 `deploy/atlas/`，完整命令、Atlas 依赖、smoke test 和 benchmark 见
+`deploy/atlas/README.md`。默认 Atlas 配置为 `config/config_atlas.yaml`，模型路径
+使用项目相对路径 `weights/atlas/*.om`。Atlas 硬件上的 `import acl`、OM 执行、
+`npu-smi info` 和 AICore 非零使用率必须单独验收；PC 单元测试不得声称完成这些
+硬件验证。SQLite schema、TargetGallery、SessionTarget、Recovery、Gallery
+recognition、Gallery enrichment 和 UI 行为均保持不变。
+
 ### MVP-9：真实 RTSP
 
 验收：本地测试视频/摄像头之外，稳定切换到真实 RTSP 实时流。
