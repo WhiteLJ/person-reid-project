@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import unittest
-import logging
-import json
 from pathlib import Path
 
 import numpy as np
@@ -141,56 +139,6 @@ class GalleryRecognitionTests(unittest.TestCase):
 
         self.assertEqual(coordinator.process_frame(self.frame, [_track(1)], 0), [])
         self.assertEqual(extractor.batch_calls, 0)
-
-    def test_debug_ranking_is_observational(self) -> None:
-        extractor = _FakeReIDExtractor([_unit((1, 0))])
-        manager = TargetManager()
-        coordinator = _coordinator(
-            manager,
-            _gallery(_person(1, (1, 0)), _person(2, (0, 1))),
-            extractor,
-        )
-        logger = logging.getLogger("src.gallery_recognition")
-        previous_level = logger.level
-        logger.setLevel(logging.DEBUG)
-        try:
-            with self.assertLogs(logger, level=logging.DEBUG):
-                matches = coordinator.process_frame(self.frame, [_track(1)], 0)
-        finally:
-            logger.setLevel(previous_level)
-
-        self.assertEqual(
-            [(match.person_id, match.candidate.track.track_id) for match in matches],
-            [(1, 1)],
-        )
-
-    def test_optional_candidate_crop_dump_writes_frame_track_metadata(self) -> None:
-        output_dir = Path(".test_tmp") / "gallery_candidate_crops"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        for path in output_dir.glob("*"):
-            path.unlink()
-        extractor = _FakeReIDExtractor([_unit((1, 0))])
-        coordinator = GalleryRecognitionCoordinator(
-            TargetManager(),
-            _gallery(_person(1, (1, 0))),
-            extractor,  # type: ignore[arg-type]
-            _reid_config(),
-            _recognition_config(),
-            _recovery_config(),
-            embedding_cache=ReIDFrameCache(),
-            save_candidate_crops=True,
-            candidate_crop_dir=output_dir,
-        )
-
-        coordinator.process_frame(self.frame, [_track(17)], 23)
-
-        metadata_path = output_dir / "frame_00000023_track_000017.json"
-        image_path = output_dir / "frame_00000023_track_000017.jpg"
-        self.assertTrue(metadata_path.is_file())
-        self.assertTrue(image_path.is_file())
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        self.assertEqual(metadata["frame_index"], 23)
-        self.assertEqual(metadata["track_id"], 17)
 
     def test_interval_and_track_age_are_enforced(self) -> None:
         extractor = _FakeReIDExtractor([_unit((1, 0)), _unit((1, 0))])

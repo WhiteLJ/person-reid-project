@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from time import perf_counter
 from typing import Any, Sequence
 
 import cv2
@@ -237,22 +236,10 @@ class AscendPersonDetector:
             model if model is not None else runtime.load_model(self.model_path)
         )
         self.inference_count = 0
-        self.last_timing: dict[str, float] = {
-            "preprocess": 0.0,
-            "h2d": 0.0,
-            "npu": 0.0,
-            "d2h": 0.0,
-            "decode": 0.0,
-        }
 
     def detect(self, frame: np.ndarray) -> list[Detection]:
-        preprocess_started = perf_counter()
         tensor, transform = letterbox_bgr(frame, self.image_size)
-        self.last_timing["preprocess"] = perf_counter() - preprocess_started
-        outputs = self.runtime.execute(self.model, [tensor], copy_outputs=False)
-        runtime_timing = getattr(self.runtime, "last_execute_timing", {})
-        for name in ("h2d", "npu", "d2h"):
-            self.last_timing[name] = float(runtime_timing.get(name, 0.0))
+        outputs = self.runtime.execute(self.model, [tensor])
         self.inference_count += 1
         if not outputs:
             raise ValueError("YOLO OM returned no outputs")
@@ -263,8 +250,7 @@ class AscendPersonDetector:
             if shape is not None and all(value > 0 for value in shape):
                 if int(np.prod(shape)) == np.asarray(output).size:
                     output = np.asarray(output).reshape(shape)
-        decode_started = perf_counter()
-        detections = decode_yolo_output(
+        return decode_yolo_output(
             output,
             transform,
             frame.shape,
@@ -272,5 +258,3 @@ class AscendPersonDetector:
             iou_threshold=self.iou_threshold,
             person_class_id=self.person_class_id,
         )
-        self.last_timing["decode"] = perf_counter() - decode_started
-        return detections

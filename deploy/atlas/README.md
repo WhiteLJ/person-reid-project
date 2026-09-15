@@ -108,7 +108,6 @@ The board needs:
 - Python 3.10 on aarch64;
 - CANN 6.2.RC2 runtime and pyACL (`import acl` must work after `set_env.sh`);
 - NumPy, OpenCV, and PyYAML;
-- Pillow (used to reproduce Torchreid's PIL preprocessing);
 - Ultralytics 8.4.138 and a CPU-compatible PyTorch installation if required by
   the installed Ultralytics BoT-SORT Python imports.
 
@@ -184,146 +183,25 @@ The smoke test must be run on Atlas to validate ACL initialization, OM loading,
 dynamic batch selection, and device execution. This PC development environment
 does not contain the board's `acl` module, so no hardware result is claimed here.
 
-## 6. Latency/jitter benchmark
+## 6. Benchmark
 
-Run the same fixed regression video and interval for every comparison:
+Run a fixed regression video and compare the same interval/profile across runs:
 
 ```bash
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 python -m tools.atlas_benchmark \
   --config config/config_atlas.yaml \
   --source data/crowd_regression.mp4 \
-  --frames 300 \
-  --frame-log reports/atlas_benchmark.jsonl
+  --frames 300
 ```
 
-The output reports `average`, `p50`, `p95`, `p99`, and `max` milliseconds for:
+The output reports average milliseconds for `YOLO NPU`, `BoT-SORT CPU`,
+`OSNet NPU`, `Recovery`, `Gallery`, `Total`, and total FPS. Use `npu-smi info`
+while the benchmark is running and expect AICore utilization to become
+non-zero during OM inference. A continuously zero reading requires checking
+the CANN environment, OM compatibility, and the selected device; it is not a
+successful NPU validation.
 
-```text
-video_read, yolo_preprocess, yolo_h2d, yolo_npu, yolo_d2h,
-yolo_decode_nms, botsort, osnet_preprocess, osnet_npu,
-recovery, gallery_recognition, render, imshow_waitKey, total
-```
-
-The JSONL file records each frame's Gallery candidate count, OSNet invocation
-count, actual dynamic batch sizes, and stage timings. A periodic spike such as
-40 candidates -> `8+8+8+8+8` is therefore visible instead of being hidden in an
-average. `osnet_preprocess` and `osnet_npu` are recorded per actual extractor
-call; `total` remains per video frame.
-
-Use `--display` only when measuring GUI overhead. The optional
-`--reid-samples-per-frame N` adds an explicit diagnostic OSNet workload and does
-not change production scheduling.
-
-The runtime reuses device buffers, datasets, data buffers, and host output
-storage. Repeated execution should not call `acl.rt.malloc`,
-`acl.mdl.create_dataset`, or their matching free/destroy functions. OSNet
-workspaces are keyed by real batch size. To test batch 16, first regenerate the
-OSNet OM with dynamic batches including 16, then set the YAML value to
-`[1, 2, 4, 8, 16]`; do not merely change YAML for an OM that does not support it.
-
-Run `npu-smi info` while the benchmark is running and expect AICore utilization
-to become non-zero during OM inference. A continuously zero reading requires
-checking CANN, OM compatibility, and device selection; it is not a successful
-NPU validation.
-
-## 7. Controlled BoT-SORT A/B
-
-Keep the video, target, frame interval, and Gallery database fixed. Run a fresh
-process for each row and change one variable at a time:
-
-```text
-baseline profile:     config/trackers/botsort_baseline.yaml
-fixed-camera profile: config/trackers/botsort_crowd_fixed.yaml
-```
-
-The fixed-camera profile uses `gmc_method: none`, a supported value in the
-installed Ultralytics 8.4.138 GMC implementation. Use it only for a fixed
-camera. Compare tracker latency/FPS and manually annotated Track
-fragmentation/identity errors. Separately test `conf_threshold` 0.35, 0.20,
-0.15; `track_buffer` 30, 60, 90; and `image_size` 640, 960. Do not combine
-these into an uncontrolled grid or call any value universally optimal.
-
-The `with_reid: true, model: auto` profile is retained as an experiment, but
-the Atlas adapter deliberately rejects it so it cannot start an extra PyTorch
-appearance model on the board. If evaluated on the Torch/PC path, record it
-separately; it is not part of the formal Atlas neural-inference path.
-
-## 8. Torch -> ONNX -> OM ReID parity
-
-On the PC, use exactly the same crops for Torchreid and ONNX Runtime:
-
-```bash
-python -m tools.reid_backend_parity export \
-  --config config/config.yaml \
-  --onnx deploy/atlas/onnx/osnet_x0_25.onnx \
-  --torch-device cpu \
-  --output deploy/atlas/parity/reid_parity_reference.npz \
-  data/reid_crops/A1.jpg data/reid_crops/A2.jpg data/reid_crops/B1.jpg
-```
-
-The tool stores crops and both normalized embeddings in a non-pickle NPZ. It
-prints per-sample Torch/ONNX cosine and max absolute difference plus both
-pairwise similarity matrices. The ONNX input uses the production Atlas
-preprocessing helper; the Torch side uses the official Torchreid transform.
-
-Copy the NPZ to Atlas and run:
-
-```bash
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-python -m tools.reid_backend_parity check-om \
-  --config config/config_atlas.yaml \
-  --reference deploy/atlas/parity/reid_parity_reference.npz
-```
-
-This prints Torch-vs-OM, ONNX-vs-OM, and pairwise-matrix differences. Optional
-`--warn-cosine-below` and `--warn-max-abs-diff-above` are diagnostic bounds
-only; no universal correctness threshold is assumed. A same-crop cosine
-materially below 1 or changed same-person/different-person ordering is evidence
-to inspect preprocessing, ONNX export, ATC/SOC compatibility, or output
-decoding before changing recognition thresholds.
-
-## 9. Gallery feature diagnosis
-
-Inspect the persisted Gallery without changing it:
-
-```bash
-python -m tools.gallery_reid_diagnose --config config/config_atlas.yaml
-```
-
-It reports each person's reference count, centroid norm, pairwise reference
-cosines, near-duplicate pair count, and reference-to-centroid statistics. The
-enrichment-only diversity starting value is
-`gallery_enrichment.reference_duplicate_threshold: 0.98`; it does not alter
-SessionTarget Recovery or recognition scoring. Production recognition remains
-candidate-vs-centroid, not max historical-reference score.
-
-For explicit candidate-crop diagnosis:
-
-```bash
-python -m tools.gallery_reid_diagnose \
-  --config config/config_atlas.yaml \
-  --candidate-crop debug/candidate_001.jpg debug/candidate_002.jpg \
-  --track-ids 17 18
-```
-
-With debug logging enabled, the application reports top-1/top-2 person scores
-and margins. Combine this with bbox/crop inspection; a Track ID change alone is
-not ground truth for a true or false recovery.
-
-## 10. Interpreting Gallery regression cases
-
-Compare both using the same fixed video interval:
-
-1. Existing Torch-created SQLite Gallery -> Atlas OM recognition.
-2. Empty test Gallery -> Atlas S/G enrollment -> restart -> Atlas OM recognition.
-
-If case 1 fails but case 2 works, first investigate Torch/ONNX/OM feature-space
-parity and the old feature bank. If both fail, investigate candidate crops,
-feature diversity, and conservative matching. If parity is high but both cases
-fail, do not blame OM conversion without evidence; inspect ranking, quality
-gates, and Gallery contents.
-
-No command in this document claims that the Atlas board has been tested by the
-PC test suite. Hardware smoke, benchmark, and `npu-smi` results must be captured
-on the actual board.
+The benchmark's optional `--reid-samples-per-frame` measures an explicit timing
+workload. It does not change the production policy of avoiding OSNet on every
+Track on every frame.

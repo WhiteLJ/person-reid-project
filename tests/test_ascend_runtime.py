@@ -214,51 +214,6 @@ class AscendRuntimeTests(unittest.TestCase):
         self.assertEqual(acl.rt.calls.count("reset_device"), 1)
         self.assertEqual(acl.mdl.calls.count("set_dynamic_batch_size"), 1)
 
-    def test_fixed_model_workspace_is_reused_across_execute_calls(self) -> None:
-        model_path = Path(".test_tmp") / "fake_runtime_fixed_workspace.om"
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-        model_path.write_bytes(b"OM")
-        acl = _FakeAcl()
-
-        runtime = AscendRuntime(0, acl_module=acl)
-        model = runtime.load_model(model_path)
-        create_dataset_after_load = acl.mdl.calls.count("create_dataset")
-        malloc_after_load = acl.rt.calls.count("malloc")
-
-        inputs = [
-            np.ones((1,), dtype=np.float32),
-            np.ones((1,), dtype=np.float32),
-        ]
-        runtime.execute(model, inputs)
-        runtime.execute(model, inputs)
-
-        self.assertEqual(acl.mdl.calls.count("create_dataset"), create_dataset_after_load)
-        self.assertEqual(acl.rt.calls.count("malloc"), malloc_after_load)
-        runtime.close()
-        self.assertEqual(acl.mdl.calls.count("destroy_dataset"), 2)
-        self.assertEqual(acl.rt.calls.count("free"), malloc_after_load)
-
-    def test_dynamic_batch_workspaces_are_reused_per_batch_size(self) -> None:
-        model_path = Path(".test_tmp") / "fake_runtime_dynamic_workspace.om"
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-        model_path.write_bytes(b"OM")
-        acl = _FakeAcl()
-
-        runtime = AscendRuntime(0, acl_module=acl)
-        model = runtime.load_model(model_path, dynamic_batch_sizes=(1, 2))
-        input_value = np.ones((1,), dtype=np.float32)
-        runtime.execute(model, [input_value], dynamic_batch=1)
-        runtime.execute(model, [input_value], dynamic_batch=1)
-        runtime.execute(model, [input_value], dynamic_batch=2)
-
-        # Two workspaces, each with input and output datasets; no third
-        # workspace is created by the repeated batch=1 call.
-        self.assertEqual(acl.mdl.calls.count("create_dataset"), 4)
-        self.assertEqual(acl.rt.calls.count("malloc"), 6)
-        runtime.close()
-        self.assertEqual(acl.mdl.calls.count("destroy_dataset"), 4)
-        self.assertEqual(acl.rt.calls.count("free"), 6)
-
     def test_acl_execute_error_is_raised_and_runtime_can_be_closed(self) -> None:
         model_path = Path(".test_tmp") / "fake_runtime_error.om"
         model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -279,13 +234,6 @@ class AscendRuntimeTests(unittest.TestCase):
 
         self.assertIn("107", str(context.exception))
         runtime.close()
-        buffer_count_after_close = acl.destroy_buffer_calls
-        free_count_after_close = acl.rt.calls.count("free")
-        runtime.close()
-        self.assertEqual(acl.destroy_buffer_calls, buffer_count_after_close)
-        self.assertEqual(acl.rt.calls.count("free"), free_count_after_close)
-        self.assertEqual(acl.destroy_buffer_calls, 3)
-        self.assertEqual(free_count_after_close, 3)
 
     def test_failed_model_load_preserves_primary_error_without_invalid_unload(self) -> None:
         model_path = Path(".test_tmp") / "fake_runtime_load_error.om"

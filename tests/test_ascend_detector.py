@@ -23,7 +23,7 @@ class _FakeRuntime:
         self.output = output
         self.inputs: list[np.ndarray] = []
 
-    def execute(self, _model, inputs, **_kwargs):
+    def execute(self, _model, inputs):
         self.inputs.extend(inputs)
         return (self.output.reshape(-1).copy(),)
 

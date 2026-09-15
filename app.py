@@ -144,8 +144,6 @@ def run(config: AppConfig) -> int:
         person_class_id=config.model.person_class_id,
         embedding_cache=embedding_cache,
         quality_config=config.reid_quality,
-        save_candidate_crops=config.diagnostics.save_gallery_candidate_crops,
-        candidate_crop_dir=config.diagnostics.gallery_candidate_crop_dir,
     )
     diagnostics = RuntimeDiagnostics(
         enabled=config.diagnostics.enabled,
@@ -269,9 +267,6 @@ def run(config: AppConfig) -> int:
                 current_frame_index,
                 protected_track_ids=target_recovery.last_recovered_track_ids,
             )
-            # Atlas timing/batch telemetry is optional and must be consumed
-            # once per frame so a long-running app cannot retain old events.
-            reid_extractor.drain_inference_diagnostics()
             diagnostics.record_frame(
                 perf_counter() - frame_started,
                 current_frame_index,

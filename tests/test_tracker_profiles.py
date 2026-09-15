@@ -27,11 +27,6 @@ class TrackerProfileTests(unittest.TestCase):
         self.assertTrue(profile["with_reid"])
         self.assertEqual(profile["model"], "auto")
 
-    def test_fixed_camera_profile_disables_gmc_with_supported_none_value(self) -> None:
-        profile = self._load("botsort_crowd_fixed.yaml")
-        self.assertEqual(profile["gmc_method"], "none")
-        self.assertFalse(profile["with_reid"])
-
 
 if __name__ == "__main__":
     unittest.main()

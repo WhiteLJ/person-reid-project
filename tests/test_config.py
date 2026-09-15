@@ -51,10 +51,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.reid_recovery.recovery_confirmation_hits, 2)
         self.assertEqual(config.reid_recovery.recovery_pending_max_age_frames, 60)
         self.assertEqual(config.gallery_enrichment.post_recovery_stable_frames, 30)
-        self.assertAlmostEqual(
-            config.gallery_enrichment.reference_duplicate_threshold,
-            0.98,
-        )
         self.assertAlmostEqual(config.reid_quality.min_track_confidence, 0.35)
         self.assertAlmostEqual(config.reid_quality.max_edge_truncation_ratio, 0.30)
         self.assertAlmostEqual(config.reid_quality.max_person_overlap_ratio, 0.60)
@@ -71,11 +67,6 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(config.ui.show_unselected_tracks)
         self.assertTrue(config.diagnostics.enabled)
         self.assertEqual(config.diagnostics.log_interval_frames, 300)
-        self.assertFalse(config.diagnostics.save_gallery_candidate_crops)
-        self.assertEqual(
-            config.diagnostics.gallery_candidate_crop_dir,
-            Path("debug/gallery_candidates").resolve(),
-        )
 
     def test_auto_device_is_supported(self) -> None:
         self.assertIn(resolve_device("auto"), {"cpu", "cuda"})
@@ -96,11 +87,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.ascend.reid_dynamic_batches, (1, 2, 4, 8))
         self.assertEqual(config.reid_recovery.recovery_threshold, 0.75)
         self.assertEqual(config.gallery_recognition.recognition_threshold, 0.80)
-        self.assertEqual(
-            config.gallery_enrichment.reference_duplicate_threshold,
-            0.98,
-        )
-        self.assertFalse(config.diagnostics.save_gallery_candidate_crops)
 
 
 if __name__ == "__main__":

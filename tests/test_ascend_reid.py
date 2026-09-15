@@ -3,7 +3,6 @@ from __future__ import annotations
 import unittest
 
 import numpy as np
-from PIL import Image
 
 from src.ascend_reid import AscendReIDExtractor, dynamic_batch_chunks, preprocess_reid_crop
 from src.config import ReIDConfig
@@ -23,7 +22,7 @@ class _FakeRuntime:
         self.dynamic_batch_sizes = tuple(dynamic_batch_sizes)
         return _FakeModel()
 
-    def execute(self, _model, inputs, *, dynamic_batch, **_kwargs):
+    def execute(self, _model, inputs, *, dynamic_batch):
         batch = inputs[0]
         self.execute_batches.append(dynamic_batch)
         # Encode the first input pixel into an otherwise deterministic vector
@@ -54,27 +53,6 @@ class AscendReIDTests(unittest.TestCase):
         self.assertEqual(tensor.dtype, np.float32)
         self.assertTrue(np.isclose(tensor[0, 0, 0], (0.0 - 0.485) / 0.229, atol=1e-5))
         self.assertTrue(np.isclose(tensor[2, 0, 0], (1.0 - 0.406) / 0.225, atol=1e-5))
-
-    def test_preprocess_matches_torchreid_pil_resize_path(self) -> None:
-        crop = np.zeros((7, 11, 3), dtype=np.uint8)
-        crop[:, :, 0] = np.arange(11, dtype=np.uint8)[None, :]
-        crop[:, :, 1] = 73
-        crop[:, :, 2] = 211
-
-        actual = preprocess_reid_crop(crop)
-        resampling = getattr(Image, "Resampling", Image)
-        rgb = np.ascontiguousarray(crop[:, :, ::-1])
-        resized = Image.fromarray(rgb, mode="RGB").resize(
-            (128, 256),
-            resample=resampling.BILINEAR,
-        )
-        expected = np.asarray(resized, dtype=np.float32) / 255.0
-        expected = (expected - np.asarray((0.485, 0.456, 0.406), dtype=np.float32)) / np.asarray(
-            (0.229, 0.224, 0.225), dtype=np.float32
-        )
-        expected = np.ascontiguousarray(expected.transpose(2, 0, 1), dtype=np.float32)
-
-        self.assertTrue(np.allclose(actual, expected, atol=1e-6))
 
     def test_dynamic_batch_chunks_do_not_use_fake_samples(self) -> None:
         self.assertEqual(dynamic_batch_chunks(13), (8, 4, 1))
