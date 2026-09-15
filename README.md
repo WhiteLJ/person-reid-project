@@ -29,8 +29,9 @@ The MVP-8.1 foundation supports:
 - explicit Gallery enrollment with SQLite persistence;
 - automatic, conservative recognition of loaded Gallery people using normalized
   512-D Torchreid/OSNet embeddings;
-- centroid similarity, threshold/margin checks, one-to-one matching, and repeated
-  confirmation before automatic binding.
+- a small in-memory multi-frame probe bank for each stable candidate Track;
+- centroid similarity plus top-k mean reference support, threshold/margin checks,
+  one-to-one matching, and repeated confirmation before automatic binding.
 
 Crowded-scene safeguards add:
 
@@ -137,6 +138,9 @@ gallery_recognition:
   recognition_threshold: 0.80
   recognition_margin: 0.05
   confirmation_hits: 2
+  probe_embeddings: 3
+  reference_support_threshold: 0.75
+  reference_support_top_k: 3
 
 database:
   path: "database/person_reid.db"

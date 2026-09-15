@@ -79,13 +79,18 @@ class TargetManager:
         centroid: np.ndarray,
         frame_index: int,
         max_reference_embeddings: int,
+        *,
+        include_candidate: bool = True,
     ) -> SessionTarget:
         """Create a target from copied Gallery references and a live crop.
 
         This method knows nothing about Gallery or persistence.  It is the
         generic bridge used when an existing in-memory identity is recognized:
         all incoming arrays are normalized and copied, and the bounded runtime
-        bank is independent from the Gallery arrays.
+        bank is independent from the Gallery arrays.  Automatic Gallery
+        recognition can set ``include_candidate=False`` so its initial runtime
+        references contain only trusted Gallery features.  Later observations
+        then enter through the normal ACTIVE reference-update policy.
         """
 
         if max_reference_embeddings < 1:
@@ -94,7 +99,6 @@ class TargetManager:
         if existing is not None:
             return existing
 
-        candidate = _normalize_single_embedding(candidate_embedding)
         normalized_centroid = _normalize_single_embedding(centroid)
         references: list[np.ndarray] = []
         for index, reference in enumerate(reference_embeddings):
@@ -109,13 +113,18 @@ class TargetManager:
             references.append(normalized.copy())
         if not references:
             raise ValueError("reference_embeddings cannot be empty")
-        if candidate.shape != normalized_centroid.shape:
-            raise ValueError("candidate and centroid dimensions must match")
+        candidate: np.ndarray | None = None
+        if include_candidate:
+            candidate = _normalize_single_embedding(candidate_embedding)
+            if candidate.shape != normalized_centroid.shape:
+                raise ValueError("candidate and centroid dimensions must match")
 
-        # Keep the persisted references plus this current observation.  When
-        # the bank is full, retain the newest bounded suffix.  The centroid is
-        # recomputed from the copied runtime bank, never aliased to Gallery.
-        references.append(candidate.copy())
+        # Keep the persisted references and optionally this current
+        # observation. When the bank is full, retain the newest bounded suffix.
+        # The centroid is recomputed from the copied runtime bank, never
+        # aliased to Gallery.
+        if candidate is not None:
+            references.append(candidate.copy())
         if len(references) > max_reference_embeddings:
             references = references[-max_reference_embeddings:]
         runtime_centroid = _centroid(references)

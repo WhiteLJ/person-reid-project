@@ -123,6 +123,11 @@ class GalleryRecognitionConfig:
     recognition_threshold: float
     recognition_margin: float
     confirmation_hits: int
+    # Conservative engineering starting values for multi-observation Gallery
+    # recognition; they are not universal operating points.
+    probe_embeddings: int = 3
+    reference_support_threshold: float = 0.75
+    reference_support_top_k: int = 3
 
 
 @dataclass(frozen=True)
@@ -393,6 +398,13 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         gallery_recognition.get("recognition_margin", 0.05)
     )
     confirmation_hits = int(gallery_recognition.get("confirmation_hits", 2))
+    probe_embeddings = int(gallery_recognition.get("probe_embeddings", 3))
+    reference_support_threshold = float(
+        gallery_recognition.get("reference_support_threshold", 0.75)
+    )
+    reference_support_top_k = int(
+        gallery_recognition.get("reference_support_top_k", 3)
+    )
     if recognition_interval_frames < 1:
         raise ValueError(
             "gallery_recognition.recognition_interval_frames must be positive"
@@ -411,6 +423,17 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         )
     if confirmation_hits < 1:
         raise ValueError("gallery_recognition.confirmation_hits must be positive")
+    if probe_embeddings < 1:
+        raise ValueError("gallery_recognition.probe_embeddings must be positive")
+    if not 0.0 < reference_support_threshold <= 1.0:
+        raise ValueError(
+            "gallery_recognition.reference_support_threshold must be greater "
+            "than 0 and at most 1"
+        )
+    if reference_support_top_k < 1:
+        raise ValueError(
+            "gallery_recognition.reference_support_top_k must be positive"
+        )
 
     database_value = database.get("path", "database/person_reid.db")
     database_path = Path(database_value)
@@ -489,6 +512,9 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             recognition_threshold=recognition_threshold,
             recognition_margin=recognition_margin,
             confirmation_hits=confirmation_hits,
+            probe_embeddings=probe_embeddings,
+            reference_support_threshold=reference_support_threshold,
+            reference_support_top_k=reference_support_top_k,
         ),
         database=DatabaseConfig(path=database_path),
         ui=UIConfig(

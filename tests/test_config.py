@@ -60,6 +60,12 @@ class ConfigTests(unittest.TestCase):
         self.assertAlmostEqual(config.gallery_recognition.recognition_threshold, 0.80)
         self.assertAlmostEqual(config.gallery_recognition.recognition_margin, 0.05)
         self.assertEqual(config.gallery_recognition.confirmation_hits, 2)
+        self.assertEqual(config.gallery_recognition.probe_embeddings, 3)
+        self.assertAlmostEqual(
+            config.gallery_recognition.reference_support_threshold,
+            0.75,
+        )
+        self.assertEqual(config.gallery_recognition.reference_support_top_k, 3)
         self.assertEqual(
             config.database.path,
             Path("database/person_reid.db").resolve(),
@@ -87,6 +93,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.ascend.reid_dynamic_batches, (1, 2, 4, 8))
         self.assertEqual(config.reid_recovery.recovery_threshold, 0.75)
         self.assertEqual(config.gallery_recognition.recognition_threshold, 0.80)
+        self.assertEqual(config.gallery_recognition.probe_embeddings, 3)
 
 
 if __name__ == "__main__":
