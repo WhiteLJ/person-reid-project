@@ -5,8 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from logging import getLogger
 
+import numpy as np
+
 from .database import GalleryRepository, RepositoryError
 from .config import GalleryEnrichmentConfig
+from .feature_diversity import filter_diverse_references, normalized_centroid
 from .gallery import GalleryPerson, TargetGallery
 from .models import SessionTarget, TargetState
 from .target_recovery import ReferenceUpdateEvent
@@ -141,10 +144,16 @@ class GalleryPersistenceService:
             return False
 
         try:
+            diverse_references = filter_diverse_references(
+                event.reference_embeddings,
+                duplicate_threshold=(
+                    self.enrichment_config.reference_duplicate_threshold
+                ),
+            )
             snapshot = self.gallery.feature_snapshot(
                 person.person_id,
-                event.reference_embeddings,
-                event.centroid,
+                diverse_references,
+                normalized_centroid(diverse_references),
             )
         except (KeyError, TypeError, ValueError) as exc:
             LOGGER.error(
@@ -152,6 +161,24 @@ class GalleryPersistenceService:
                 target_id,
                 person.person_id,
                 exc,
+            )
+            return False
+
+        if (
+            len(snapshot.reference_embeddings) == len(person.reference_embeddings)
+            and np.allclose(snapshot.centroid, person.centroid, atol=1e-6)
+            and all(
+                np.allclose(current, updated, atol=1e-6)
+                for current, updated in zip(
+                    person.reference_embeddings,
+                    snapshot.reference_embeddings,
+                )
+            )
+        ):
+            LOGGER.debug(
+                "GALLERY_ENRICHMENT_SKIPPED target=%d person=%d reason=duplicate_features",
+                target_id,
+                person.person_id,
             )
             return False
 

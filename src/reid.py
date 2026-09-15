@@ -295,6 +295,23 @@ class ReIDExtractor:
             )
         return normalize_embedding(raw_features)
 
+    def drain_inference_diagnostics(
+        self,
+    ) -> tuple[tuple[tuple[int, ...], ...], tuple[dict[str, float], ...]]:
+        """Consume Atlas timing/batch diagnostics without affecting inference.
+
+        The application drains this once per frame so optional benchmark
+        telemetry cannot accumulate in memory during a long-running session.
+        The Torch backend has no Atlas events and returns empty tuples.
+        """
+
+        if self.backend != "ascend" or self._ascend_extractor is None:
+            return (), ()
+        return (
+            self._ascend_extractor.drain_batch_events(),
+            self._ascend_extractor.drain_timing_events(),
+        )
+
     def close(self) -> None:
         """Close an Ascend runtime created by this extractor, if any."""
 

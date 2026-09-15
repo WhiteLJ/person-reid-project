@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Sequence
 
-import cv2
 import numpy as np
+from PIL import Image
 
 from .ascend_runtime import AscendModel, AscendRuntime
 from .config import ReIDConfig
@@ -32,8 +33,18 @@ def preprocess_reid_crop(
     if image_height < 1 or image_width < 1:
         raise ValueError("ReID image dimensions must be positive")
 
-    resized = cv2.resize(crop, (image_width, image_height), interpolation=cv2.INTER_LINEAR)
-    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    # Torchreid's official FeatureExtractor performs ToPILImage -> Resize with
+    # PIL bilinear interpolation -> ToTensor.  Mirror that path here instead
+    # of using cv2.resize, whose interpolation/rounding can move the OM
+    # feature space enough to complicate Torch/ONNX/OM parity diagnosis.
+    rgb_uint8 = np.ascontiguousarray(crop[:, :, ::-1])
+    pil_image = Image.fromarray(rgb_uint8, mode="RGB")
+    resampling = getattr(Image, "Resampling", Image)
+    resized = pil_image.resize(
+        (image_width, image_height),
+        resample=resampling.BILINEAR,
+    )
+    rgb = np.asarray(resized, dtype=np.float32) / 255.0
     normalized = (rgb - _IMAGENET_MEAN) / _IMAGENET_STD
     return np.ascontiguousarray(normalized.transpose(2, 0, 1), dtype=np.float32)
 
@@ -93,6 +104,27 @@ class AscendReIDExtractor:
             )
         )
         self.inference_count = 0
+        self.last_timing: dict[str, float] = {
+            "preprocess": 0.0,
+            "npu": 0.0,
+        }
+        self.last_batch_sizes: tuple[int, ...] = ()
+        self._batch_events: list[tuple[int, ...]] = []
+        self._timing_events: list[dict[str, float]] = []
+
+    def drain_batch_events(self) -> tuple[tuple[int, ...], ...]:
+        """Consume per-call real dynamic batch sizes for diagnostics."""
+
+        events = tuple(self._batch_events)
+        self._batch_events.clear()
+        return events
+
+    def drain_timing_events(self) -> tuple[dict[str, float], ...]:
+        """Consume per-call preprocessing/NPU timings for diagnostics."""
+
+        events = tuple(dict(event) for event in self._timing_events)
+        self._timing_events.clear()
+        return events
 
     def extract(self, crop: np.ndarray) -> np.ndarray:
         return self.extract_batch([crop])[0]
@@ -102,6 +134,7 @@ class AscendReIDExtractor:
         if not crop_list:
             return np.empty((0, EMBEDDING_DIM), dtype=np.float32)
 
+        preprocess_started = perf_counter()
         inputs = np.stack(
             [
                 preprocess_reid_crop(
@@ -113,17 +146,23 @@ class AscendReIDExtractor:
             ],
             axis=0,
         ).astype(np.float32, copy=False)
+        self.last_timing["preprocess"] = perf_counter() - preprocess_started
         outputs: list[np.ndarray] = []
         offset = 0
-        for chunk_size in dynamic_batch_chunks(
-            len(crop_list), self.dynamic_batch_sizes
-        ):
+        batch_sizes = dynamic_batch_chunks(len(crop_list), self.dynamic_batch_sizes)
+        self.last_batch_sizes = batch_sizes
+        self._batch_events.append(batch_sizes)
+        npu_seconds = 0.0
+        for chunk_size in batch_sizes:
             chunk = np.ascontiguousarray(inputs[offset : offset + chunk_size])
+            npu_started = perf_counter()
             raw_outputs = self.runtime.execute(
                 self.model,
                 [chunk],
                 dynamic_batch=chunk_size,
+                copy_outputs=False,
             )
+            npu_seconds += perf_counter() - npu_started
             if not raw_outputs:
                 raise ValueError("OSNet OM returned no outputs")
             output = np.asarray(raw_outputs[0], dtype=np.float32)
@@ -136,10 +175,17 @@ class AscendReIDExtractor:
             offset += chunk_size
             self.inference_count += 1
 
+        self.last_timing["npu"] = npu_seconds
+        self._timing_events.append(
+            {
+                "preprocess": self.last_timing["preprocess"],
+                "npu": self.last_timing["npu"],
+            }
+        )
+
         result = np.concatenate(outputs, axis=0)
         if result.shape != (len(crop_list), EMBEDDING_DIM):
             raise ValueError(f"OSNet output shape is invalid: {result.shape}")
         from .reid import normalize_embedding
 
         return normalize_embedding(result)
-

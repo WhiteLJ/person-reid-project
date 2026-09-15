@@ -91,6 +91,10 @@ class GalleryEnrichmentConfig:
     """Runtime policy for explicitly enrolled Gallery feature enrichment."""
 
     post_recovery_stable_frames: int = 30
+    # Engineering starting value for persistent-bank diversity filtering.
+    # This is deliberately applied only during enrichment, not to runtime
+    # SessionTarget references or Recovery matching.
+    reference_duplicate_threshold: float = 0.98
 
 
 @dataclass(frozen=True)
@@ -111,6 +115,8 @@ class DiagnosticsConfig:
 
     enabled: bool = True
     log_interval_frames: int = 300
+    save_gallery_candidate_crops: bool = False
+    gallery_candidate_crop_dir: Path = Path("debug/gallery_candidates")
 
 
 @dataclass(frozen=True)
@@ -361,6 +367,14 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         raise ValueError(
             "gallery_enrichment.post_recovery_stable_frames must be non-negative"
         )
+    reference_duplicate_threshold = float(
+        gallery_enrichment.get("reference_duplicate_threshold", 0.98)
+    )
+    if not 0.0 < reference_duplicate_threshold <= 1.0:
+        raise ValueError(
+            "gallery_enrichment.reference_duplicate_threshold must be "
+            "greater than 0 and at most 1"
+        )
 
     min_track_confidence = float(
         reid_quality.get("min_track_confidence", 0.35)
@@ -476,6 +490,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         ),
         gallery_enrichment=GalleryEnrichmentConfig(
             post_recovery_stable_frames=post_recovery_stable_frames,
+            reference_duplicate_threshold=reference_duplicate_threshold,
         ),
         reid_quality=ReIDQualityConfig(
             min_track_confidence=min_track_confidence,
@@ -502,6 +517,13 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             enabled=bool(diagnostics.get("enabled", True)),
             log_interval_frames=max(
                 1, int(diagnostics.get("log_interval_frames", 300))
+            ),
+            save_gallery_candidate_crops=bool(
+                diagnostics.get("save_gallery_candidate_crops", False)
+            ),
+            gallery_candidate_crop_dir=resolve_project_path(
+                diagnostics.get("gallery_candidate_crop_dir"),
+                "debug/gallery_candidates",
             ),
         ),
     )

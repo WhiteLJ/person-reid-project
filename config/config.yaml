@@ -57,6 +57,8 @@ reid_recovery:
 gallery_enrichment:
   # Conservative engineering starting value; not a universal optimum.
   post_recovery_stable_frames: 30
+  # Persistent Gallery enrichment only; runtime Recovery bank is unchanged.
+  reference_duplicate_threshold: 0.98
 
 reid_quality:
   # Crowded-scene engineering starting values; not universal optima.
@@ -86,3 +88,6 @@ ui:
 diagnostics:
   enabled: true
   log_interval_frames: 300
+  # Off by default; diagnostic crops are written only when explicitly enabled.
+  save_gallery_candidate_crops: false
+  gallery_candidate_crop_dir: "debug/gallery_candidates"

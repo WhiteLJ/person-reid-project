@@ -125,6 +125,21 @@ variant. Atlas-specific ONNX/OM tools are deployment tooling, not additional
 runtime business dependencies; `requirements.txt` remains the formal PC
 dependency entry point.
 
+Atlas hardening keeps one reusable pyACL workspace per loaded fixed-shape model
+and one lazy reusable workspace per configured OSNet dynamic batch size. It does
+not add threads or change recognition/recovery thresholds. The default Atlas
+batch set remains `[1, 2, 4, 8]`; add `16` only after confirming the generated OM
+and board memory support it. Requests larger than the largest configured batch
+are split into real crops, never padded with fake candidates.
+
+For detailed latency and feature-space checks, see
+[`deploy/atlas/README.md`](deploy/atlas/README.md). The percentile benchmark
+records per-frame Gallery candidate counts and actual OSNet batch sizes. The
+`reid_backend_parity` tool compares Torch, ONNX Runtime, and OM on exactly the
+same saved crops. `gallery_reid_diagnose` reports reference-bank
+pairwise-cosine/diversity and candidate top-1/top-2 ranking without writing
+SQLite. These diagnostics do not change production matching.
+
 ## Configuration
 
 The default configuration is in `config/config.yaml`. Important MVP-8.2 settings are:
@@ -149,6 +164,8 @@ reid_recovery:
 gallery_enrichment:
   # Engineering starting value, not a universal optimum.
   post_recovery_stable_frames: 30
+  # Enrichment-only near-duplicate filter; runtime bank/recovery are unchanged.
+  reference_duplicate_threshold: 0.98
 
 reid_quality:
   min_track_confidence: 0.35
@@ -175,6 +192,9 @@ a time. The project profiles are:
   `with_reid: false`, `track_buffer: 60`;
 - `config/trackers/botsort_crowd_reid.yaml`: separate optional appearance-ReID
   experiment, `with_reid: true`, `model: auto`.
+- `config/trackers/botsort_crowd_fixed.yaml`: fixed-camera experiment with the
+  Ultralytics 8.4.138-supported `gmc_method: none`; it is not a moving-camera
+  default.
 
 For each profile, vary detection `model.conf_threshold` across `0.35`, `0.20`,
 `0.15`, tracker `track_buffer` across `30`, `60`, `90`, and `image_size` across

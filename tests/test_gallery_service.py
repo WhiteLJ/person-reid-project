@@ -155,6 +155,30 @@ class GalleryPersistenceServiceTests(unittest.TestCase):
         assert in_memory is not None
         self.assertEqual(len(in_memory.reference_embeddings), 2)
 
+    def test_duplicate_reference_is_not_persisted_by_enrichment(self) -> None:
+        target = _target(1)
+        person = self.service.enroll(target)
+        target.reference_embeddings.extend([_embedding().copy(), _second_embedding().copy()])
+        target.centroid = _second_embedding().copy()
+
+        updated = self.service.enrich_reference_update(
+            _event(target, target.reference_embeddings)
+        )
+
+        self.assertTrue(updated)
+        persisted = self.repository.load_all()[0]
+        self.assertEqual(person.person_id, persisted.person_id)
+        self.assertEqual(len(persisted.reference_embeddings), 2)
+
+        target.reference_embeddings.append(_second_embedding().copy())
+        target.centroid = _second_embedding().copy()
+        self.assertFalse(
+            self.service.enrich_reference_update(
+                _event(target, target.reference_embeddings)
+            )
+        )
+        self.assertEqual(len(self.repository.load_all()[0].reference_embeddings), 2)
+
     def test_enrichment_respects_post_recovery_stable_cooldown(self) -> None:
         service = GalleryPersistenceService(
             self.gallery,

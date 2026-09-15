@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from logging import getLogger
+from logging import DEBUG, getLogger
+from pathlib import Path
 
 import numpy as np
 
@@ -177,6 +178,8 @@ class GalleryRecognitionCoordinator:
         person_class_id: int = 0,
         embedding_cache: ReIDFrameCache | None = None,
         quality_config: ReIDQualityConfig | None = None,
+        save_candidate_crops: bool = False,
+        candidate_crop_dir: str | Path | None = None,
     ) -> None:
         self.target_manager = target_manager
         self.gallery = gallery
@@ -187,10 +190,19 @@ class GalleryRecognitionCoordinator:
         self.person_class_id = person_class_id
         self.embedding_cache = embedding_cache
         self.quality_config = quality_config or ReIDQualityConfig()
+        self.save_candidate_crops = bool(save_candidate_crops)
+        self.candidate_crop_dir = (
+            Path(candidate_crop_dir) if candidate_crop_dir is not None else None
+        )
+        if self.save_candidate_crops and self.candidate_crop_dir is None:
+            raise ValueError(
+                "candidate_crop_dir is required when saving Gallery candidates"
+            )
         self._track_ages: dict[int, int] = {}
         self._last_seen_frame: dict[int, int] = {}
         self._pending: dict[tuple[int, int], _PendingRecognition] = {}
         self._last_recognition_frame: int | None = None
+        self.last_candidate_count = 0
         self.recognized_count = 0
         self.quality_rejected_count = 0
         self.reid_batch_count = 0
@@ -221,6 +233,7 @@ class GalleryRecognitionCoordinator:
         candidates remain eligible and can reuse this frame's cached feature.
         """
 
+        self.last_candidate_count = 0
         self._update_track_ages(tracks, frame_index)
         if self.embedding_cache is not None:
             self.embedding_cache.begin_frame(frame_index)
@@ -248,9 +261,11 @@ class GalleryRecognitionCoordinator:
             tracks,
             set(protected_track_ids),
         )
+        self.last_candidate_count = len(candidates)
         if not candidates:
             return []
 
+        self._save_candidate_crops(candidates, frame_index)
         candidates = self._ensure_embeddings(candidates, frame_index)
         if not candidates:
             return []
@@ -258,6 +273,7 @@ class GalleryRecognitionCoordinator:
         # This is a real recognition attempt.  Only now may old pending
         # proposals be invalidated by the current result.
         self._last_recognition_frame = frame_index
+        self._debug_rankings(people, candidates)
         matches = assign_gallery_matches(
             people,
             candidates,
@@ -293,6 +309,73 @@ class GalleryRecognitionCoordinator:
             self._pending.pop(key, None)
 
         return recognized
+
+    @staticmethod
+    def _debug_rankings(
+        people: Sequence[GalleryPerson],
+        candidates: Sequence[GalleryRecognitionCandidate],
+    ) -> None:
+        """Log ranking evidence only at DEBUG level without changing matching."""
+
+        if not LOGGER.isEnabledFor(DEBUG):
+            return
+        scores_by_person: dict[int, list[tuple[float, int]]] = {}
+        for person in people:
+            scores_by_person[person.person_id] = sorted(
+                [
+                    (
+                        gallery_recognition_score(person, candidate.embedding),
+                        candidate.track.track_id,
+                    )
+                    for candidate in candidates
+                ],
+                key=lambda item: (-item[0], item[1]),
+            )
+        for person in people:
+            ranking = scores_by_person[person.person_id]
+            if not ranking:
+                continue
+            best_score, best_track_id = ranking[0]
+            second_score = ranking[1][0] if len(ranking) > 1 else None
+            LOGGER.debug(
+                "GALLERY_PERSON_RANKING person=%s best_track=%d score=%.4f "
+                "second_score=%s person_margin=%s",
+                _person_label(person.person_id),
+                best_track_id,
+                best_score,
+                f"{second_score:.4f}" if second_score is not None else "none",
+                f"{best_score - second_score:.4f}"
+                if second_score is not None
+                else "auto",
+            )
+        for candidate in candidates:
+            ranking = sorted(
+                (
+                    gallery_recognition_score(person, candidate.embedding),
+                    person.person_id,
+                )
+                for person in people
+            )
+            ranking.reverse()
+            if not ranking:
+                continue
+            top1_score, top1_person = ranking[0]
+            top2_score = ranking[1][0] if len(ranking) > 1 else None
+            candidate_margin = (
+                top1_score - top2_score if top2_score is not None else None
+            )
+            LOGGER.debug(
+                "GALLERY_RANKING track=%d top1=%s score=%.4f top2=%s "
+                "top2_score=%s person_margin=not_applicable candidate_margin=%s",
+                candidate.track.track_id,
+                _person_label(top1_person),
+                top1_score,
+                _person_label(ranking[1][1]) if len(ranking) > 1 else None,
+                f"{top2_score:.4f}" if top2_score is not None else "none",
+                f"{candidate_margin:.4f}"
+                if candidate_margin is not None
+                else "auto",
+            )
 
     def _update_track_ages(
         self,
@@ -467,6 +550,54 @@ class GalleryRecognitionCoordinator:
             min_crop_width=self.reid_config.min_crop_width,
             min_crop_height=self.reid_config.min_crop_height,
         )
+
+    def _save_candidate_crops(
+        self,
+        candidates: Sequence[tuple[Track, np.ndarray]],
+        frame_index: int,
+    ) -> None:
+        """Optionally save accepted candidate crops and their frame metadata."""
+
+        if not self.save_candidate_crops or self.candidate_crop_dir is None:
+            return
+        import json
+
+        try:
+            self.candidate_crop_dir.mkdir(parents=True, exist_ok=True)
+            import cv2
+
+            for track, crop in candidates:
+                stem = (
+                    f"frame_{frame_index:08d}_track_{track.track_id:06d}"
+                )
+                image_path = self.candidate_crop_dir / f"{stem}.jpg"
+                metadata_path = self.candidate_crop_dir / f"{stem}.json"
+                if not cv2.imwrite(str(image_path), crop):
+                    LOGGER.warning(
+                        "GALLERY_CANDIDATE_CROP_SAVE_FAILED track=%d frame=%d",
+                        track.track_id,
+                        frame_index,
+                    )
+                    continue
+                metadata_path.write_text(
+                    json.dumps(
+                        {
+                            "frame_index": frame_index,
+                            "track_id": track.track_id,
+                            "bbox": [float(value) for value in track.bbox],
+                            "confidence": float(track.confidence),
+                            "class_id": int(track.class_id),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+        except Exception:
+            LOGGER.exception(
+                "GALLERY_CANDIDATE_CROP_SAVE_ERROR frame=%d dir=%s",
+                frame_index,
+                self.candidate_crop_dir,
+            )
 
 
 def _person_label(person_id: int) -> str:
