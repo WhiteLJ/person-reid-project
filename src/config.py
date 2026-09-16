@@ -86,6 +86,7 @@ class ReIDRecoveryConfig:
     recovery_min_track_age_frames: int = 3
     recovery_confirmation_hits: int = 2
     recovery_pending_max_age_frames: int = 60
+    recovery_candidates_per_frame: int = 4
 
 
 @dataclass(frozen=True)
@@ -334,6 +335,9 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     recovery_pending_max_age_frames = int(
         reid_recovery.get("recovery_pending_max_age_frames", 60)
     )
+    recovery_candidates_per_frame = int(
+        reid_recovery.get("recovery_candidates_per_frame", 4)
+    )
     if lost_grace_frames < 1:
         raise ValueError("reid_recovery.lost_grace_frames must be positive")
     if reference_update_interval_frames < 1:
@@ -371,6 +375,10 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     if recovery_pending_max_age_frames < 1:
         raise ValueError(
             "reid_recovery.recovery_pending_max_age_frames must be positive"
+        )
+    if recovery_candidates_per_frame < 1:
+        raise ValueError(
+            "reid_recovery.recovery_candidates_per_frame must be positive"
         )
 
     post_recovery_stable_frames = int(
@@ -516,6 +524,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             recovery_min_track_age_frames=recovery_min_track_age_frames,
             recovery_confirmation_hits=recovery_confirmation_hits,
             recovery_pending_max_age_frames=recovery_pending_max_age_frames,
+            recovery_candidates_per_frame=recovery_candidates_per_frame,
         ),
         gallery_enrichment=GalleryEnrichmentConfig(
             post_recovery_stable_frames=post_recovery_stable_frames,

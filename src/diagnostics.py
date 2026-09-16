@@ -46,6 +46,12 @@ class RuntimeDiagnostics:
         self._recovery_quality_valid_count = 0
         self._recovery_reid_batch_count = 0
         self._recovery_reid_seconds = 0.0
+        self._recovery_sweep_started_count = 0
+        self._recovery_sweep_completed_count = 0
+        self._recovery_sweep_candidate_count = 0
+        self._recovery_sweep_processed_count = 0
+        self._recovery_sweep_frame_count = 0
+        self._recovery_sweep_reid_seconds = 0.0
 
     def observe_tracks(self, tracks: Sequence[Track], frame_index: int) -> None:
         """Record Track IDs entering/leaving the current result set."""
@@ -80,6 +86,12 @@ class RuntimeDiagnostics:
         recovery_quality_valid_count: int = 0,
         recovery_reid_batch_count: int = 0,
         recovery_reid_seconds: float = 0.0,
+        recovery_sweep_started: bool = False,
+        recovery_sweep_completed: bool = False,
+        recovery_sweep_candidate_total: int = 0,
+        recovery_sweep_processed_this_frame: int = 0,
+        recovery_sweep_frames: int = 0,
+        recovery_sweep_reid_ms: float = 0.0,
     ) -> None:
         if not self.enabled:
             return
@@ -91,6 +103,7 @@ class RuntimeDiagnostics:
         render_seconds = max(0.0, render_seconds)
         ui_seconds = max(0.0, ui_seconds)
         recovery_reid_seconds = max(0.0, recovery_reid_seconds)
+        recovery_sweep_reid_ms = max(0.0, recovery_sweep_reid_ms)
         self._elapsed_seconds += frame_seconds
         self._frame_total_seconds += frame_seconds
         self._tracking_seconds += tracking_seconds
@@ -115,6 +128,18 @@ class RuntimeDiagnostics:
         else:
             self._normal_frame_count += 1
             self._normal_frame_seconds += frame_seconds
+        if recovery_sweep_started:
+            self._recovery_sweep_started_count += 1
+            self._recovery_sweep_candidate_count += max(
+                0, recovery_sweep_candidate_total
+            )
+        if recovery_sweep_completed:
+            self._recovery_sweep_completed_count += 1
+            self._recovery_sweep_frame_count += max(0, recovery_sweep_frames)
+        self._recovery_sweep_processed_count += max(
+            0, recovery_sweep_processed_this_frame
+        )
+        self._recovery_sweep_reid_seconds += recovery_sweep_reid_ms / 1000.0 if recovery_sweep_completed else 0.0
         if self.processed_frames % self.log_interval_frames == 0:
             LOGGER.info("CROWD_STATS %s", self.summary())
 
@@ -145,6 +170,12 @@ class RuntimeDiagnostics:
             "recovery_quality_valid_count": self._recovery_quality_valid_count,
             "recovery_reid_batch_count": self._recovery_reid_batch_count,
             "recovery_reid_ms": f"{self._mean_ms(self._recovery_reid_seconds, self._recovery_frame_count):.2f}",
+            "recovery_sweep_started": self._recovery_sweep_started_count,
+            "recovery_sweep_completed": self._recovery_sweep_completed_count,
+            "recovery_sweep_candidate_total": self._recovery_sweep_candidate_count,
+            "recovery_sweep_processed_this_frame": self._recovery_sweep_processed_count,
+            "recovery_sweep_frames": self._recovery_sweep_frame_count,
+            "recovery_sweep_reid_ms": f"{self._recovery_sweep_reid_seconds * 1000.0:.2f}",
         }
         values.update(counters)
         return " ".join(f"{key}={value}" for key, value in values.items())

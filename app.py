@@ -294,6 +294,14 @@ def run(config: AppConfig) -> int:
                 recovery_quality_valid_count=recovery_stats.quality_valid_count,
                 recovery_reid_batch_count=recovery_stats.reid_batch_count,
                 recovery_reid_seconds=recovery_stats.reid_ms / 1000.0,
+                recovery_sweep_started=recovery_stats.sweep_started,
+                recovery_sweep_completed=recovery_stats.sweep_completed,
+                recovery_sweep_candidate_total=recovery_stats.sweep_candidate_total,
+                recovery_sweep_processed_this_frame=(
+                    recovery_stats.sweep_processed_this_frame
+                ),
+                recovery_sweep_frames=recovery_stats.sweep_frames,
+                recovery_sweep_reid_ms=recovery_stats.sweep_reid_ms,
             )
             if action == UIAction.QUIT:
                 LOGGER.info("USER_QUIT key=q")

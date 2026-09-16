@@ -250,6 +250,20 @@ class CoordinatorTests(unittest.TestCase):
         )
         return manager, coordinator
 
+    @staticmethod
+    def _sweep_tracks(count: int, start_id: int = 100) -> list[Track]:
+        """Build separated, in-frame candidates for incremental sweep tests."""
+
+        return [
+            Track(
+                start_id + index,
+                (10 + index * 30, 20, 30 + index * 30, 220),
+                0.99,
+                0,
+            )
+            for index in range(count)
+        ]
+
     def test_selection_creates_session_target_with_initial_reference(self) -> None:
         extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
         manager, coordinator = self._coordinator(extractor)
@@ -599,6 +613,162 @@ class CoordinatorTests(unittest.TestCase):
 
         self.assertEqual(len(matches), 1)
         self.assertEqual(coordinator.track_ages[8], 3)
+
+    def test_recovery_sweep_limits_candidates_per_frame_and_matches_only_at_end(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        manager, coordinator = self._coordinator(
+            extractor,
+            recovery_candidates_per_frame=4,
+            recovery_confirmation_hits=2,
+            # Equal fake embeddings are intentional here; zero margin keeps
+            # the test focused on sweep timing rather than assignment ties.
+            recovery_margin=0.0,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+
+        candidates = self._sweep_tracks(17)
+        for frame_index in range(2, 6):
+            matches = coordinator.process_frame(
+                np.zeros((240, 600, 3), dtype=np.uint8),
+                candidates,
+                frame_index,
+            )
+            self.assertEqual(matches, [])
+            self.assertEqual(coordinator.pending, {})
+            self.assertEqual(target.state, TargetState.LOST)
+        matches = coordinator.process_frame(
+            np.zeros((240, 600, 3), dtype=np.uint8),
+            candidates,
+            6,
+        )
+
+        self.assertEqual(extractor.batch_sizes, [4, 4, 4, 4, 1])
+        self.assertEqual(coordinator.last_frame_recovery_stats.sweep_processed_this_frame, 1)
+        self.assertTrue(coordinator.last_frame_recovery_stats.sweep_completed)
+        self.assertEqual(matches, [])
+        self.assertEqual(coordinator.pending, {(target.target_id, 116): 1})
+        self.assertEqual(manager.target_recovered_count, 0)
+
+    def test_recovery_sweep_does_not_add_new_tracks_and_excludes_disappeared_tracks(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        manager, coordinator = self._coordinator(
+            extractor,
+            recovery_candidates_per_frame=2,
+            recovery_confirmation_hits=1,
+            recovery_margin=0.0,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+
+        initial = self._sweep_tracks(5, start_id=101)
+        coordinator.process_frame(
+            np.zeros((240, 600, 3), dtype=np.uint8), initial, 2
+        )
+        # Track 101 disappears after its embedding was collected. Track 106
+        # appears after the snapshot and must wait for a later sweep.
+        continued = [track for track in initial if track.track_id != 101]
+        continued.append(self._sweep_tracks(1, start_id=106)[0])
+        coordinator.process_frame(
+            np.zeros((240, 600, 3), dtype=np.uint8), continued, 3
+        )
+        matches = coordinator.process_frame(
+            np.zeros((240, 600, 3), dtype=np.uint8), continued, 4
+        )
+
+        self.assertEqual(extractor.batch_sizes, [2, 2, 1])
+        self.assertEqual(len(matches), 1)
+        self.assertNotIn(target.current_track_id, {101, 106})
+        self.assertNotEqual(target.current_track_id, 106)
+        self.assertEqual(manager.target_recovered_count, 1)
+
+    def test_quality_rejection_consumes_sweep_budget_without_embedding(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        _manager, coordinator = self._coordinator(
+            extractor,
+            recovery_candidates_per_frame=4,
+            recovery_confirmation_hits=1,
+            recovery_margin=0.0,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+
+        candidates = self._sweep_tracks(5)
+        candidates[0] = Track(100, (0, 20, 30, 220), 0.99, 0)
+        stats = []
+        stats.append(
+            coordinator.process_frame(
+                np.zeros((240, 600, 3), dtype=np.uint8), candidates, 2
+            )
+        )
+        first_stats = coordinator.last_frame_recovery_stats
+        stats.append(
+            coordinator.process_frame(
+                np.zeros((240, 600, 3), dtype=np.uint8), candidates, 3
+            )
+        )
+
+        self.assertEqual(extractor.batch_sizes, [3, 1])
+        self.assertEqual(first_stats.sweep_processed_this_frame, 4)
+        self.assertEqual(first_stats.quality_valid_count, 3)
+        self.assertEqual(len(stats[0]), 0)
+        self.assertEqual(len(stats[1]), 1)
+
+    def test_confirmation_hits_count_completed_sweeps_not_sub_batches(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        manager, coordinator = self._coordinator(
+            extractor,
+            recovery_candidates_per_frame=4,
+            recovery_confirmation_hits=2,
+            recovery_margin=0.0,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+        candidates = self._sweep_tracks(5)
+        large_frame = np.zeros((240, 600, 3), dtype=np.uint8)
+
+        coordinator.process_frame(large_frame, candidates, 2)
+        coordinator.process_frame(large_frame, candidates, 3)
+        self.assertEqual(coordinator.pending, {(target.target_id, 104): 1})
+        self.assertEqual(target.state, TargetState.LOST)
+
+        coordinator.process_frame(large_frame, candidates, 4)
+        matches = coordinator.process_frame(large_frame, candidates, 5)
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(target.state, TargetState.ACTIVE)
+        self.assertEqual(target.current_track_id, 104)
+        self.assertEqual(manager.target_recovered_count, 1)
+        self.assertEqual(extractor.batch_sizes, [4, 1, 4, 1])
+
+    def test_multiple_lost_targets_share_one_candidate_batch(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        manager, coordinator = self._coordinator(
+            extractor,
+            recovery_candidates_per_frame=4,
+            recovery_confirmation_hits=1,
+        )
+        target_a = coordinator.select_from_track(self.frame, self.track_a, 0)
+        target_b = coordinator.select_from_track(self.frame, self.track_b, 0)
+        assert target_a is not None and target_b is not None
+        coordinator.process_frame(self.frame, [], 1)
+
+        candidate = self._sweep_tracks(1, start_id=100)[0]
+        matches = coordinator.process_frame(
+            np.zeros((240, 600, 3), dtype=np.uint8), [candidate], 2
+        )
+
+        # The one candidate embedding is calculated once and then scored
+        # against both LOST targets by the same assignment pass.
+        self.assertEqual(extractor.batch_sizes, [1])
+        self.assertEqual(matches, [])
+        self.assertEqual(target_a.state, TargetState.LOST)
+        self.assertEqual(target_b.state, TargetState.LOST)
+        self.assertEqual(manager.target_recovered_count, 0)
 
     def test_quality_rejection_does_not_count_as_recovery_mismatch(self) -> None:
         extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))

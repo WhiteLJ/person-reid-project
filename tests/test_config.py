@@ -54,6 +54,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.reid_recovery.recovery_min_track_age_frames, 3)
         self.assertEqual(config.reid_recovery.recovery_confirmation_hits, 2)
         self.assertEqual(config.reid_recovery.recovery_pending_max_age_frames, 60)
+        self.assertEqual(config.reid_recovery.recovery_candidates_per_frame, 4)
         self.assertEqual(config.gallery_enrichment.post_recovery_stable_frames, 30)
         self.assertEqual(config.gallery_enrichment.max_reference_embeddings, 8)
         self.assertAlmostEqual(

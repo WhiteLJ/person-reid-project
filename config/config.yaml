@@ -57,6 +57,7 @@ reid_recovery:
   recovery_min_track_age_frames: 3
   recovery_confirmation_hits: 2
   recovery_pending_max_age_frames: 60
+  recovery_candidates_per_frame: 4
 
 gallery_enrichment:
   # Conservative engineering starting value; not a universal optimum.

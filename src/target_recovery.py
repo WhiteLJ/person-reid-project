@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from logging import getLogger
 from time import perf_counter
 
@@ -53,6 +53,12 @@ class RecoveryFrameStats:
     quality_valid_count: int = 0
     reid_batch_count: int = 0
     reid_ms: float = 0.0
+    sweep_started: bool = False
+    sweep_completed: bool = False
+    sweep_candidate_total: int = 0
+    sweep_processed_this_frame: int = 0
+    sweep_frames: int = 0
+    sweep_reid_ms: float = 0.0
 
 
 @dataclass
@@ -73,6 +79,33 @@ class ReferenceUpdateEvent:
     centroid: np.ndarray
     accepted_embedding: np.ndarray
     target_state: TargetState = TargetState.ACTIVE
+
+
+@dataclass
+class _RecoverySweep:
+    """A stable, incremental snapshot of one complete Recovery attempt."""
+
+    start_frame: int
+    target_ids: tuple[int, ...]
+    candidate_track_ids: tuple[int, ...]
+    cursor: int = 0
+    frames: int = 0
+    reid_ms: float = 0.0
+    embeddings: dict[int, np.ndarray] = field(default_factory=dict)
+
+    def next_track_ids(self, budget: int) -> tuple[int, ...]:
+        """Consume at most ``budget`` snapshot entries exactly once."""
+
+        if budget < 1:
+            raise ValueError("Recovery sweep budget must be positive")
+        end = min(self.cursor + budget, len(self.candidate_track_ids))
+        selected = self.candidate_track_ids[self.cursor:end]
+        self.cursor = end
+        return selected
+
+    @property
+    def complete(self) -> bool:
+        return self.cursor >= len(self.candidate_track_ids)
 
 
 def recovery_score(target: SessionTarget, embedding: np.ndarray) -> float:
@@ -283,6 +316,7 @@ class TargetRecoveryCoordinator:
         self._track_ages: dict[int, int] = {}
         self._last_seen_frame: dict[int, int] = {}
         self._pending: dict[tuple[int, int], _PendingRecovery] = {}
+        self._recovery_sweep: _RecoverySweep | None = None
         self.recovery_attempted_count = 0
         self.recovery_pending_count = 0
         self.recovery_accepted_count = 0
@@ -350,7 +384,14 @@ class TargetRecoveryCoordinator:
         tracks: Sequence[Track],
         frame_index: int,
     ) -> list[RecoveryMatch]:
-        """Update visibility and run only due, quality-valid ReID work."""
+        """Update visibility and execute Recovery as bounded frame-spread sweeps.
+
+        Candidate enumeration is cheap and happens once when a sweep starts.
+        Quality checks and embedding extraction consume at most the configured
+        number of snapshot entries per video frame.  Matching is deliberately
+        deferred until the complete snapshot has been processed so the
+        existing one-to-one and two-sided-margin semantics see the full set.
+        """
 
         self.last_recovered_track_ids = frozenset()
         self.last_frame_recovery_stats = RecoveryFrameStats()
@@ -359,7 +400,6 @@ class TargetRecoveryCoordinator:
             self.embedding_cache.begin_frame(frame_index)
 
         self._expire_pending(frame_index)
-
         self.target_manager.update_visibility(
             tracks,
             lost_grace_frames=self.recovery_config.lost_grace_frames,
@@ -369,6 +409,8 @@ class TargetRecoveryCoordinator:
         embedding_jobs: list[tuple[str, int, Track, np.ndarray]] = []
         visible_ids = {track.track_id for track in tracks}
 
+        # ACTIVE reference updates retain their existing cadence and are not
+        # counted against the incremental Recovery candidate budget.
         for target in self.target_manager.active_targets():
             if target.current_track_id not in visible_ids:
                 continue
@@ -396,72 +438,86 @@ class TargetRecoveryCoordinator:
                 continue
             embedding_jobs.append(("reference", target.target_id, track, quality.crop))
 
-        due_lost_targets = [
-            target
-            for target in self.target_manager.lost_targets()
-            if self.target_manager.recovery_due(
-                target,
-                frame_index,
-                self.recovery_config.recovery_interval_frames,
-            )
-        ]
-        for target in due_lost_targets:
-            self.target_manager.mark_recovery_attempt(target, frame_index)
-
-        candidate_tracks = [
-            track
-            for track in self.target_manager.recovery_candidates(tracks)
-            if track.class_id == self.person_class_id
-            and self._track_ages.get(track.track_id, 0)
-            >= self.recovery_config.recovery_min_track_age_frames
-        ]
-        valid_candidate_ids: set[int] = set()
-        for track in (candidate_tracks if due_lost_targets else ()):
-            quality = self._quality(frame, track, tracks)
-            if not quality.accepted or quality.crop is None:
-                self.quality_rejected_count += 1
-                LOGGER.debug(
-                    "REID_QUALITY_REJECTED kind=recovery track=%d reason=%s",
-                    track.track_id,
-                    quality.reason or "unknown",
+        sweep_started = False
+        sweep = self._recovery_sweep
+        if sweep is None:
+            due_targets = tuple(
+                target
+                for target in self.target_manager.lost_targets()
+                if self.target_manager.recovery_due(
+                    target,
+                    frame_index,
+                    self.recovery_config.recovery_interval_frames,
                 )
-                continue
-            valid_candidate_ids.add(track.track_id)
-            embedding_jobs.append(("candidate", track.track_id, track, quality.crop))
-
-        self.last_frame_recovery_stats = RecoveryFrameStats(
-            recovery_due=bool(due_lost_targets),
-            candidate_count=len(candidate_tracks),
-            quality_valid_count=len(valid_candidate_ids),
-        )
-
-        if due_lost_targets and valid_candidate_ids:
-            self.recovery_attempted_count += len(due_lost_targets)
-            LOGGER.debug(
-                "TARGET_RECOVERY_ATTEMPT targets=%d candidates=%d frame=%d",
-                len(due_lost_targets),
-                len(valid_candidate_ids),
-                frame_index,
             )
+            if due_targets:
+                candidate_ids = tuple(
+                    sorted(
+                        track.track_id
+                        for track in self.target_manager.recovery_candidates(tracks)
+                        if track.class_id == self.person_class_id
+                        and self._track_ages.get(track.track_id, 0)
+                        >= self.recovery_config.recovery_min_track_age_frames
+                    )
+                )
+                sweep = _RecoverySweep(
+                    start_frame=frame_index,
+                    target_ids=tuple(target.target_id for target in due_targets),
+                    candidate_track_ids=candidate_ids,
+                )
+                self._recovery_sweep = sweep
+                sweep_started = True
+                for target in due_targets:
+                    # The interval is measured between sweep starts, not
+                    # between sub-batches inside a sweep.
+                    self.target_manager.mark_recovery_attempt(target, frame_index)
+                self.recovery_attempted_count += len(due_targets)
+                LOGGER.debug(
+                    "RECOVERY_SWEEP_STARTED frame=%d targets=%d candidates=%d budget=%d",
+                    frame_index,
+                    len(due_targets),
+                    len(candidate_ids),
+                    self.recovery_config.recovery_candidates_per_frame,
+                )
 
-        if not embedding_jobs:
-            return []
+        recovery_due = sweep is not None
+        processed_track_ids: tuple[int, ...] = ()
+        valid_candidate_ids: set[int] = set()
+        if sweep is not None:
+            sweep.frames += 1
+            processed_track_ids = sweep.next_track_ids(
+                self.recovery_config.recovery_candidates_per_frame
+            )
+            tracks_by_id = {track.track_id: track for track in tracks}
+            for track_id in processed_track_ids:
+                track = tracks_by_id.get(track_id)
+                if track is None:
+                    # A snapshot entry that disappeared is consumed without
+                    # being allowed back into this sweep.
+                    continue
+                quality = self._quality(frame, track, tracks)
+                if not quality.accepted or quality.crop is None:
+                    self.quality_rejected_count += 1
+                    LOGGER.debug(
+                        "REID_QUALITY_REJECTED kind=recovery track=%d reason=%s",
+                        track.track_id,
+                        quality.reason or "unknown",
+                    )
+                    continue
+                valid_candidate_ids.add(track.track_id)
+                embedding_jobs.append(("candidate", track.track_id, track, quality.crop))
 
-        recovery_reid_started = (
-            perf_counter() if due_lost_targets and valid_candidate_ids else None
-        )
+        candidate_reid_started = perf_counter() if valid_candidate_ids else None
         batch_count_before = self.reid_batch_count
         resolved_jobs = self._ensure_embeddings(embedding_jobs, frame_index)
-        if recovery_reid_started is not None:
-            self.last_frame_recovery_stats = RecoveryFrameStats(
-                recovery_due=True,
-                candidate_count=len(candidate_tracks),
-                quality_valid_count=len(valid_candidate_ids),
-                reid_batch_count=self.reid_batch_count - batch_count_before,
-                reid_ms=(perf_counter() - recovery_reid_started) * 1000.0,
-            )
+        candidate_reid_ms = (
+            (perf_counter() - candidate_reid_started) * 1000.0
+            if candidate_reid_started is not None
+            else 0.0
+        )
+        if sweep is not None:
+            sweep.reid_ms += candidate_reid_ms
 
-        recovery_candidates: list[RecoveryCandidate] = []
         for job, embedding in resolved_jobs:
             kind, owner_id, track, _crop = job
             if kind == "reference":
@@ -488,14 +544,88 @@ class TargetRecoveryCoordinator:
                                 target_state=target.state,
                             )
                         )
-            elif track is not None:
-                recovery_candidates.append(RecoveryCandidate(track, embedding.copy()))
+            elif sweep is not None and track is not None:
+                # This result belongs to the current sweep.  It is retained
+                # for the final full-snapshot decision, but is not put into
+                # ReIDFrameCache for another frame.
+                sweep.embeddings[track.track_id] = embedding.copy()
 
-        if not due_lost_targets or not recovery_candidates:
+        self.last_frame_recovery_stats = RecoveryFrameStats(
+            recovery_due=recovery_due,
+            candidate_count=(len(sweep.candidate_track_ids) if sweep else 0),
+            quality_valid_count=len(valid_candidate_ids),
+            reid_batch_count=self.reid_batch_count - batch_count_before,
+            reid_ms=candidate_reid_ms,
+            sweep_started=sweep_started,
+            sweep_candidate_total=(len(sweep.candidate_track_ids) if sweep else 0),
+            sweep_processed_this_frame=len(processed_track_ids),
+            sweep_frames=(sweep.frames if sweep else 0),
+            sweep_reid_ms=(sweep.reid_ms if sweep else 0.0),
+        )
+        if sweep is not None:
+            LOGGER.debug(
+                "RECOVERY_SWEEP_PROGRESS frame=%d candidate_total=%d "
+                "processed_this_frame=%d frames=%d reid_ms=%.2f",
+                frame_index,
+                len(sweep.candidate_track_ids),
+                len(processed_track_ids),
+                sweep.frames,
+                sweep.reid_ms,
+            )
+
+        if sweep is None or not sweep.complete:
+            return []
+
+        current_sweep = sweep
+        self._recovery_sweep = None
+        matches = self._complete_sweep(current_sweep, tracks, frame_index)
+        self.last_frame_recovery_stats = replace(
+            self.last_frame_recovery_stats,
+            sweep_completed=True,
+            sweep_frames=current_sweep.frames,
+            sweep_reid_ms=current_sweep.reid_ms,
+        )
+        LOGGER.debug(
+            "RECOVERY_SWEEP_COMPLETED start_frame=%d frame=%d "
+            "candidates=%d frames=%d reid_ms=%.2f",
+            current_sweep.start_frame,
+            frame_index,
+            len(current_sweep.candidate_track_ids),
+            current_sweep.frames,
+            current_sweep.reid_ms,
+        )
+        return matches
+
+    def _complete_sweep(
+        self,
+        sweep: _RecoverySweep,
+        tracks: Sequence[Track],
+        frame_index: int,
+    ) -> list[RecoveryMatch]:
+        """Run the unchanged full-snapshot matching/confirmation phase."""
+
+        lost_targets = [
+            target
+            for target_id in sweep.target_ids
+            if (target := self.target_manager.targets.get(target_id)) is not None
+            and target.state is TargetState.LOST
+        ]
+        current_tracks = {track.track_id: track for track in tracks}
+        currently_unbound = {
+            track.track_id
+            for track in self.target_manager.recovery_candidates(tracks)
+            if track.class_id == self.person_class_id
+        }
+        recovery_candidates = [
+            RecoveryCandidate(current_tracks[track_id], embedding.copy())
+            for track_id, embedding in sweep.embeddings.items()
+            if track_id in current_tracks and track_id in currently_unbound
+        ]
+        if not lost_targets or not recovery_candidates:
             return []
 
         matches = assign_recovery_matches(
-            due_lost_targets,
+            lost_targets,
             recovery_candidates,
             recovery_threshold=self.recovery_config.recovery_threshold,
             recovery_margin=self.recovery_config.recovery_margin,
@@ -507,7 +637,7 @@ class TargetRecoveryCoordinator:
             ),
         )
         self._log_recovery_rejections(
-            due_lost_targets,
+            lost_targets,
             recovery_candidates,
             matches,
             frame_index,
@@ -515,9 +645,9 @@ class TargetRecoveryCoordinator:
         accepted_pairs = {
             (match.target_id, match.candidate.track.track_id) for match in matches
         }
-        due_target_ids = {target.target_id for target in due_lost_targets}
+        lost_target_ids = {target.target_id for target in lost_targets}
         for key in list(self._pending):
-            if key[0] in due_target_ids and key not in accepted_pairs:
+            if key[0] in lost_target_ids and key not in accepted_pairs:
                 del self._pending[key]
 
         recovered_matches: list[RecoveryMatch] = []

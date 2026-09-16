@@ -63,6 +63,44 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("recovery_reid_batch_count=2", summary)
         self.assertIn("recovery_reid_ms=15.00", summary)
 
+    def test_recovery_sweep_counters_are_aggregated_once_per_sweep(self) -> None:
+        diagnostics = RuntimeDiagnostics(enabled=True, log_interval_frames=100)
+        diagnostics.record_frame(
+            0.010,
+            0,
+            recovery_due=True,
+            recovery_sweep_started=True,
+            recovery_sweep_candidate_total=17,
+            recovery_sweep_processed_this_frame=4,
+            recovery_sweep_frames=1,
+            recovery_sweep_reid_ms=12.0,
+        )
+        diagnostics.record_frame(
+            0.010,
+            1,
+            recovery_due=True,
+            recovery_sweep_processed_this_frame=4,
+            recovery_sweep_frames=2,
+            recovery_sweep_reid_ms=20.0,
+        )
+        diagnostics.record_frame(
+            0.010,
+            2,
+            recovery_due=True,
+            recovery_sweep_completed=True,
+            recovery_sweep_processed_this_frame=1,
+            recovery_sweep_frames=3,
+            recovery_sweep_reid_ms=32.0,
+        )
+
+        summary = diagnostics.summary()
+        self.assertIn("recovery_sweep_started=1", summary)
+        self.assertIn("recovery_sweep_completed=1", summary)
+        self.assertIn("recovery_sweep_candidate_total=17", summary)
+        self.assertIn("recovery_sweep_processed_this_frame=9", summary)
+        self.assertIn("recovery_sweep_frames=3", summary)
+        self.assertIn("recovery_sweep_reid_ms=32.00", summary)
+
 
 if __name__ == "__main__":
     unittest.main()
