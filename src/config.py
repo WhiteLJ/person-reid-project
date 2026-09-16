@@ -105,6 +105,7 @@ class ReIDQualityConfig:
     min_track_confidence: float = 0.35
     max_edge_truncation_ratio: float = 0.30
     max_person_overlap_ratio: float = 0.50
+    min_frame_edge_margin_ratio: float = 0.01
 
 
 @dataclass(frozen=True)
@@ -388,6 +389,9 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     max_person_overlap_ratio = float(
         reid_quality.get("max_person_overlap_ratio", 0.50)
     )
+    min_frame_edge_margin_ratio = float(
+        reid_quality.get("min_frame_edge_margin_ratio", 0.01)
+    )
     if not 0.0 <= min_track_confidence <= 1.0:
         raise ValueError("reid_quality.min_track_confidence must be in [0, 1]")
     for name, value in (
@@ -396,6 +400,10 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     ):
         if not 0.0 <= value <= 1.0:
             raise ValueError(f"reid_quality.{name} must be in [0, 1]")
+    if not 0.0 <= min_frame_edge_margin_ratio < 0.5:
+        raise ValueError(
+            "reid_quality.min_frame_edge_margin_ratio must be in [0, 0.5)"
+        )
 
     recognition_interval_frames = int(
         gallery_recognition.get("recognition_interval_frames", 10)
@@ -500,6 +508,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             min_track_confidence=min_track_confidence,
             max_edge_truncation_ratio=max_edge_truncation_ratio,
             max_person_overlap_ratio=max_person_overlap_ratio,
+            min_frame_edge_margin_ratio=min_frame_edge_margin_ratio,
         ),
         gallery_recognition=GalleryRecognitionConfig(
             enabled=bool(gallery_recognition.get("enabled", True)),

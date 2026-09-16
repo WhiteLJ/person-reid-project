@@ -75,6 +75,25 @@ def assess_reid_quality(
             edge_truncation_ratio=edge_truncation_ratio,
         )
 
+    # Trackers/detectors may already clip a box to the frame.  The legacy
+    # truncation ratio cannot detect that case, so reject boxes inside a small
+    # configurable safety margin around every image edge.
+    margin_x = width * quality_config.min_frame_edge_margin_ratio
+    margin_y = height * quality_config.min_frame_edge_margin_ratio
+    x1, y1, x2, y2 = clipped_box
+    if (
+        x1 <= margin_x
+        or y1 <= margin_y
+        or x2 >= width - margin_x
+        or y2 >= height - margin_y
+    ):
+        return ReIDQualityResult(
+            False,
+            None,
+            "frame_edge",
+            edge_truncation_ratio=edge_truncation_ratio,
+        )
+
     max_overlap_ratio = 0.0
     for other in tracks:
         if other.track_id == track.track_id or other.class_id != person_class_id:

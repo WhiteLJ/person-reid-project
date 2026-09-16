@@ -66,7 +66,7 @@ def _recovery_config(**overrides: object) -> ReIDRecoveryConfig:
         "reference_update_interval_frames": 15,
         "recovery_interval_frames": 1,
         "max_reference_embeddings": 3,
-        "recovery_threshold": 0.75,
+        "recovery_threshold": 0.80,
         "recovery_margin": 0.05,
         "reference_update_threshold": 0.80,
         # These tests retain focused MVP-5 behavior; dedicated MVP-8.1 tests
@@ -145,8 +145,8 @@ class AssignmentTests(unittest.TestCase):
 class CoordinatorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.frame = np.zeros((120, 100, 3), dtype=np.uint8)
-        self.track_a = Track(3, (0, 0, 40, 110), 0.9, 0)
-        self.track_b = Track(8, (50, 0, 90, 110), 0.9, 0)
+        self.track_a = Track(3, (10, 5, 50, 110), 0.9, 0)
+        self.track_b = Track(8, (55, 5, 90, 110), 0.9, 0)
 
     def _coordinator(
         self,
@@ -213,6 +213,57 @@ class CoordinatorTests(unittest.TestCase):
 
         self.assertEqual(len(target.reference_embeddings), 1)
         self.assertEqual(coordinator.drain_reference_updates(), ())
+
+    def test_frame_edge_reference_crop_is_rejected_without_reid_or_update(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        _manager, coordinator = self._coordinator(
+            extractor,
+            reference_update_interval_frames=1,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        original_references = [
+            reference.copy() for reference in target.reference_embeddings
+        ]
+        original_centroid = target.centroid.copy()
+
+        edge_track = Track(3, (0, 10, 40, 110), 0.9, 0)
+        coordinator.process_frame(self.frame, [edge_track], 1)
+
+        self.assertEqual(extractor.extract_calls, 1)
+        self.assertEqual(extractor.batch_calls, 0)
+        self.assertEqual(len(target.reference_embeddings), len(original_references))
+        np.testing.assert_allclose(
+            target.reference_embeddings[0], original_references[0]
+        )
+        np.testing.assert_allclose(target.centroid, original_centroid)
+        self.assertEqual(coordinator.drain_reference_updates(), ())
+
+    def test_frame_edge_recovery_candidate_is_excluded(self) -> None:
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
+        manager, coordinator = self._coordinator(
+            extractor,
+            recovery_confirmation_hits=1,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+
+        edge_candidate = Track(11, (0, 10, 40, 110), 0.99, 0)
+        complete_candidate = Track(12, (50, 10, 90, 110), 0.99, 0)
+        matches = coordinator.process_frame(
+            self.frame,
+            [edge_candidate, complete_candidate],
+            2,
+        )
+
+        self.assertEqual(
+            [match.candidate.track.track_id for match in matches],
+            [12],
+        )
+        self.assertEqual(target.current_track_id, 12)
+        self.assertEqual(extractor.batch_sizes, [1])
+        self.assertEqual(manager.target_recovered_count, 1)
 
     def test_recovery_reference_is_not_emitted_as_gallery_update(self) -> None:
         extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))

@@ -148,6 +148,8 @@ database:
   path: "database/person_reid.db"
 
 reid_recovery:
+  # Conservative engineering starting value based on observed video scores.
+  recovery_threshold: 0.80
   recovery_min_track_age_frames: 3
   recovery_confirmation_hits: 2
   recovery_pending_max_age_frames: 60
@@ -162,6 +164,7 @@ reid_quality:
   min_track_confidence: 0.35
   max_edge_truncation_ratio: 0.30
   max_person_overlap_ratio: 0.60
+  min_frame_edge_margin_ratio: 0.01
 
 diagnostics:
   enabled: true

@@ -48,7 +48,8 @@ reid_recovery:
   reference_update_interval_frames: 15
   recovery_interval_frames: 5
   max_reference_embeddings: 8
-  recovery_threshold: 0.75
+  # Conservative engineering starting value based on observed recovery scores.
+  recovery_threshold: 0.80
   recovery_margin: 0.05
   reference_update_threshold: 0.80
   recovery_min_track_age_frames: 3
@@ -64,6 +65,7 @@ reid_quality:
   min_track_confidence: 0.35
   max_edge_truncation_ratio: 0.30
   max_person_overlap_ratio: 0.60
+  min_frame_edge_margin_ratio: 0.01
 
 gallery_recognition:
   enabled: true

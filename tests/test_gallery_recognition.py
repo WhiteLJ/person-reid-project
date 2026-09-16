@@ -109,7 +109,8 @@ def _gallery(*people: GalleryPerson) -> TargetGallery:
 
 
 def _track(track_id: int, x1: int = 0) -> Track:
-    return Track(track_id, (x1, 0, x1 + 40, 110), 0.9, 0)
+    left = max(10, x1)
+    return Track(track_id, (left, 5, min(left + 40, 90), 110), 0.9, 0)
 
 
 def _coordinator(
