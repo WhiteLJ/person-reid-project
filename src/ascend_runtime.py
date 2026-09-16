@@ -7,7 +7,7 @@ not have CANN installed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Sequence
@@ -90,6 +90,22 @@ class AscendModel:
     dynamic_batch_sizes: tuple[int, ...] = ()
     data_input_indices: tuple[int, ...] = ()
     dynamic_batch_input_index: int | None = None
+    workspaces: dict[int | None, "_ExecutionWorkspace"] = field(default_factory=dict)
+
+
+@dataclass
+class _ExecutionWorkspace:
+    """Reusable device/dataset resources for one model and batch shape."""
+
+    input_dataset: Any | None = None
+    output_dataset: Any | None = None
+    input_pointers: dict[int, Any] = field(default_factory=dict)
+    input_buffers: dict[int, Any] = field(default_factory=dict)
+    output_pointers: list[Any] = field(default_factory=list)
+    output_buffers: list[Any] = field(default_factory=list)
+    input_sizes: dict[int, int] = field(default_factory=dict)
+    host_outputs: list[np.ndarray] = field(default_factory=list)
+    released: bool = False
 
 
 class AscendRuntime:
@@ -259,7 +275,12 @@ class AscendRuntime:
         *,
         dynamic_batch: int | None = None,
     ) -> tuple[np.ndarray, ...]:
-        """Copy NumPy inputs to device, execute an OM, and copy outputs back."""
+        """Execute an OM using a reusable single-threaded ACL workspace.
+
+        A workspace is keyed by the dynamic batch size.  The first execution
+        of a fixed model or batch shape pays the allocation/dataset setup cost;
+        subsequent executions only copy data, execute, and copy outputs.
+        """
 
         if self._closed:
             raise AscendRuntimeError("cannot execute after runtime close")
@@ -292,167 +313,77 @@ class AscendRuntime:
             np.ascontiguousarray(np.asarray(value, dtype=np.float32))
             for value in inputs
         ]
-        input_dataset: Any | None = None
-        output_dataset: Any | None = None
-        input_buffers: list[Any] = []
-        output_buffers: list[Any] = []
-        input_ptrs: list[Any] = []
-        output_ptrs: list[Any] = []
-        outputs: tuple[np.ndarray, ...] | None = None
-        operation_error: BaseException | None = None
+        workspace_key = (
+            dynamic_batch if model.dynamic_batch_input_index is not None else None
+        )
+        workspace = model.workspaces.get(workspace_key)
+        if workspace is None:
+            workspace = self._create_workspace(
+                model,
+                arrays,
+                data_input_indices,
+                dynamic_batch,
+            )
+            model.workspaces[workspace_key] = workspace
+        else:
+            self._validate_workspace_inputs(workspace, data_input_indices, arrays)
 
-        try:
-            input_dataset = self._create_dataset("input")
-            input_buffers_by_index: dict[int, Any] = {}
-            for index, array in zip(data_input_indices, arrays):
-                pointer = self._malloc(array.nbytes)
-                input_ptrs.append(pointer)
-                host_ptr = self.acl.util.numpy_to_ptr(array)
-                _check(
-                    self.acl.rt.memcpy(
-                        pointer,
-                        array.nbytes,
-                        host_ptr,
-                        array.nbytes,
-                        _acl_constant(
-                            self.acl,
-                            "ACL_MEMCPY_HOST_TO_DEVICE",
-                            1,
-                        ),
-                    ),
-                    "acl.rt.memcpy host-to-device",
-                )
-                data_buffer = self.acl.create_data_buffer(pointer, array.nbytes)
-                if data_buffer is None:
-                    raise AscendRuntimeError("acl.create_data_buffer returned no buffer")
-                input_buffers.append(data_buffer)
-                input_buffers_by_index[index] = data_buffer
-
-            if model.dynamic_batch_input_index is not None:
-                index = model.dynamic_batch_input_index
-                pointer = self._malloc(model.input_sizes[index])
-                input_ptrs.append(pointer)
-                data_buffer = self.acl.create_data_buffer(
-                    pointer,
-                    model.input_sizes[index],
-                )
-                if data_buffer is None:
-                    raise AscendRuntimeError("acl.create_data_buffer returned no buffer")
-                input_buffers.append(data_buffer)
-                input_buffers_by_index[index] = data_buffer
-
-            for index in sorted(input_buffers_by_index):
-                _check(
-                    self.acl.mdl.add_dataset_buffer(
-                        input_dataset,
-                        input_buffers_by_index[index],
-                    ),
-                    f"acl.mdl.add_dataset_buffer input[{index}]",
-                )
-
-            if dynamic_batch is not None:
-                self._set_dynamic_batch_size(model, input_dataset, dynamic_batch)
-
-            output_dataset = self._create_dataset("output")
-            for output_size in model.output_sizes:
-                pointer = self._malloc(output_size)
-                output_ptrs.append(pointer)
-                data_buffer = self.acl.create_data_buffer(pointer, output_size)
-                if data_buffer is None:
-                    raise AscendRuntimeError("acl.create_data_buffer returned no buffer")
-                output_buffers.append(data_buffer)
-                _check(
-                    self.acl.mdl.add_dataset_buffer(output_dataset, data_buffer),
-                    "acl.mdl.add_dataset_buffer output",
-                )
-
+        for index, array in zip(data_input_indices, arrays):
+            pointer = workspace.input_pointers[index]
             _check(
-                self.acl.mdl.execute(model.model_id, input_dataset, output_dataset),
-                "acl.mdl.execute",
+                self.acl.rt.memcpy(
+                    pointer,
+                    array.nbytes,
+                    self.acl.util.numpy_to_ptr(array),
+                    array.nbytes,
+                    _acl_constant(self.acl, "ACL_MEMCPY_HOST_TO_DEVICE", 1),
+                ),
+                "acl.rt.memcpy host-to-device",
             )
 
-            output_values: list[np.ndarray] = []
-            for data_buffer, output_size in zip(output_buffers, model.output_sizes):
-                if output_size % np.dtype(np.float32).itemsize != 0:
-                    raise AscendRuntimeError(
-                        f"output byte size {output_size} is not float32-aligned"
-                    )
-                device_ptr = self.acl.get_data_buffer_addr(data_buffer)
-                host_buffer = np.empty(
-                    (output_size // np.dtype(np.float32).itemsize,),
-                    dtype=np.float32,
-                )
-                host_ptr = self.acl.util.numpy_to_ptr(host_buffer)
-                _check(
-                    self.acl.rt.memcpy(
-                        host_ptr,
-                        output_size,
-                        device_ptr,
-                        output_size,
-                        _acl_constant(
-                            self.acl,
-                            "ACL_MEMCPY_DEVICE_TO_HOST",
-                            2,
-                        ),
-                    ),
-                    "acl.rt.memcpy device-to-host",
-                )
-                output = host_buffer.copy()
-                shape = (
-                    model.output_shapes[len(output_values)]
-                    if model.output_shapes
-                    else None
-                )
-                if shape is not None and all(value > 0 for value in shape):
-                    expected_values = int(np.prod(shape))
-                    if expected_values == output.size:
-                        output = output.reshape(shape)
-                output_values.append(output)
-            outputs = tuple(output_values)
-        except BaseException as exc:
-            operation_error = exc
+        if dynamic_batch is not None:
+            self._set_dynamic_batch_size(
+                model,
+                workspace.input_dataset,
+                dynamic_batch,
+            )
 
-        cleanup_errors: list[Exception] = []
-        for data_buffer in input_buffers + output_buffers:
-            try:
-                _check(
-                    self.acl.destroy_data_buffer(data_buffer),
-                    "acl.destroy_data_buffer",
-                )
-            except Exception as exc:
-                cleanup_errors.append(exc)
-        for dataset, name in (
-            (input_dataset, "input"),
-            (output_dataset, "output"),
+        _check(
+            self.acl.mdl.execute(
+                model.model_id,
+                workspace.input_dataset,
+                workspace.output_dataset,
+            ),
+            "acl.mdl.execute",
+        )
+
+        output_values: list[np.ndarray] = []
+        for index, (data_buffer, output_size, host_buffer) in enumerate(
+            zip(workspace.output_buffers, model.output_sizes, workspace.host_outputs)
         ):
-            if dataset is not None:
-                try:
-                    _check(
-                        self.acl.mdl.destroy_dataset(dataset),
-                        f"acl.mdl.destroy_dataset {name}",
-                    )
-                except Exception as exc:
-                    cleanup_errors.append(exc)
-        for pointer in input_ptrs + output_ptrs:
-            try:
-                _check(self.acl.rt.free(pointer), "acl.rt.free")
-            except Exception as exc:
-                cleanup_errors.append(exc)
-
-        if operation_error is not None:
-            if cleanup_errors:
-                raise AscendRuntimeError(
-                    "Ascend execute failed and resource cleanup also failed: "
-                    f"operation={operation_error}; cleanup={cleanup_errors[0]}"
-                ) from operation_error
-            raise operation_error
-        if cleanup_errors:
-            raise AscendRuntimeError(
-                f"Ascend execute resource cleanup failed: {cleanup_errors[0]}"
-            ) from cleanup_errors[0]
-        if outputs is None:
-            raise AscendRuntimeError("Ascend execute produced no output")
-        return outputs
+            device_ptr = self.acl.get_data_buffer_addr(data_buffer)
+            _check(
+                self.acl.rt.memcpy(
+                    self.acl.util.numpy_to_ptr(host_buffer),
+                    output_size,
+                    device_ptr,
+                    output_size,
+                    _acl_constant(self.acl, "ACL_MEMCPY_DEVICE_TO_HOST", 2),
+                ),
+                "acl.rt.memcpy device-to-host",
+            )
+            # Preserve the existing execute() ownership contract: callers may
+            # retain returned outputs while the workspace is reused by the next
+            # inference.  The host allocation itself is reused; only this
+            # caller-owned result copy remains necessary.
+            output = host_buffer.copy()
+            shape = model.output_shapes[index] if model.output_shapes else None
+            if shape is not None and all(value > 0 for value in shape):
+                expected_values = int(np.prod(shape))
+                if expected_values == output.size:
+                    output = output.reshape(shape)
+            output_values.append(output)
+        return tuple(output_values)
 
     def close(self) -> None:
         """Release models, context, device, and ACL exactly once."""
@@ -461,6 +392,12 @@ class AscendRuntime:
             return
         first_error: Exception | None = None
         for model in reversed(self._models):
+            for workspace in list(model.workspaces.values()):
+                try:
+                    self._release_workspace(workspace)
+                except Exception as exc:
+                    first_error = first_error or exc
+            model.workspaces.clear()
             try:
                 _check(
                     self.acl.mdl.destroy_desc(model.description),
@@ -498,6 +435,160 @@ class AscendRuntime:
         self._closed = True
         if first_error is not None:
             raise AscendRuntimeError(f"Ascend runtime cleanup failed: {first_error}")
+
+    def _create_workspace(
+        self,
+        model: AscendModel,
+        arrays: Sequence[np.ndarray],
+        data_input_indices: Sequence[int],
+        dynamic_batch: int | None,
+    ) -> _ExecutionWorkspace:
+        """Create one persistent workspace, rolling back partial setup."""
+
+        workspace = _ExecutionWorkspace()
+        try:
+            workspace.input_dataset = self._create_dataset("input")
+            for index, array in zip(data_input_indices, arrays):
+                pointer = self._malloc(array.nbytes)
+                workspace.input_pointers[index] = pointer
+                workspace.input_sizes[index] = array.nbytes
+                data_buffer = self.acl.create_data_buffer(pointer, array.nbytes)
+                if data_buffer is None:
+                    raise AscendRuntimeError(
+                        "acl.create_data_buffer returned no input buffer"
+                    )
+                workspace.input_buffers[index] = data_buffer
+
+            if model.dynamic_batch_input_index is not None:
+                index = model.dynamic_batch_input_index
+                pointer = self._malloc(model.input_sizes[index])
+                workspace.input_pointers[index] = pointer
+                workspace.input_sizes[index] = model.input_sizes[index]
+                data_buffer = self.acl.create_data_buffer(
+                    pointer,
+                    model.input_sizes[index],
+                )
+                if data_buffer is None:
+                    raise AscendRuntimeError(
+                        "acl.create_data_buffer returned no dynamic-batch buffer"
+                    )
+                workspace.input_buffers[index] = data_buffer
+
+            for index in sorted(workspace.input_buffers):
+                _check(
+                    self.acl.mdl.add_dataset_buffer(
+                        workspace.input_dataset,
+                        workspace.input_buffers[index],
+                    ),
+                    f"acl.mdl.add_dataset_buffer input[{index}]",
+                )
+
+            workspace.output_dataset = self._create_dataset("output")
+            for output_size in model.output_sizes:
+                if output_size % np.dtype(np.float32).itemsize != 0:
+                    raise AscendRuntimeError(
+                        f"output byte size {output_size} is not float32-aligned"
+                    )
+                pointer = self._malloc(output_size)
+                workspace.output_pointers.append(pointer)
+                data_buffer = self.acl.create_data_buffer(pointer, output_size)
+                if data_buffer is None:
+                    raise AscendRuntimeError(
+                        "acl.create_data_buffer returned no output buffer"
+                    )
+                workspace.output_buffers.append(data_buffer)
+                workspace.host_outputs.append(
+                    np.empty(
+                        (output_size // np.dtype(np.float32).itemsize,),
+                        dtype=np.float32,
+                    )
+                )
+                _check(
+                    self.acl.mdl.add_dataset_buffer(
+                        workspace.output_dataset,
+                        data_buffer,
+                    ),
+                    "acl.mdl.add_dataset_buffer output",
+                )
+            return workspace
+        except BaseException as operation_error:
+            try:
+                self._release_workspace(workspace)
+            except Exception as cleanup_error:
+                raise AscendRuntimeError(
+                    "Ascend workspace creation failed and rollback cleanup also "
+                    f"failed: operation={operation_error}; cleanup={cleanup_error}"
+                ) from operation_error
+            raise
+
+    def _validate_workspace_inputs(
+        self,
+        workspace: _ExecutionWorkspace,
+        data_input_indices: Sequence[int],
+        arrays: Sequence[np.ndarray],
+    ) -> None:
+        expected = {
+            index: array.nbytes
+            for index, array in zip(data_input_indices, arrays)
+        }
+        actual = {
+            index: workspace.input_sizes[index]
+            for index in data_input_indices
+        }
+        if expected != actual:
+            raise ValueError(
+                "input byte sizes changed for a cached Ascend workspace; "
+                f"expected={actual} got={expected}"
+            )
+
+    def _release_workspace(self, workspace: _ExecutionWorkspace) -> None:
+        """Release every resource in one workspace at most once."""
+
+        if workspace.released:
+            return
+        first_error: Exception | None = None
+        for data_buffer in list(workspace.input_buffers.values()) + list(
+            workspace.output_buffers
+        ):
+            try:
+                _check(
+                    self.acl.destroy_data_buffer(data_buffer),
+                    "acl.destroy_data_buffer",
+                )
+            except Exception as exc:
+                first_error = first_error or exc
+        for dataset, name in (
+            (workspace.input_dataset, "input"),
+            (workspace.output_dataset, "output"),
+        ):
+            if dataset is not None:
+                try:
+                    _check(
+                        self.acl.mdl.destroy_dataset(dataset),
+                        f"acl.mdl.destroy_dataset {name}",
+                    )
+                except Exception as exc:
+                    first_error = first_error or exc
+        for pointer in list(workspace.input_pointers.values()) + list(
+            workspace.output_pointers
+        ):
+            try:
+                _check(self.acl.rt.free(pointer), "acl.rt.free")
+            except Exception as exc:
+                first_error = first_error or exc
+        workspace.input_pointers.clear()
+        workspace.input_buffers.clear()
+        workspace.output_pointers.clear()
+        workspace.output_buffers.clear()
+        workspace.input_sizes.clear()
+        workspace.host_outputs.clear()
+        workspace.input_dataset = None
+        workspace.output_dataset = None
+        workspace.released = True
+        if first_error is not None:
+            raise AscendRuntimeError(
+                f"Ascend workspace cleanup failed: {first_error}"
+            ) from first_error
 
     def _create_dataset(self, name: str) -> Any:
         value = self.acl.mdl.create_dataset()

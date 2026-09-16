@@ -1,5 +1,5 @@
-# MVP-8.1 A/B baseline. Mirrors the installed Ultralytics BoT-SORT defaults.
-# Keep with_reid disabled for the baseline comparison.
+# Atlas fixed-camera benchmark profile. GMC is disabled only when the camera is
+# known to be fixed; keep with_reid disabled for the project ReID path.
 tracker_type: botsort
 track_high_thresh: 0.25
 track_low_thresh: 0.1

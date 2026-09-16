@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from logging import getLogger
+from time import perf_counter
 
 import numpy as np
 
@@ -41,6 +42,17 @@ class RecoveryMatch:
         """Backward-compatible alias for the primary centroid score."""
 
         return self.centroid_similarity
+
+
+@dataclass(frozen=True)
+class RecoveryFrameStats:
+    """Per-frame Recovery workload metrics for performance diagnostics only."""
+
+    recovery_due: bool = False
+    candidate_count: int = 0
+    quality_valid_count: int = 0
+    reid_batch_count: int = 0
+    reid_ms: float = 0.0
 
 
 @dataclass
@@ -277,6 +289,7 @@ class TargetRecoveryCoordinator:
         self.quality_rejected_count = 0
         self.reid_batch_count = 0
         self._reference_updates: list[ReferenceUpdateEvent] = []
+        self.last_frame_recovery_stats = RecoveryFrameStats()
 
     @property
     def pending(self) -> dict[tuple[int, int], int]:
@@ -340,6 +353,7 @@ class TargetRecoveryCoordinator:
         """Update visibility and run only due, quality-valid ReID work."""
 
         self.last_recovered_track_ids = frozenset()
+        self.last_frame_recovery_stats = RecoveryFrameStats()
         self._update_track_ages(tracks, frame_index)
         if self.embedding_cache is not None:
             self.embedding_cache.begin_frame(frame_index)
@@ -415,6 +429,12 @@ class TargetRecoveryCoordinator:
             valid_candidate_ids.add(track.track_id)
             embedding_jobs.append(("candidate", track.track_id, track, quality.crop))
 
+        self.last_frame_recovery_stats = RecoveryFrameStats(
+            recovery_due=bool(due_lost_targets),
+            candidate_count=len(candidate_tracks),
+            quality_valid_count=len(valid_candidate_ids),
+        )
+
         if due_lost_targets and valid_candidate_ids:
             self.recovery_attempted_count += len(due_lost_targets)
             LOGGER.debug(
@@ -427,7 +447,19 @@ class TargetRecoveryCoordinator:
         if not embedding_jobs:
             return []
 
+        recovery_reid_started = (
+            perf_counter() if due_lost_targets and valid_candidate_ids else None
+        )
+        batch_count_before = self.reid_batch_count
         resolved_jobs = self._ensure_embeddings(embedding_jobs, frame_index)
+        if recovery_reid_started is not None:
+            self.last_frame_recovery_stats = RecoveryFrameStats(
+                recovery_due=True,
+                candidate_count=len(candidate_tracks),
+                quality_valid_count=len(valid_candidate_ids),
+                reid_batch_count=self.reid_batch_count - batch_count_before,
+                reid_ms=(perf_counter() - recovery_reid_started) * 1000.0,
+            )
 
         recovery_candidates: list[RecoveryCandidate] = []
         for job, embedding in resolved_jobs:

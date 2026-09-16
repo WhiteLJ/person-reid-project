@@ -31,6 +31,21 @@ class RuntimeDiagnostics:
         self.track_ended_count = 0
         self._previous_track_ids: set[int] = set()
         self._elapsed_seconds = 0.0
+        self._frame_total_seconds = 0.0
+        self._tracking_seconds = 0.0
+        self._recovery_seconds = 0.0
+        self._gallery_seconds = 0.0
+        self._render_seconds = 0.0
+        self._ui_seconds = 0.0
+        self._normal_frame_count = 0
+        self._normal_frame_seconds = 0.0
+        self._recovery_frame_count = 0
+        self._recovery_frame_seconds = 0.0
+        self._recovery_frame_max_seconds = 0.0
+        self._recovery_candidate_count = 0
+        self._recovery_quality_valid_count = 0
+        self._recovery_reid_batch_count = 0
+        self._recovery_reid_seconds = 0.0
 
     def observe_tracks(self, tracks: Sequence[Track], frame_index: int) -> None:
         """Record Track IDs entering/leaving the current result set."""
@@ -50,11 +65,56 @@ class RuntimeDiagnostics:
         self.unique_track_ids.update(current_ids)
         self._previous_track_ids = current_ids
 
-    def record_frame(self, frame_seconds: float, frame_index: int) -> None:
+    def record_frame(
+        self,
+        frame_seconds: float,
+        frame_index: int,
+        *,
+        tracking_seconds: float = 0.0,
+        recovery_seconds: float = 0.0,
+        gallery_seconds: float = 0.0,
+        render_seconds: float = 0.0,
+        ui_seconds: float = 0.0,
+        recovery_due: bool = False,
+        recovery_candidate_count: int = 0,
+        recovery_quality_valid_count: int = 0,
+        recovery_reid_batch_count: int = 0,
+        recovery_reid_seconds: float = 0.0,
+    ) -> None:
         if not self.enabled:
             return
         self.processed_frames += 1
-        self._elapsed_seconds += max(0.0, frame_seconds)
+        frame_seconds = max(0.0, frame_seconds)
+        tracking_seconds = max(0.0, tracking_seconds)
+        recovery_seconds = max(0.0, recovery_seconds)
+        gallery_seconds = max(0.0, gallery_seconds)
+        render_seconds = max(0.0, render_seconds)
+        ui_seconds = max(0.0, ui_seconds)
+        recovery_reid_seconds = max(0.0, recovery_reid_seconds)
+        self._elapsed_seconds += frame_seconds
+        self._frame_total_seconds += frame_seconds
+        self._tracking_seconds += tracking_seconds
+        self._recovery_seconds += recovery_seconds
+        self._gallery_seconds += gallery_seconds
+        self._render_seconds += render_seconds
+        self._ui_seconds += ui_seconds
+        if recovery_due:
+            self._recovery_frame_count += 1
+            self._recovery_frame_seconds += frame_seconds
+            self._recovery_frame_max_seconds = max(
+                self._recovery_frame_max_seconds,
+                frame_seconds,
+            )
+            self._recovery_candidate_count += max(0, recovery_candidate_count)
+            self._recovery_quality_valid_count += max(
+                0,
+                recovery_quality_valid_count,
+            )
+            self._recovery_reid_batch_count += max(0, recovery_reid_batch_count)
+            self._recovery_reid_seconds += recovery_reid_seconds
+        else:
+            self._normal_frame_count += 1
+            self._normal_frame_seconds += frame_seconds
         if self.processed_frames % self.log_interval_frames == 0:
             LOGGER.info("CROWD_STATS %s", self.summary())
 
@@ -72,6 +132,19 @@ class RuntimeDiagnostics:
             "track_created": self.track_created_count,
             "track_ended": self.track_ended_count,
             "average_fps": f"{average_fps:.2f}",
+            "frame_total_ms": f"{self._mean_ms(self._frame_total_seconds, self.processed_frames):.2f}",
+            "tracking_ms": f"{self._mean_ms(self._tracking_seconds, self.processed_frames):.2f}",
+            "recovery_ms": f"{self._mean_ms(self._recovery_seconds, self.processed_frames):.2f}",
+            "gallery_ms": f"{self._mean_ms(self._gallery_seconds, self.processed_frames):.2f}",
+            "render_ms": f"{self._mean_ms(self._render_seconds, self.processed_frames):.2f}",
+            "ui_ms": f"{self._mean_ms(self._ui_seconds, self.processed_frames):.2f}",
+            "normal_frame_ms": f"{self._mean_ms(self._normal_frame_seconds, self._normal_frame_count):.2f}",
+            "recovery_frame_ms": f"{self._mean_ms(self._recovery_frame_seconds, self._recovery_frame_count):.2f}",
+            "recovery_frame_max_ms": f"{self._recovery_frame_max_seconds * 1000.0:.2f}",
+            "recovery_candidate_count": self._recovery_candidate_count,
+            "recovery_quality_valid_count": self._recovery_quality_valid_count,
+            "recovery_reid_batch_count": self._recovery_reid_batch_count,
+            "recovery_reid_ms": f"{self._mean_ms(self._recovery_reid_seconds, self._recovery_frame_count):.2f}",
         }
         values.update(counters)
         return " ".join(f"{key}={value}" for key, value in values.items())
@@ -79,3 +152,7 @@ class RuntimeDiagnostics:
     def log_summary(self, **counters: int) -> None:
         if self.enabled:
             LOGGER.info("CROWD_STATS %s", self.summary(**counters))
+
+    @staticmethod
+    def _mean_ms(total_seconds: float, count: int) -> float:
+        return total_seconds * 1000.0 / count if count else 0.0

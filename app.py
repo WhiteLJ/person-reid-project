@@ -251,9 +251,14 @@ def run(config: AppConfig) -> int:
                 break
 
             current_frame_index = frame_index
+            tracking_started = perf_counter()
             tracks = tracking_pipeline.process(frame)
+            tracking_seconds = perf_counter() - tracking_started
             diagnostics.observe_tracks(tracks, current_frame_index)
+            recovery_started = perf_counter()
             target_recovery.process_frame(frame, tracks, current_frame_index)
+            recovery_seconds = perf_counter() - recovery_started
+            gallery_started = perf_counter()
             gallery_service.update_runtime_state(
                 target_manager.targets.values(),
                 current_frame_index,
@@ -267,13 +272,29 @@ def run(config: AppConfig) -> int:
                 current_frame_index,
                 protected_track_ids=target_recovery.last_recovered_track_ids,
             )
+            gallery_seconds = perf_counter() - gallery_started
+            frame_index += 1
+            render_started = perf_counter()
+            annotated = render_tracks(frame, tracks)
+            render_seconds = perf_counter() - render_started
+            ui_started = perf_counter()
+            action = ui.show(annotated)
+            ui_seconds = perf_counter() - ui_started
+            recovery_stats = target_recovery.last_frame_recovery_stats
             diagnostics.record_frame(
                 perf_counter() - frame_started,
                 current_frame_index,
+                tracking_seconds=tracking_seconds,
+                recovery_seconds=recovery_seconds,
+                gallery_seconds=gallery_seconds,
+                render_seconds=render_seconds,
+                ui_seconds=ui_seconds,
+                recovery_due=recovery_stats.recovery_due,
+                recovery_candidate_count=recovery_stats.candidate_count,
+                recovery_quality_valid_count=recovery_stats.quality_valid_count,
+                recovery_reid_batch_count=recovery_stats.reid_batch_count,
+                recovery_reid_seconds=recovery_stats.reid_ms / 1000.0,
             )
-            frame_index += 1
-            annotated = render_tracks(frame, tracks)
-            action = ui.show(annotated)
             if action == UIAction.QUIT:
                 LOGGER.info("USER_QUIT key=q")
                 break

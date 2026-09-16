@@ -185,6 +185,66 @@ class _FakeAclWithoutMemoryConstants(_FakeAcl):
 
 
 class AscendRuntimeTests(unittest.TestCase):
+    def _model_path(self, name: str) -> Path:
+        model_path = Path(".test_tmp") / name
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        model_path.write_bytes(b"OM")
+        return model_path
+
+    def test_fixed_model_reuses_workspace_across_many_executes(self) -> None:
+        acl = _FakeAcl()
+        runtime = AscendRuntime(0, acl_module=acl)
+        model = runtime.load_model(self._model_path("fake_runtime_reuse.om"))
+
+        for _ in range(100):
+            outputs = runtime.execute(
+                model,
+                [
+                    np.ones((1,), dtype=np.float32),
+                    np.ones((1,), dtype=np.float32),
+                ],
+            )
+
+        self.assertAlmostEqual(float(outputs[0][0]), 1.0)
+        self.assertEqual(acl.rt.calls.count("malloc"), 3)
+        self.assertEqual(acl.mdl.calls.count("create_dataset"), 2)
+        self.assertEqual(acl.destroy_buffer_calls, 0)
+
+        runtime.close()
+        self.assertEqual(acl.destroy_buffer_calls, 3)
+        self.assertEqual(acl.rt.calls.count("free"), 3)
+        self.assertEqual(acl.mdl.calls.count("destroy_dataset"), 2)
+        runtime.close()
+        self.assertEqual(acl.destroy_buffer_calls, 3)
+
+    def test_dynamic_batch_sequence_reuses_one_workspace_per_batch(self) -> None:
+        acl = _FakeAcl()
+        runtime = AscendRuntime(0, acl_module=acl)
+        model = runtime.load_model(
+            self._model_path("fake_runtime_dynamic_reuse.om"),
+            dynamic_batch_sizes=(1, 2, 4, 8),
+        )
+
+        for batch_size in (1, 1, 4, 8, 4, 1):
+            runtime.execute(
+                model,
+                [np.ones((batch_size, 1), dtype=np.float32)],
+                dynamic_batch=batch_size,
+            )
+
+        # Each batch workspace owns one data input, one dynamic selector input,
+        # and one output buffer.  The repeated 1/4 batches must not allocate.
+        self.assertEqual(acl.rt.calls.count("malloc"), 3 * 3)
+        self.assertEqual(acl.mdl.calls.count("create_dataset"), 3 * 2)
+        self.assertEqual(acl.mdl.calls.count("set_dynamic_batch_size"), 6)
+
+        runtime.close()
+        self.assertEqual(acl.destroy_buffer_calls, 3 * 3)
+        self.assertEqual(acl.rt.calls.count("free"), 3 * 3)
+        self.assertEqual(acl.mdl.calls.count("destroy_dataset"), 3 * 2)
+        runtime.close()
+        self.assertEqual(acl.destroy_buffer_calls, 3 * 3)
+
     def test_runtime_load_execute_and_close_lifecycle_is_reusable(self) -> None:
         model_path = Path(".test_tmp") / "fake_runtime.om"
         model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -234,6 +294,26 @@ class AscendRuntimeTests(unittest.TestCase):
 
         self.assertIn("107", str(context.exception))
         runtime.close()
+
+    def test_execute_failure_keeps_cached_workspace_cleanable_once(self) -> None:
+        acl = _FakeAcl()
+        runtime = AscendRuntime(0, acl_module=acl)
+        model = runtime.load_model(self._model_path("fake_runtime_cached_error.om"))
+
+        acl.mdl.execute_status = 107
+        with self.assertRaises(AscendRuntimeError):
+            runtime.execute(
+                model,
+                [
+                    np.ones((1,), dtype=np.float32),
+                    np.ones((1,), dtype=np.float32),
+                ],
+            )
+
+        runtime.close()
+        self.assertEqual(acl.destroy_buffer_calls, 3)
+        runtime.close()
+        self.assertEqual(acl.destroy_buffer_calls, 3)
 
     def test_failed_model_load_preserves_primary_error_without_invalid_unload(self) -> None:
         model_path = Path(".test_tmp") / "fake_runtime_load_error.om"

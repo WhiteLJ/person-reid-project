@@ -16,6 +16,12 @@ class TrackerProfileTests(unittest.TestCase):
         profile = self._load("botsort_baseline.yaml")
         self.assertFalse(profile["with_reid"])
         self.assertEqual(profile["track_buffer"], 30)
+        self.assertEqual(profile["gmc_method"], "sparseOptFlow")
+
+    def test_fixed_camera_profile_disables_gmc_for_atlas_ab(self) -> None:
+        profile = self._load("botsort_fixed_camera.yaml")
+        self.assertFalse(profile["with_reid"])
+        self.assertEqual(profile["gmc_method"], "none")
 
     def test_crowd_profile_is_explicit_experiment(self) -> None:
         profile = self._load("botsort_crowd.yaml")

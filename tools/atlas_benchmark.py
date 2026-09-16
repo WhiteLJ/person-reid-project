@@ -29,6 +29,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source", required=True, help="camera index or local video path")
     parser.add_argument("--frames", type=int, default=100)
     parser.add_argument("--reid-samples-per-frame", type=int, default=1)
+    parser.add_argument(
+        "--exercise-recovery",
+        action="store_true",
+        help=(
+            "create one temporary target, inject a synthetic loss, and measure "
+            "the real Recovery ReID workload"
+        ),
+    )
     return parser
 
 
@@ -84,6 +92,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         source.open()
         totals = np.zeros((6,), dtype=np.float64)
         processed = 0
+        exercise_target_id: int | None = None
+        exercise_selection_frame: int | None = None
+        exercise_missing_frames = 0
+        exercise_omitted_track_id: int | None = None
+        recovery_workload_frames = 0
+        recovery_candidate_count = 0
+        recovery_quality_valid_count = 0
+        recovery_reid_batch_count = 0
+        recovery_reid_seconds = 0.0
         while processed < args.frames:
             frame = source.read()
             if frame is None:
@@ -95,6 +112,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             start = perf_counter()
             tracks = tracker.update(detections, frame)
             totals[1] += perf_counter() - start
+
+            if args.exercise_recovery and exercise_target_id is None and tracks:
+                selected = recovery.select_from_track(frame, tracks[0], processed)
+                if selected is not None:
+                    exercise_target_id = selected.target_id
+                    exercise_selection_frame = processed
+                    exercise_omitted_track_id = tracks[0].track_id
 
             crops = []
             for detection in detections[: args.reid_samples_per_frame]:
@@ -112,8 +136,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             totals[2] += perf_counter() - start
 
             start = perf_counter()
-            recovery.process_frame(frame, tracks, processed)
+            recovery_tracks = tracks
+            if (
+                args.exercise_recovery
+                and exercise_target_id is not None
+                and exercise_selection_frame is not None
+                and processed > exercise_selection_frame
+            ):
+                if exercise_missing_frames < config.reid_recovery.lost_grace_frames:
+                    recovery_tracks = []
+                    exercise_missing_frames += 1
+                elif exercise_omitted_track_id is not None:
+                    recovery_tracks = [
+                        track
+                        for track in tracks
+                        if track.track_id != exercise_omitted_track_id
+                    ]
+            recovery.process_frame(frame, recovery_tracks, processed)
             totals[3] += perf_counter() - start
+            recovery_stats = recovery.last_frame_recovery_stats
+            if recovery_stats.recovery_due:
+                recovery_workload_frames += 1
+                recovery_candidate_count += recovery_stats.candidate_count
+                recovery_quality_valid_count += recovery_stats.quality_valid_count
+                recovery_reid_batch_count += recovery_stats.reid_batch_count
+                recovery_reid_seconds += recovery_stats.reid_ms / 1000.0
             start = perf_counter()
             recognition.process_frame(frame, tracks, processed)
             totals[4] += perf_counter() - start
@@ -134,9 +181,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"{label}: {total * 1000.0 / processed:.3f}")
         print(f"frames: {processed}")
         print(f"FPS: {processed / totals[5]:.3f}")
+        print(f"Recovery workload frames: {recovery_workload_frames}")
+        print(f"Recovery candidates: {recovery_candidate_count}")
+        print(f"Recovery quality-valid candidates: {recovery_quality_valid_count}")
+        print(f"Recovery ReID batch executes: {recovery_reid_batch_count}")
+        print(
+            "Recovery ReID ms/frame: "
+            f"{recovery_reid_seconds * 1000.0 / recovery_workload_frames:.3f}"
+            if recovery_workload_frames
+            else "Recovery ReID ms/frame: 0.000"
+        )
         print(
             "Note: --reid-samples-per-frame measures an explicit ReID workload; "
-            "the production pipeline still follows its interval/eligibility policy."
+            "the production pipeline still follows its interval/eligibility policy. "
+            "Use --exercise-recovery to inject a benchmark-only target loss; "
+            "it does not change the application pipeline."
         )
         return 0
     finally:

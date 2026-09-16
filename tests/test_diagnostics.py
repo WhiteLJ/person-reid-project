@@ -27,6 +27,42 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(diagnostics.processed_frames, 0)
         self.assertEqual(diagnostics.unique_track_ids, set())
 
+    def test_recovery_timing_and_workload_are_reported_separately(self) -> None:
+        diagnostics = RuntimeDiagnostics(enabled=True, log_interval_frames=100)
+        diagnostics.record_frame(
+            0.050,
+            0,
+            tracking_seconds=0.010,
+            recovery_seconds=0.020,
+            gallery_seconds=0.005,
+            render_seconds=0.003,
+            ui_seconds=0.002,
+            recovery_due=True,
+            recovery_candidate_count=12,
+            recovery_quality_valid_count=8,
+            recovery_reid_batch_count=2,
+            recovery_reid_seconds=0.015,
+        )
+        diagnostics.record_frame(
+            0.010,
+            1,
+            tracking_seconds=0.006,
+            recovery_seconds=0.001,
+            gallery_seconds=0.002,
+        )
+
+        summary = diagnostics.summary()
+        self.assertIn("frame_total_ms=30.00", summary)
+        self.assertIn("tracking_ms=8.00", summary)
+        self.assertIn("recovery_ms=10.50", summary)
+        self.assertIn("normal_frame_ms=10.00", summary)
+        self.assertIn("recovery_frame_ms=50.00", summary)
+        self.assertIn("recovery_frame_max_ms=50.00", summary)
+        self.assertIn("recovery_candidate_count=12", summary)
+        self.assertIn("recovery_quality_valid_count=8", summary)
+        self.assertIn("recovery_reid_batch_count=2", summary)
+        self.assertIn("recovery_reid_ms=15.00", summary)
+
 
 if __name__ == "__main__":
     unittest.main()
