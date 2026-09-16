@@ -6,16 +6,12 @@ from pathlib import Path
 import numpy as np
 
 from src.config import GalleryRecognitionConfig, ReIDConfig, ReIDRecoveryConfig
-from src.database import GalleryRepository
 from src.gallery import GalleryPerson, TargetGallery
 from src.gallery_recognition import (
     GalleryRecognitionCandidate,
     GalleryRecognitionCoordinator,
     assign_gallery_matches,
-    gallery_recognition_score,
-    gallery_reference_support_score,
 )
-from src.gallery_service import GalleryPersistenceService
 from src.models import SessionTarget, TargetState, Track
 from src.reid_frame_cache import ReIDFrameCache
 from src.target_manager import TargetManager
@@ -86,11 +82,6 @@ def _recognition_config(**overrides: object) -> GalleryRecognitionConfig:
         "recognition_threshold": 0.80,
         "recognition_margin": 0.05,
         "confirmation_hits": 1,
-        # Existing focused tests use one probe unless they specifically test
-        # the production multi-probe safety policy.
-        "probe_embeddings": 1,
-        "reference_support_threshold": 0.75,
-        "reference_support_top_k": 3,
     }
     values.update(overrides)
     return GalleryRecognitionConfig(**values)  # type: ignore[arg-type]
@@ -109,13 +100,6 @@ def _person(person_id: int, value: tuple[float, ...]) -> GalleryPerson:
         reference_embeddings=[vector.copy()],
         centroid=vector.copy(),
     )
-
-
-def _unit512(first: float, second: float = 0.0) -> np.ndarray:
-    vector = np.zeros((512,), dtype=np.float32)
-    vector[0] = first
-    vector[1] = second
-    return vector / np.linalg.norm(vector)
 
 
 def _gallery(*people: GalleryPerson) -> TargetGallery:
@@ -225,179 +209,6 @@ class GalleryRecognitionTests(unittest.TestCase):
         )
 
         self.assertEqual([(match.person_id, match.candidate.track.track_id) for match in matches], [(1, 11)])
-
-    def test_single_person_similar_stranger_fails_reference_support_gate(self) -> None:
-        reference_a = _unit512(1.0, 0.0)
-        reference_b = _unit512(0.8, 0.6)
-        reference_c = _unit512(0.8, -0.6)
-        person = GalleryPerson(
-            person_id=1,
-            label="Target P001",
-            reference_embeddings=[reference_a, reference_b, reference_c],
-            # The centroid of this symmetric bank is the first basis vector.
-            centroid=reference_a.copy(),
-        )
-        stranger = _unit512(0.85, 0.5267827)
-
-        self.assertGreater(
-            gallery_recognition_score(person, stranger),
-            0.80,
-        )
-        self.assertLess(
-            gallery_reference_support_score(person, stranger, top_k=3),
-            0.75,
-        )
-        matches = assign_gallery_matches(
-            [person],
-            [GalleryRecognitionCandidate(_track(11), stranger)],
-            recognition_threshold=0.80,
-            recognition_margin=0.05,
-            reference_support_threshold=0.75,
-            reference_support_top_k=3,
-        )
-
-        self.assertEqual(matches, [])
-
-    def test_reference_support_uses_top_k_mean_not_max(self) -> None:
-        reference_a = _unit((1, 0))
-        reference_b = _unit((0.8, 0.6))
-        reference_c = _unit((0.8, -0.6))
-        person = GalleryPerson(
-            person_id=1,
-            label="Target P001",
-            reference_embeddings=[reference_a, reference_b, reference_c],
-            centroid=reference_a.copy(),
-        )
-
-        self.assertAlmostEqual(
-            gallery_reference_support_score(person, reference_a, top_k=2),
-            0.9,
-            places=5,
-        )
-
-    def test_probe_bank_must_be_full_before_binding(self) -> None:
-        extractor = _FakeReIDExtractor([_unit((1, 0))])
-        manager = TargetManager()
-        gallery = _gallery(_person(1, (1, 0)))
-        coordinator = _coordinator(
-            manager,
-            gallery,
-            extractor,
-            probe_embeddings=3,
-        )
-
-        self.assertEqual(coordinator.process_frame(self.frame, [_track(7)], 0), [])
-        self.assertEqual(coordinator.probe_counts, {7: 1})
-        self.assertEqual(manager.targets, {})
-
-    def test_probe_bank_is_cleared_when_track_disappears(self) -> None:
-        extractor = _FakeReIDExtractor([_unit((1, 0))])
-        coordinator = _coordinator(
-            TargetManager(),
-            _gallery(_person(1, (1, 0))),
-            extractor,
-            probe_embeddings=3,
-        )
-
-        coordinator.process_frame(self.frame, [_track(7)], 0)
-        coordinator.process_frame(self.frame, [], 1)
-
-        self.assertEqual(coordinator.probe_counts, {})
-
-    def test_auto_binding_copies_gallery_references_without_current_probe(self) -> None:
-        gallery_person = GalleryPerson(
-            person_id=1,
-            label="Target P001",
-            reference_embeddings=[_unit((1, 0)), _unit((0.99, 0.1))],
-            centroid=_unit((1, 0)),
-        )
-        gallery = _gallery(gallery_person)
-        extractor = _FakeReIDExtractor([_unit((1, 0))])
-        manager = TargetManager()
-        coordinator = _coordinator(manager, gallery, extractor)
-
-        matches = coordinator.process_frame(self.frame, [_track(5)], 0)
-
-        self.assertEqual(len(matches), 1)
-        target = manager.target_for_track(5)
-        assert target is not None
-        self.assertEqual(len(target.reference_embeddings), 2)
-        self.assertTrue(
-            all(
-                not np.shares_memory(runtime_reference, gallery_reference)
-                for runtime_reference, gallery_reference in zip(
-                    target.reference_embeddings,
-                    gallery_person.reference_embeddings,
-                )
-            )
-        )
-
-    def test_restart_load_rejects_stranger_then_recognizes_existing_person(self) -> None:
-        database_path = Path(".test_tmp") / "gallery_recognition_restart.db"
-        database_path.parent.mkdir(parents=True, exist_ok=True)
-        database_path.unlink(missing_ok=True)
-
-        reference_a = _unit512(1.0, 0.0)
-        reference_b = _unit512(0.8, 0.6)
-        reference_c = _unit512(0.8, -0.6)
-        persisted_person = GalleryPerson(
-            person_id=1,
-            label="Target P001",
-            reference_embeddings=[reference_a, reference_b, reference_c],
-            centroid=reference_a.copy(),
-        )
-        repository = GalleryRepository(database_path)
-        try:
-            repository.initialize()
-            repository.save_person(persisted_person)
-
-            # A new process starts with a fresh manager/gallery/coordinator.
-            manager = TargetManager()
-            gallery = TargetGallery()
-            service = GalleryPersistenceService(gallery, repository)
-            service.load()
-            self.assertIsNone(gallery.session_target_for_person_id(1))
-
-            stranger = _unit512(0.85, 0.5267827)
-            extractor = _FakeReIDExtractor(
-                [stranger, stranger, stranger]
-                + [reference_a, reference_a, reference_a, reference_a]
-            )
-            coordinator = _coordinator(
-                manager,
-                gallery,
-                extractor,
-                probe_embeddings=3,
-                confirmation_hits=2,
-            )
-
-            for frame_index in range(3):
-                self.assertEqual(
-                    coordinator.process_frame(
-                        self.frame,
-                        [_track(10)],
-                        frame_index,
-                    ),
-                    [],
-                )
-            self.assertEqual(manager.targets, {})
-            coordinator.process_frame(self.frame, [], 3)
-
-            for frame_index in range(4, 8):
-                coordinator.process_frame(
-                    self.frame,
-                    [_track(11)],
-                    frame_index,
-                )
-
-            self.assertEqual(len(manager.targets), 1)
-            target = manager.target_for_track(11)
-            assert target is not None
-            self.assertEqual(gallery.person_for_session_target(target.target_id).person_id, 1)
-            self.assertEqual([person.person_id for person in gallery.all_people()], [1])
-            self.assertEqual(len(target.reference_embeddings), 3)
-        finally:
-            database_path.unlink(missing_ok=True)
 
     def test_frame_cache_is_not_reused_after_frame_changes(self) -> None:
         cache = ReIDFrameCache()

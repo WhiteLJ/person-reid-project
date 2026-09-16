@@ -16,7 +16,7 @@ from .config import (
 )
 from .gallery import GalleryPerson, TargetGallery
 from .models import Track
-from .reid import ReIDExtractor, cosine_similarity, normalize_embedding
+from .reid import ReIDExtractor, cosine_similarity
 from .reid_frame_cache import ReIDFrameCache
 from .reid_quality import assess_reid_quality
 from .target_manager import TargetManager
@@ -40,7 +40,6 @@ class GalleryRecognitionMatch:
     person_id: int
     candidate: GalleryRecognitionCandidate
     similarity: float
-    reference_support_score: float = 0.0
 
 
 @dataclass
@@ -57,90 +56,45 @@ def gallery_recognition_score(
     return cosine_similarity(person.centroid, embedding)
 
 
-def gallery_reference_support_score(
-    person: GalleryPerson,
-    embedding: np.ndarray,
-    top_k: int = 3,
-) -> float:
-    """Score a probe against the strongest ``top_k`` Gallery references.
-
-    This is deliberately an aggregate rather than a max score.  A single
-    anomalous historical reference therefore cannot provide all of the
-    identity evidence by itself.
-    """
-
-    if top_k < 1:
-        raise ValueError("top_k must be positive")
-    if not person.reference_embeddings:
-        raise ValueError(f"Gallery person {person.person_id} has no references")
-    similarities = sorted(
-        (
-            cosine_similarity(embedding, reference)
-            for reference in person.reference_embeddings
-        ),
-        reverse=True,
-    )
-    return float(np.mean(similarities[: min(top_k, len(similarities))]))
-
-
 def assign_gallery_matches(
     people: Sequence[GalleryPerson],
     candidates: Sequence[GalleryRecognitionCandidate],
     recognition_threshold: float,
     recognition_margin: float,
-    reference_support_threshold: float = 0.75,
-    reference_support_top_k: int = 3,
 ) -> list[GalleryRecognitionMatch]:
     """Return conservative, deterministic one-to-one Gallery assignments.
 
-    A pair must pass both the centroid threshold and the aggregated reference
-    support threshold before entering the original one-to-one assignment.
-    Person-side and candidate-side margins are then enforced on those eligible
-    pairs. If either side has no second eligible choice, that side passes
-    automatically; the absolute evidence gates still apply.
+    A person-side and candidate-side margin are both enforced.  If either
+    side has no second choice, that side passes automatically.  Scores use the
+    Gallery centroid rather than the maximum historical embedding score so a
+    single anomalous reference cannot force recognition.
     """
 
     if not 0.0 < recognition_threshold <= 1.0:
         raise ValueError("recognition_threshold must be in (0, 1]")
     if recognition_margin < 0.0:
         raise ValueError("recognition_margin must be non-negative")
-    if not 0.0 < reference_support_threshold <= 1.0:
-        raise ValueError("reference_support_threshold must be in (0, 1]")
-    if reference_support_top_k < 1:
-        raise ValueError("reference_support_top_k must be positive")
 
     person_list = list(people)
     candidate_list = list(candidates)
     if not person_list or not candidate_list:
         return []
 
-    scores: dict[tuple[int, int], tuple[float, float]] = {}
+    scores: dict[tuple[int, int], float] = {}
     for person_index, person in enumerate(person_list):
         for candidate_index, candidate in enumerate(candidate_list):
             try:
-                centroid_score = gallery_recognition_score(
-                    person, candidate.embedding
-                )
-                support_score = gallery_reference_support_score(
+                scores[(person_index, candidate_index)] = gallery_recognition_score(
                     person,
                     candidate.embedding,
-                    reference_support_top_k,
                 )
-                if (
-                    centroid_score >= recognition_threshold
-                    and support_score >= reference_support_threshold
-                ):
-                    scores[(person_index, candidate_index)] = (
-                        centroid_score,
-                        support_score,
-                    )
             except ValueError:
                 continue
 
     person_rankings: dict[int, list[tuple[float, int]]] = {}
     for person_index in range(len(person_list)):
         ranking = [
-            (score[0], candidate_index)
+            (score, candidate_index)
             for (row, candidate_index), score in scores.items()
             if row == person_index
         ]
@@ -152,7 +106,7 @@ def assign_gallery_matches(
     candidate_rankings: dict[int, list[tuple[float, int]]] = {}
     for candidate_index in range(len(candidate_list)):
         ranking = [
-            (score[0], person_index)
+            (score, person_index)
             for (person_index, column), score in scores.items()
             if column == candidate_index
         ]
@@ -166,6 +120,8 @@ def assign_gallery_matches(
         if not ranking:
             continue
         best_score, candidate_index = ranking[0]
+        if best_score < recognition_threshold:
+            continue
         person_margin_ok = (
             len(ranking) == 1
             or best_score - ranking[1][0] >= recognition_margin
@@ -201,9 +157,6 @@ def assign_gallery_matches(
                 person_id=person_list[person_index].person_id,
                 candidate=candidate_list[candidate_index],
                 similarity=score,
-                reference_support_score=scores[
-                    (person_index, candidate_index)
-                ][1],
             )
         )
     return matches
@@ -236,7 +189,6 @@ class GalleryRecognitionCoordinator:
         self.quality_config = quality_config or ReIDQualityConfig()
         self._track_ages: dict[int, int] = {}
         self._last_seen_frame: dict[int, int] = {}
-        self._probe_banks: dict[int, list[np.ndarray]] = {}
         self._pending: dict[tuple[int, int], _PendingRecognition] = {}
         self._last_recognition_frame: int | None = None
         self.recognized_count = 0
@@ -252,15 +204,6 @@ class GalleryRecognitionCoordinator:
     @property
     def track_ages(self) -> dict[int, int]:
         return dict(self._track_ages)
-
-    @property
-    def probe_counts(self) -> dict[int, int]:
-        """Return temporary per-Track probe counts for diagnostics/tests."""
-
-        return {
-            track_id: len(references)
-            for track_id, references in self._probe_banks.items()
-        }
 
     def process_frame(
         self,
@@ -312,31 +255,19 @@ class GalleryRecognitionCoordinator:
         if not candidates:
             return []
 
-        probe_candidates = self._update_probe_banks(candidates)
-        # A probe collection attempt still advances the interval, but it is
-        # not a final Gallery matching attempt until at least one Track has a
-        # full probe bank.  In particular, do not clear existing confirmation
-        # state merely because probes are still being collected.
+        # This is a real recognition attempt.  Only now may old pending
+        # proposals be invalidated by the current result.
         self._last_recognition_frame = frame_index
-        if not probe_candidates:
-            return []
-
         matches = assign_gallery_matches(
             people,
-            probe_candidates,
+            candidates,
             recognition_threshold=self.recognition_config.recognition_threshold,
             recognition_margin=self.recognition_config.recognition_margin,
-            reference_support_threshold=(
-                self.recognition_config.reference_support_threshold
-            ),
-            reference_support_top_k=self.recognition_config.reference_support_top_k,
         )
         accepted_pairs = {
             (match.person_id, match.candidate.track.track_id) for match in matches
         }
-        attempted_track_ids = {
-            candidate.track.track_id for candidate in probe_candidates
-        }
+        attempted_track_ids = {candidate.track.track_id for candidate in candidates}
         self._clear_failed_pending(accepted_pairs, attempted_track_ids)
 
         recognized: list[GalleryRecognitionMatch] = []
@@ -344,31 +275,15 @@ class GalleryRecognitionCoordinator:
             key = (match.person_id, match.candidate.track.track_id)
             pending = self._pending.get(key)
             hits = 1 if pending is None else pending.hits + 1
-            LOGGER.debug(
-                "GALLERY_RECOGNITION_EVIDENCE person=%s track=%d "
-                "centroid_similarity=%.4f reference_support=%.4f "
-                "probe_count=%d confirmation_hits=%d/%d",
-                _person_label(match.person_id),
-                match.candidate.track.track_id,
-                match.similarity,
-                match.reference_support_score,
-                len(self._probe_banks.get(match.candidate.track.track_id, ())),
-                hits,
-                self.recognition_config.confirmation_hits,
-            )
             if hits < self.recognition_config.confirmation_hits:
                 self._pending[key] = _PendingRecognition(hits=hits)
                 LOGGER.debug(
-                    "GALLERY_RECOGNITION_PENDING person=%s track=%d "
-                    "centroid_similarity=%.4f reference_support=%.4f "
-                    "probe_count=%d confirmation_hits=%d/%d",
+                    "GALLERY_RECOGNITION_PENDING person=%s track=%d hits=%d/%d similarity=%.4f",
                     _person_label(match.person_id),
                     match.candidate.track.track_id,
-                    match.similarity,
-                    match.reference_support_score,
-                    len(self._probe_banks.get(match.candidate.track.track_id, ())),
                     hits,
                     self.recognition_config.confirmation_hits,
+                    match.similarity,
                 )
                 continue
 
@@ -389,7 +304,6 @@ class GalleryRecognitionCoordinator:
             if track_id not in visible_ids:
                 del self._track_ages[track_id]
                 self._last_seen_frame.pop(track_id, None)
-                self._probe_banks.pop(track_id, None)
                 for key in [key for key in self._pending if key[1] == track_id]:
                     del self._pending[key]
 
@@ -402,43 +316,6 @@ class GalleryRecognitionCoordinator:
             else:
                 self._track_ages[track.track_id] = 1
             self._last_seen_frame[track.track_id] = frame_index
-
-    def _update_probe_banks(
-        self,
-        candidates: Sequence[GalleryRecognitionCandidate],
-    ) -> list[GalleryRecognitionCandidate]:
-        """Add quality-gated observations and return only mature probes."""
-
-        limit = self.recognition_config.probe_embeddings
-        mature: list[GalleryRecognitionCandidate] = []
-        for candidate in candidates:
-            try:
-                probe = normalize_embedding(candidate.embedding)
-                if probe.ndim != 1:
-                    raise ValueError("probe embedding must have shape (D,)")
-            except (TypeError, ValueError):
-                # The extractor contract should already prevent this, but an
-                # invalid probe must never become identity evidence.
-                LOGGER.debug(
-                    "GALLERY_PROBE_REJECTED track=%d reason=invalid_embedding",
-                    candidate.track.track_id,
-                )
-                continue
-
-            bank = self._probe_banks.setdefault(candidate.track.track_id, [])
-            bank.append(probe.astype(np.float32, copy=True))
-            if len(bank) > limit:
-                del bank[: len(bank) - limit]
-            if len(bank) < limit:
-                continue
-
-            probe_centroid = normalize_embedding(
-                np.mean(np.stack(bank, axis=0), axis=0)
-            ).astype(np.float32, copy=True)
-            mature.append(
-                GalleryRecognitionCandidate(candidate.track, probe_centroid)
-            )
-        return mature
 
     def _build_candidates(
         self,
@@ -549,7 +426,6 @@ class GalleryRecognitionCoordinator:
                     centroid=person.centroid,
                     frame_index=frame_index,
                     max_reference_embeddings=self.recovery_config.max_reference_embeddings,
-                    include_candidate=False,
                 )
                 created_target = True
             except (TypeError, ValueError):
@@ -582,7 +458,6 @@ class GalleryRecognitionCoordinator:
             track.track_id,
             match.similarity,
         )
-        self._probe_banks.pop(track.track_id, None)
         return True
 
     def _crop(self, frame: np.ndarray, track: Track) -> np.ndarray | None:
