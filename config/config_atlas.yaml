@@ -27,7 +27,7 @@ runtime:
   log_level: "INFO"
 
 tracking:
-  tracker: "config/trackers/botsort_baseline.yaml"
+  tracker: "config/trackers/botsort_fixed_camera.yaml"
   persist: true
   show_track_id: true
 
