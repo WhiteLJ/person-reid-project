@@ -91,6 +91,8 @@ class GalleryEnrichmentConfig:
     """Runtime policy for explicitly enrolled Gallery feature enrichment."""
 
     post_recovery_stable_frames: int = 30
+    max_reference_embeddings: int = 8
+    duplicate_similarity_threshold: float = 0.97
 
 
 @dataclass(frozen=True)
@@ -361,6 +363,21 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         raise ValueError(
             "gallery_enrichment.post_recovery_stable_frames must be non-negative"
         )
+    gallery_max_reference_embeddings = int(
+        gallery_enrichment.get("max_reference_embeddings", 8)
+    )
+    duplicate_similarity_threshold = float(
+        gallery_enrichment.get("duplicate_similarity_threshold", 0.97)
+    )
+    if gallery_max_reference_embeddings < 1:
+        raise ValueError(
+            "gallery_enrichment.max_reference_embeddings must be positive"
+        )
+    if not 0.0 < duplicate_similarity_threshold <= 1.0:
+        raise ValueError(
+            "gallery_enrichment.duplicate_similarity_threshold must be greater "
+            "than 0 and at most 1"
+        )
 
     min_track_confidence = float(
         reid_quality.get("min_track_confidence", 0.35)
@@ -476,6 +493,8 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         ),
         gallery_enrichment=GalleryEnrichmentConfig(
             post_recovery_stable_frames=post_recovery_stable_frames,
+            max_reference_embeddings=gallery_max_reference_embeddings,
+            duplicate_similarity_threshold=duplicate_similarity_threshold,
         ),
         reid_quality=ReIDQualityConfig(
             min_track_confidence=min_track_confidence,

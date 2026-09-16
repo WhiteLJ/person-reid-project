@@ -52,6 +52,7 @@ class ReferenceUpdateEvent:
     frame_index: int
     reference_embeddings: tuple[np.ndarray, ...]
     centroid: np.ndarray
+    accepted_embedding: np.ndarray
     target_state: TargetState = TargetState.ACTIVE
 
 
@@ -388,6 +389,7 @@ class TargetRecoveryCoordinator:
                                     for reference in target.reference_embeddings
                                 ),
                                 centroid=target.centroid.copy(),
+                                accepted_embedding=embedding.copy(),
                                 target_state=target.state,
                             )
                         )

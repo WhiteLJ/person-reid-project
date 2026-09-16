@@ -70,12 +70,24 @@ def _second_embedding() -> np.ndarray:
     return value
 
 
-def _event(target: SessionTarget, references: list[np.ndarray]) -> ReferenceUpdateEvent:
+def _basis_embedding(index: int) -> np.ndarray:
+    value = np.zeros((512,), dtype=np.float32)
+    value[index] = 1.0
+    return value
+
+
+def _event(
+    target: SessionTarget,
+    references: list[np.ndarray],
+    accepted: np.ndarray | None = None,
+) -> ReferenceUpdateEvent:
+    accepted_embedding = references[-1] if accepted is None else accepted
     return ReferenceUpdateEvent(
         target_id=target.target_id,
         frame_index=20,
         reference_embeddings=tuple(reference.copy() for reference in references),
         centroid=references[-1].copy(),
+        accepted_embedding=accepted_embedding.copy(),
         target_state=TargetState.ACTIVE,
     )
 
@@ -154,6 +166,95 @@ class GalleryPersistenceServiceTests(unittest.TestCase):
         in_memory = self.gallery.get(person.person_id)
         assert in_memory is not None
         self.assertEqual(len(in_memory.reference_embeddings), 2)
+
+    def test_enrichment_uses_only_the_new_accepted_embedding(self) -> None:
+        target = _target(1)
+        person = self.service.enroll(target)
+        unrelated_runtime_reference = np.zeros((512,), dtype=np.float32)
+        unrelated_runtime_reference[2] = 1.0
+
+        updated = self.service.enrich_reference_update(
+            _event(
+                target,
+                [_embedding(), unrelated_runtime_reference],
+                accepted=_second_embedding(),
+            )
+        )
+
+        self.assertTrue(updated)
+        persisted = self.repository.load_all()[0]
+        self.assertEqual(len(persisted.reference_embeddings), 2)
+        self.assertTrue(
+            np.allclose(persisted.reference_embeddings[0], _embedding())
+        )
+        self.assertTrue(
+            np.allclose(persisted.reference_embeddings[1], _second_embedding())
+        )
+        self.assertFalse(
+            np.allclose(
+                persisted.reference_embeddings[1], unrelated_runtime_reference
+            )
+        )
+        self.assertEqual(persisted.person_id, person.person_id)
+
+    def test_persistent_representatives_survive_restart(self) -> None:
+        target = _target(1)
+        person = self.service.enroll(target)
+
+        # Simulate accepted runtime events from several distinct pose
+        # clusters.  The event's runtime bank is deliberately irrelevant to
+        # persistent enrichment; only accepted_embedding is consumed.
+        for index in range(1, 8):
+            candidate = _basis_embedding(index)
+            self.assertTrue(
+                self.service.enrich_reference_update(
+                    _event(target, [_embedding(), candidate], accepted=candidate)
+                )
+            )
+
+        # Repeated late-pose samples are rejected as duplicates and cannot
+        # replace the representative bank's anchor or varied references.
+        late_pose = _basis_embedding(7)
+        late_pose[8] = 0.01
+        late_pose /= np.linalg.norm(late_pose)
+        self.assertFalse(
+            self.service.enrich_reference_update(
+                _event(target, [_embedding(), late_pose], accepted=late_pose)
+            )
+        )
+
+        persisted_before_restart = self.repository.load_all()[0]
+        self.assertEqual(persisted_before_restart.person_id, person.person_id)
+        self.assertEqual(len(persisted_before_restart.reference_embeddings), 8)
+
+        restarted_repository = GalleryRepository(self.database_path)
+        restarted_gallery = TargetGallery()
+        restarted_service = GalleryPersistenceService(
+            restarted_gallery,
+            restarted_repository,
+        )
+        restarted_service.load()
+        restored = restarted_gallery.get(person.person_id)
+
+        assert restored is not None
+        self.assertEqual(len(restored.reference_embeddings), 8)
+        self.assertTrue(np.allclose(restored.reference_embeddings[0], _embedding()))
+        self.assertTrue(
+            all(
+                any(
+                    np.allclose(reference, _basis_embedding(index))
+                    for reference in restored.reference_embeddings
+                )
+                for index in range(1, 8)
+            )
+        )
+        self.assertTrue(
+            np.allclose(
+                restored.centroid,
+                persisted_before_restart.centroid,
+            )
+        )
+        self.assertIsNone(restarted_gallery.person_for_session_target(target.target_id))
 
     def test_enrichment_respects_post_recovery_stable_cooldown(self) -> None:
         service = GalleryPersistenceService(

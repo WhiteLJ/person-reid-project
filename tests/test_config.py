@@ -51,6 +51,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.reid_recovery.recovery_confirmation_hits, 2)
         self.assertEqual(config.reid_recovery.recovery_pending_max_age_frames, 60)
         self.assertEqual(config.gallery_enrichment.post_recovery_stable_frames, 30)
+        self.assertEqual(config.gallery_enrichment.max_reference_embeddings, 8)
+        self.assertAlmostEqual(
+            config.gallery_enrichment.duplicate_similarity_threshold, 0.97
+        )
         self.assertAlmostEqual(config.reid_quality.min_track_confidence, 0.35)
         self.assertAlmostEqual(config.reid_quality.max_edge_truncation_ratio, 0.30)
         self.assertAlmostEqual(config.reid_quality.max_person_overlap_ratio, 0.60)

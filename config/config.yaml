@@ -57,6 +57,8 @@ reid_recovery:
 gallery_enrichment:
   # Conservative engineering starting value; not a universal optimum.
   post_recovery_stable_frames: 30
+  max_reference_embeddings: 8
+  duplicate_similarity_threshold: 0.97
 
 reid_quality:
   # Crowded-scene engineering starting values; not universal optima.

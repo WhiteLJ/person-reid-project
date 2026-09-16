@@ -8,6 +8,10 @@ from logging import getLogger
 from .database import GalleryRepository, RepositoryError
 from .config import GalleryEnrichmentConfig
 from .gallery import GalleryPerson, TargetGallery
+from .gallery_reference_bank import (
+    normalized_centroid,
+    update_persistent_reference_bank,
+)
 from .models import SessionTarget, TargetState
 from .target_recovery import ReferenceUpdateEvent
 
@@ -114,7 +118,13 @@ class GalleryPersistenceService:
                 self._post_recovery_blocked.discard(target_id)
 
     def enrich_reference_update(self, event: ReferenceUpdateEvent) -> bool:
-        """Persist one accepted runtime reference snapshot when policy allows it."""
+        """Persist one accepted reference using the persistent bank policy.
+
+        ``event.reference_embeddings`` is the complete bounded runtime bank and
+        intentionally is not copied into persistent storage.  Only the newly
+        accepted embedding is considered as an incremental candidate so the
+        runtime FIFO policy cannot evict useful long-term Gallery references.
+        """
 
         target_id = event.target_id
         if target_id not in self._explicitly_enrolled_target_ids:
@@ -141,10 +151,28 @@ class GalleryPersistenceService:
             return False
 
         try:
+            persistent_references, changed = update_persistent_reference_bank(
+                person.reference_embeddings,
+                event.accepted_embedding,
+                max_reference_embeddings=(
+                    self.enrichment_config.max_reference_embeddings
+                ),
+                duplicate_similarity_threshold=(
+                    self.enrichment_config.duplicate_similarity_threshold
+                ),
+            )
+            if not changed:
+                LOGGER.debug(
+                    "GALLERY_ENRICHMENT_SKIPPED target=%d person=%d "
+                    "reason=duplicate_or_not_more_diverse",
+                    target_id,
+                    person.person_id,
+                )
+                return False
             snapshot = self.gallery.feature_snapshot(
                 person.person_id,
-                event.reference_embeddings,
-                event.centroid,
+                persistent_references,
+                normalized_centroid(persistent_references),
             )
         except (KeyError, TypeError, ValueError) as exc:
             LOGGER.error(

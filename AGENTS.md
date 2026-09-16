@@ -156,11 +156,16 @@ and recovery-pending states never update persistent Gallery features. Initial S-
 enrollment is immediate, while a target must remain stably ACTIVE for the configured
 post-recovery cooldown before enrichment resumes after recovery. A target recognized
 automatically from the persisted Gallery is not eligible until the user explicitly G
-enrolls it in the current process. Repository feature replacement is an atomic
-SQLite transaction, followed by applying the same validated deep-copied snapshot to
-memory; any unexpected apply failure must be logged and repaired from Repository.
-MVP-8.2 remains single-threaded, does not change the SQLite schema, and does not
-automatically update Gallery features for automatically recognized targets.
+enrolls it in the current process. The SessionTarget bank remains an 8-entry FIFO
+runtime bank for short-term recovery, while persistent Gallery enrichment consumes
+only the newly accepted embedding and maintains a separate bounded representative
+bank: index zero is the enrollment anchor, near-duplicates are rejected, and a full
+bank replaces only a more redundant non-anchor when the candidate adds diversity.
+Repository feature replacement is an atomic SQLite transaction, followed by applying
+the same validated deep-copied snapshot to memory; any unexpected apply failure must
+be logged and repaired from Repository. MVP-8.2 remains single-threaded, does not
+change the SQLite schema, and does not automatically update Gallery features for
+automatically recognized targets.
 
 ---
 

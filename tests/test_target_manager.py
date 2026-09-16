@@ -127,6 +127,34 @@ class TargetManagerTests(unittest.TestCase):
                 for reference in target.reference_embeddings)
         )
 
+    def test_runtime_reference_bank_remains_bounded_fifo(self) -> None:
+        manager = TargetManager()
+        target = manager.select(self.track_a, _embedding(1, 0), frame_index=0)
+
+        self.assertTrue(
+            manager.add_reference(
+                target.target_id,
+                _embedding(0.90, 0.435),
+                frame_index=1,
+                max_reference_embeddings=2,
+                reference_update_threshold=0.80,
+            )
+        )
+        self.assertTrue(
+            manager.add_reference(
+                target.target_id,
+                _embedding(0.85, 0.527),
+                frame_index=2,
+                max_reference_embeddings=2,
+                reference_update_threshold=0.80,
+            )
+        )
+
+        self.assertEqual(len(target.reference_embeddings), 2)
+        self.assertFalse(
+            np.allclose(target.reference_embeddings[0], _embedding(1, 0))
+        )
+
     def test_target_reference_banks_are_independent(self) -> None:
         manager = TargetManager()
         target_a = manager.select(self.track_a, _embedding(1, 0))

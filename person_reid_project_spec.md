@@ -1676,12 +1676,22 @@ reference 更新由已有 ReID 流程产生，不为 Gallery enrichment 额外�
 enrichment 资格；用户随后按 `G` 时，只为已有的 P001 等目标授予资格，不创建
 新的 GalleryPerson。
 
-Gallery 更新采用当前 SessionTarget 的有界 reference bank 和 normalized centroid
-作为 deep-copied feature snapshot。Repository 先在同一 SQLite transaction 中
-替换该 person 的 centroid 和 embedding rows；事务成功后才将同一份已校验 snapshot
-应用到内存 TargetGallery。数据库失败时保留旧的内存和磁盘版本；若内存应用发生
-异常则记录 consistency error，并从 Repository 重新加载该 person 恢复一致性。
-`person_id`、label、session-target mapping 和 `next_person_id` 均不改变。
+SessionTarget 的 reference bank 继续服务短期 LOST/Recovery，保持最多 8 条的
+FIFO 运行期策略；持久化 Gallery 不直接镜像这组 runtime references。每次只使用
+`ReferenceUpdateEvent.accepted_embedding` 作为增量候选，在当前持久化 bank 上维护
+最多 8 条代表性 reference：入库时的 index 0 是受保护 anchor，候选与任一已有
+reference 的 cosine 达到 `duplicate_similarity_threshold` 时丢弃；bank 已满且
+候选具有新信息时，只能替换最冗余的非 anchor reference，且候选冗余必须严格更低。
+bank 真正变化后重新计算 normalized centroid，并构造 deep-copied feature snapshot。
+Repository 先在同一 SQLite transaction 中替换该 person 的 centroid 和 embedding
+rows；事务成功后才将同一份已校验 snapshot 应用到内存 TargetGallery。数据库失败
+时保留旧的内存和磁盘版本；若内存应用发生异常则记录 consistency error，并从
+Repository 重新加载该 person 恢复一致性。`person_id`、label、session-target
+mapping 和 `next_person_id` 均不改变。
+
+默认工程参数为 `gallery_enrichment.max_reference_embeddings=8` 和
+`gallery_enrichment.duplicate_similarity_threshold=0.97`；它们是可调工程初值，
+不声明为通用最优值。
 
 目标从 LOST 恢复后，必须连续 ACTIVE 达到配置的
 `gallery_enrichment.post_recovery_stable_frames`（初始工程值 30）才恢复 enrichment；
@@ -1689,7 +1699,7 @@ Gallery 更新采用当前 SessionTarget 的有界 reference bank 和 normalized
 S->G 入库。所有数值均为可调工程初值，不声明为通用最优值。
 
 验收：S 后立即 G 可以创建 P001；目标继续稳定活动并接受新 reference 后，P001 的
-embedding 数量逐步增加且不超过 runtime 最大值；关闭遮挡、LOST、recovery pending
+embedding 数量逐步增加且不超过持久化 bank 的最大值；关闭遮挡、LOST、recovery pending
 或低质量期间不增加；重启后自动识别 P001 仍不会自动更新其持久化特征，除非本次
 运行用户再次明确 G。
 

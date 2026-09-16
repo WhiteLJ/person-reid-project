@@ -47,7 +47,13 @@ MVP-8.2 adds safe persistent Gallery feature enrichment:
 
 - S then G can create a Gallery person immediately, even with one reference;
 - later accepted ACTIVE runtime references can update that explicitly enrolled
-  person's bounded Gallery snapshot without another OSNet inference;
+  person's bounded representative Gallery bank without another OSNet inference;
+- the SessionTarget runtime bank remains an 8-entry FIFO for short-term recovery,
+  while the persistent Gallery bank is maintained independently and does not use
+  FIFO eviction;
+- the enrollment-time reference is a protected anchor, near-duplicate references
+  are rejected, and a full bank replaces only a more redundant non-anchor when the
+  new reference adds more diversity;
 - each accepted reference update is consumed once, and SQLite feature replacement
   is atomic before the in-memory snapshot is replaced;
 - after recovery, enrichment waits for the configured stable ACTIVE cooldown;
@@ -149,6 +155,8 @@ reid_recovery:
 gallery_enrichment:
   # Engineering starting value, not a universal optimum.
   post_recovery_stable_frames: 30
+  max_reference_embeddings: 8
+  duplicate_similarity_threshold: 0.97
 
 reid_quality:
   min_track_confidence: 0.35
@@ -231,6 +239,16 @@ This is an offline management tool. Close the running main application before
 `remove` or `clear`, otherwise its in-memory `TargetGallery` can differ from the
 SQLite database until restart. Removing a Gallery person does not delete an
 existing in-memory SessionTarget in a running application.
+
+To inspect persistent reference diversity without running inference or changing
+the database:
+
+```bash
+python -m tools.gallery_reference_diagnose --config config/config.yaml --person P001
+```
+
+The tool prints the reference count, centroid-to-reference similarities, and the
+full reference-to-reference cosine matrix.
 
 ## Tests
 

@@ -195,6 +195,9 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(events[0].frame_index, 1)
         self.assertEqual(len(events[0].reference_embeddings), 2)
         self.assertEqual(events[0].centroid.shape, (2,))
+        self.assertTrue(
+            np.allclose(events[0].accepted_embedding, np.asarray((1, 0)))
+        )
         self.assertEqual(coordinator.drain_reference_updates(), ())
 
     def test_rejected_reference_emits_no_update_event(self) -> None:
