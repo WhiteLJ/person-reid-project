@@ -123,6 +123,10 @@ and two-sided margin, deterministic one-to-one matching, and configurable repeat
 confirmation before binding. A loaded GalleryPerson is occupied while attached to
 either an ACTIVE or LOST SessionTarget. An already selected but Gallery-unbound
 SessionTarget must be attached in place rather than replaced by a second target.
+When recognition creates a new SessionTarget, it must call the same
+`TargetManager.select()` path as manual selection with only the confirmed live
+candidate embedding; persisted Gallery references are cold-start evidence and
+must not be copied into the runtime bank.
 Track-age and recognition-interval controls limit ReID work; no Gallery recognition
 is performed when the Gallery is empty or no eligible candidates exist.
 

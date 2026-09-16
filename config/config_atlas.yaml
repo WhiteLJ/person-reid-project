@@ -58,7 +58,7 @@ reid_recovery:
 gallery_enrichment:
   post_recovery_stable_frames: 30
   max_reference_embeddings: 8
-  duplicate_similarity_threshold: 0.97
+  duplicate_similarity_threshold: 0.95
 
 reid_quality:
   min_track_confidence: 0.35

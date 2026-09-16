@@ -1611,8 +1611,10 @@ person Track 才是候选；成功 Recovery、已被 ACTIVE SessionTarget 占用
 
 识别成功时，如果当前 Track 已由用户手动创建了未绑定 Gallery 的 SessionTarget，
 就在该 SessionTarget 上 attach 现有 `person_id`；否则创建新的 SessionTarget，并
-从 Gallery references 与当前 candidate embedding 深拷贝初始化 runtime reference
-bank。`TargetGallery.attach_session_target()` 严格保持 target/person 一对一，Track
+仅使用已经确认的当前 candidate embedding，调用与手动 S 相同的
+`TargetManager.select()` 初始化单条 runtime reference bank。Persistent Gallery
+references 只用于 cold-start 判定，不灌入新的 SessionTarget。
+`TargetGallery.attach_session_target()` 严格保持 target/person 一对一，Track
 ID 改变不影响关系。MVP-8 不自动更新 SQLite 中的 Gallery features。
 
 默认初始工程参数为 `recognition_interval_frames=10`、`min_track_age_frames=5`、

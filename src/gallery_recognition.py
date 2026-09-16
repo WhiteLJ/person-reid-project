@@ -419,13 +419,13 @@ class GalleryRecognitionCoordinator:
         created_target = False
         if existing_target is None:
             try:
-                existing_target = self.target_manager.select_from_reference_bank(
-                    track=track,
-                    candidate_embedding=match.candidate.embedding,
-                    reference_embeddings=person.reference_embeddings,
-                    centroid=person.centroid,
-                    frame_index=frame_index,
-                    max_reference_embeddings=self.recovery_config.max_reference_embeddings,
+                # Gallery features are only cold-start recognition evidence.
+                # Once recognized, initialize the runtime target exactly like
+                # manual S selection: one live reference and its centroid.
+                existing_target = self.target_manager.select(
+                    track,
+                    match.candidate.embedding,
+                    frame_index,
                 )
                 created_target = True
             except (TypeError, ValueError):
@@ -452,8 +452,10 @@ class GalleryRecognitionCoordinator:
             return False
 
         LOGGER.info(
-            "GALLERY_RECOGNIZED person=%s target=%d track=%d similarity=%.4f",
-            _person_label(person.person_id),
+            "GALLERY_RECOGNIZED frame=%d person_id=%d target_id=%d "
+            "track_id=%d similarity=%.4f",
+            frame_index,
+            person.person_id,
             existing_target.target_id,
             track.track_id,
             match.similarity,

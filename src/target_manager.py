@@ -220,6 +220,12 @@ class TargetManager:
             if current_track_id in visible_ids:
                 target.missing_frames = 0
                 target.last_track_id = current_track_id
+                LOGGER.debug(
+                    "TARGET_TRACK_PRESENT frame=%d target_id=%d track_id=%d",
+                    frame_index,
+                    target.target_id,
+                    current_track_id,
+                )
                 continue
 
             target.missing_frames += 1
@@ -233,11 +239,11 @@ class TargetManager:
             target.last_recovery_frame = None
             self.target_lost_count += 1
             LOGGER.info(
-                "TARGET_LOST target=%d old_track_id=%d missing_frames=%d frame=%d",
+                "TARGET_LOST frame=%d target_id=%d old_track_id=%d missing_frames=%d",
+                frame_index,
                 target.target_id,
                 old_track_id,
                 target.missing_frames,
-                frame_index,
             )
 
     def reference_update_due(
@@ -356,7 +362,9 @@ class TargetManager:
         )
         self.target_recovered_count += 1
         LOGGER.info(
-            "TARGET_RECOVERED target=%d old_track_id=%s new_track_id=%d similarity=%.4f",
+            "TARGET_RECOVERED frame=%d target_id=%d old_track_id=%s "
+            "new_track_id=%d similarity=%.4f",
+            frame_index,
             target_id,
             old_track_id,
             track.track_id,

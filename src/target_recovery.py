@@ -425,7 +425,8 @@ class TargetRecoveryCoordinator:
                 )
                 self.recovery_pending_count += 1
                 LOGGER.debug(
-                    "TARGET_RECOVERY_PENDING target=%d track=%d hits=%d/%d similarity=%.4f",
+                    "TARGET_RECOVERY_PENDING frame=%d target_id=%d candidate_track_id=%d hits=%d/%d similarity=%.4f",
+                    frame_index,
                     match.target_id,
                     match.candidate.track.track_id,
                     hits,

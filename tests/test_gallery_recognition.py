@@ -351,19 +351,103 @@ class GalleryRecognitionTests(unittest.TestCase):
 
     def test_recognized_target_has_copied_runtime_references(self) -> None:
         manager = TargetManager()
-        source = _person(1, (1, 0))
+        live_embedding = _unit((0.96, 0.28))
+        historical_references = [
+            _unit((1.0, 0.0)),
+            _unit((0.99, 0.14)),
+            _unit((0.98, 0.20)),
+            _unit((0.97, 0.24)),
+            _unit((0.96, 0.28)),
+            _unit((0.95, 0.31)),
+            _unit((0.94, 0.34)),
+            _unit((0.93, 0.37)),
+        ]
+        source = GalleryPerson(
+            person_id=1,
+            label="Target P001",
+            reference_embeddings=[reference.copy() for reference in historical_references],
+            centroid=_unit((1.0, 0.0)),
+        )
         gallery = _gallery(source)
-        extractor = _FakeReIDExtractor([_unit((1, 0))])
+        extractor = _FakeReIDExtractor([live_embedding])
         coordinator = _coordinator(manager, gallery, extractor)
 
-        coordinator.process_frame(self.frame, [_track(5)], 0)
+        matches = coordinator.process_frame(self.frame, [_track(5)], 0)
         target = manager.target_for_track(5)
         assert target is not None
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(len(target.reference_embeddings), 1)
+        np.testing.assert_allclose(target.reference_embeddings[0], live_embedding)
+        np.testing.assert_allclose(target.centroid, live_embedding)
+        self.assertEqual(target.last_reference_frame, 0)
+        self.assertEqual(target.current_track_id, 5)
+
         target.reference_embeddings[0][0] = 0.0
         target.centroid[0] = 0.0
 
         self.assertNotEqual(float(source.reference_embeddings[0][0]), 0.0)
         self.assertNotEqual(float(source.centroid[0]), 0.0)
+
+    def test_automatic_target_initialization_matches_manual_selection(self) -> None:
+        live_embedding = _unit((0.96, 0.28))
+        manual_manager = TargetManager()
+        manual_target = manual_manager.select(_track(5), live_embedding, frame_index=0)
+
+        historical_references = [
+            _unit((1.0, 0.0)) for _ in range(8)
+        ]
+        gallery = _gallery(
+            GalleryPerson(
+                person_id=1,
+                label="Target P001",
+                reference_embeddings=historical_references,
+                centroid=_unit((1.0, 0.0)),
+            )
+        )
+        automatic_manager = TargetManager()
+        extractor = _FakeReIDExtractor([live_embedding])
+        coordinator = _coordinator(automatic_manager, gallery, extractor)
+
+        matches = coordinator.process_frame(self.frame, [_track(5)], 0)
+        automatic_target = automatic_manager.target_for_track(5)
+
+        self.assertEqual(len(matches), 1)
+        assert automatic_target is not None
+        self.assertEqual(len(manual_target.reference_embeddings), 1)
+        self.assertEqual(len(automatic_target.reference_embeddings), 1)
+        np.testing.assert_allclose(
+            automatic_target.reference_embeddings[0],
+            manual_target.reference_embeddings[0],
+        )
+        np.testing.assert_allclose(automatic_target.centroid, manual_target.centroid)
+        self.assertEqual(
+            automatic_target.last_reference_frame,
+            manual_target.last_reference_frame,
+        )
+
+        follow_up = _unit((0.92, 0.39))
+        for manager, target in (
+            (manual_manager, manual_target),
+            (automatic_manager, automatic_target),
+        ):
+            self.assertTrue(
+                manager.add_reference(
+                    target.target_id,
+                    follow_up,
+                    frame_index=15,
+                    max_reference_embeddings=8,
+                    reference_update_threshold=0.80,
+                )
+            )
+        self.assertEqual(
+            len(manual_target.reference_embeddings),
+            len(automatic_target.reference_embeddings),
+        )
+        np.testing.assert_allclose(manual_target.centroid, automatic_target.centroid)
+        self.assertEqual(
+            manual_target.last_reference_frame,
+            automatic_target.last_reference_frame,
+        )
 
     def test_confirmation_pending_survives_intermediate_frames(self) -> None:
         extractor = _FakeReIDExtractor(
