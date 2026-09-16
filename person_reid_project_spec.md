@@ -1257,9 +1257,11 @@ reid_recovery:
   reference_update_interval_frames: 15
   recovery_interval_frames: 5
   max_reference_embeddings: 8
-  recovery_threshold: 0.75
+  recovery_threshold: 0.85
   recovery_margin: 0.05
   reference_update_threshold: 0.80
+  recovery_reference_support_threshold: 0.80
+  recovery_reference_support_top_k: 3
   recovery_min_track_age_frames: 3
   recovery_confirmation_hits: 2
   recovery_pending_max_age_frames: 60
@@ -1516,11 +1518,15 @@ missing_frames
 ACTIVE 目标按 `reference_update_interval_frames` 低频更新 reference，但新特征
 必须达到 `reference_update_threshold` 的 centroid 一致性检查，并受
 `max_reference_embeddings` 限制。current Track 连续缺失达到
-`lost_grace_frames` 后进入 LOST；恢复时只检查未被 ACTIVE target 占用的候选，按
-batch ReID 与 normalized centroid similarity 进行一对一匹配。匹配必须同时满足
-`recovery_threshold`；存在 second-best 时，target-side 和 candidate-side 都必须
-满足 `best - second >= recovery_margin`，单候选/单目标的一侧自动通过 margin。
-不满足条件时保持 LOST。
+  `lost_grace_frames` 后进入 LOST；恢复时只检查未被 ACTIVE target 占用的候选，按
+  batch ReID 与 normalized centroid similarity 加 reference-support evidence 进行
+  一对一匹配。匹配必须同时满足 `recovery_threshold` 与
+  `recovery_reference_support_threshold`；reference support 是候选与 runtime
+  reference bank 中 top-k 相似度的均值（reference 不足 k 条时使用全部）。存在
+  second-best 时，target-side 和 candidate-side 都必须满足
+  `best - second >= recovery_margin`，单候选/单目标的一侧自动通过 margin。任一
+  绝对证据或 margin 不满足时保持 LOST；LOST 不要求最终必须恢复，允许无限期保持。
+  Recovery 成功只重新绑定 Track，不立即把候选 embedding 加入 runtime reference bank。
 
 验收：目标离开再返回，即使 Track ID 变了也恢复原 SessionTarget 的锁定；短暂
 遮挡在 grace period 内不触发重绑定；错误候选或模糊匹配不强行恢复。

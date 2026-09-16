@@ -148,8 +148,11 @@ database:
   path: "database/person_reid.db"
 
 reid_recovery:
-  # Conservative engineering starting value based on observed video scores.
-  recovery_threshold: 0.80
+  # Conservative engineering starting values based on the current test video;
+  # these are not universal optima.
+  recovery_threshold: 0.85
+  recovery_reference_support_threshold: 0.80
+  recovery_reference_support_top_k: 3
   recovery_min_track_age_frames: 3
   recovery_confirmation_hits: 2
   recovery_pending_max_age_frames: 60

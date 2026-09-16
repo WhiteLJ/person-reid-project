@@ -81,6 +81,8 @@ class ReIDRecoveryConfig:
     recovery_threshold: float
     recovery_margin: float
     reference_update_threshold: float
+    recovery_reference_support_threshold: float = 0.80
+    recovery_reference_support_top_k: int = 3
     recovery_min_track_age_frames: int = 3
     recovery_confirmation_hits: int = 2
     recovery_pending_max_age_frames: int = 60
@@ -311,11 +313,17 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         reid_recovery.get("max_reference_embeddings", 8)
     )
     recovery_threshold = float(
-        reid_recovery.get("recovery_threshold", 0.75)
+        reid_recovery.get("recovery_threshold", 0.85)
     )
     recovery_margin = float(reid_recovery.get("recovery_margin", 0.05))
     reference_update_threshold = float(
         reid_recovery.get("reference_update_threshold", 0.80)
+    )
+    recovery_reference_support_threshold = float(
+        reid_recovery.get("recovery_reference_support_threshold", 0.80)
+    )
+    recovery_reference_support_top_k = int(
+        reid_recovery.get("recovery_reference_support_top_k", 3)
     )
     recovery_min_track_age_frames = int(
         reid_recovery.get("recovery_min_track_age_frames", 3)
@@ -339,9 +347,17 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     for name, value in (
         ("recovery_threshold", recovery_threshold),
         ("reference_update_threshold", reference_update_threshold),
+        (
+            "recovery_reference_support_threshold",
+            recovery_reference_support_threshold,
+        ),
     ):
         if not 0.0 < value <= 1.0:
             raise ValueError(f"reid_recovery.{name} must be greater than 0 and at most 1")
+    if recovery_reference_support_top_k < 1:
+        raise ValueError(
+            "reid_recovery.recovery_reference_support_top_k must be positive"
+        )
     if recovery_margin < 0.0:
         raise ValueError("reid_recovery.recovery_margin must be non-negative")
     if recovery_min_track_age_frames < 1:
@@ -495,6 +511,8 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             recovery_threshold=recovery_threshold,
             recovery_margin=recovery_margin,
             reference_update_threshold=reference_update_threshold,
+            recovery_reference_support_threshold=recovery_reference_support_threshold,
+            recovery_reference_support_top_k=recovery_reference_support_top_k,
             recovery_min_track_age_frames=recovery_min_track_age_frames,
             recovery_confirmation_hits=recovery_confirmation_hits,
             recovery_pending_max_age_frames=recovery_pending_max_age_frames,

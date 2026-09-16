@@ -334,8 +334,18 @@ class TargetManager:
         frame_index: int,
         max_reference_embeddings: int,
         reference_update_threshold: float,
+        reference_support_similarity: float | None = None,
     ) -> SessionTarget:
-        """Bind a new Track to the existing SessionTarget after a safe match."""
+        """Bind a new Track after a safe match without learning from recovery.
+
+        The recovery crop is evidence for rebinding only.  It is deliberately
+        not added to the runtime reference bank here; a later normal ACTIVE
+        reference-update cycle must accept it before it becomes identity data.
+        The reference-update arguments remain in the API for compatibility with
+        the coordinator and older callers.
+        """
+
+        del embedding, max_reference_embeddings, reference_update_threshold
 
         target = self.targets.get(target_id)
         if target is None:
@@ -353,23 +363,28 @@ class TargetManager:
         target.state = TargetState.ACTIVE
         target.missing_frames = 0
         target.last_recovery_frame = frame_index
-        self.add_reference(
-            target_id,
-            embedding,
-            frame_index,
-            max_reference_embeddings,
-            reference_update_threshold,
-        )
         self.target_recovered_count += 1
-        LOGGER.info(
-            "TARGET_RECOVERED frame=%d target_id=%d old_track_id=%s "
-            "new_track_id=%d similarity=%.4f",
-            frame_index,
-            target_id,
-            old_track_id,
-            track.track_id,
-            similarity,
-        )
+        if reference_support_similarity is None:
+            LOGGER.info(
+                "TARGET_RECOVERED frame=%d target_id=%d old_track_id=%s "
+                "new_track_id=%d similarity=%.4f",
+                frame_index,
+                target_id,
+                old_track_id,
+                track.track_id,
+                similarity,
+            )
+        else:
+            LOGGER.info(
+                "TARGET_RECOVERED frame=%d target_id=%d old_track_id=%s "
+                "new_track_id=%d centroid=%.4f support=%.4f",
+                frame_index,
+                target_id,
+                old_track_id,
+                track.track_id,
+                similarity,
+                reference_support_similarity,
+            )
         return target
 
 

@@ -13,6 +13,7 @@ from src.target_recovery import (
     RecoveryCandidate,
     TargetRecoveryCoordinator,
     assign_recovery_matches,
+    recovery_reference_support_score,
 )
 
 
@@ -69,6 +70,8 @@ def _recovery_config(**overrides: object) -> ReIDRecoveryConfig:
         "recovery_threshold": 0.80,
         "recovery_margin": 0.05,
         "reference_update_threshold": 0.80,
+        "recovery_reference_support_threshold": 0.80,
+        "recovery_reference_support_top_k": 3,
         # These tests retain focused MVP-5 behavior; dedicated MVP-8.1 tests
         # below enable age and confirmation explicitly.
         "recovery_min_track_age_frames": 1,
@@ -89,6 +92,26 @@ def _target(target_id: int, centroid: tuple[float, ...]) -> SessionTarget:
         state=TargetState.LOST,
         reference_embeddings=[vector.copy()],
         centroid=vector,
+    )
+
+
+def _target_with_references(
+    target_id: int,
+    references: list[np.ndarray],
+) -> SessionTarget:
+    normalized = [
+        reference.astype(np.float32) / np.linalg.norm(reference)
+        for reference in references
+    ]
+    centroid = np.mean(np.stack(normalized), axis=0)
+    centroid = centroid / np.linalg.norm(centroid)
+    return SessionTarget(
+        target_id=target_id,
+        current_track_id=None,
+        last_track_id=target_id,
+        state=TargetState.LOST,
+        reference_embeddings=[reference.copy() for reference in normalized],
+        centroid=centroid.astype(np.float32),
     )
 
 
@@ -140,6 +163,71 @@ class AssignmentTests(unittest.TestCase):
         matches = assign_recovery_matches(targets, candidates, 0.75, 0.05)
 
         self.assertEqual(matches, [])
+
+    def test_reference_support_uses_top_k_mean_not_maximum(self) -> None:
+        target = _target_with_references(
+            1,
+            [
+                np.asarray((1.0, 0.0)),
+                np.asarray((0.6, 0.8)),
+                np.asarray((0.0, 1.0)),
+            ],
+        )
+        candidate_embedding = np.asarray(
+            (np.cos(np.deg2rad(30)), np.sin(np.deg2rad(30))),
+            dtype=np.float32,
+        )
+
+        support = recovery_reference_support_score(
+            target,
+            candidate_embedding,
+            top_k=3,
+        )
+
+        self.assertLess(support, 0.80)
+        self.assertGreater(float(np.dot(target.centroid, candidate_embedding)), 0.85)
+        self.assertEqual(
+            assign_recovery_matches(
+                [target],
+                [
+                    RecoveryCandidate(
+                        Track(11, (10, 5, 50, 110), 0.9, 0),
+                        candidate_embedding,
+                    )
+                ],
+                0.85,
+                0.05,
+                0.80,
+                3,
+            ),
+            [],
+        )
+
+    def test_one_reference_uses_available_reference_when_top_k_is_three(self) -> None:
+        target = _target(1, (1.0, 0.0))
+        candidate = RecoveryCandidate(
+            Track(11, (10, 5, 50, 110), 0.9, 0),
+            np.asarray((1.0, 0.0), dtype=np.float32),
+        )
+
+        matches = assign_recovery_matches(
+            [target], [candidate], 0.85, 0.05, 0.80, 3
+        )
+
+        self.assertEqual(len(matches), 1)
+        self.assertAlmostEqual(matches[0].centroid_similarity, 1.0)
+        self.assertAlmostEqual(matches[0].reference_support_similarity, 1.0)
+
+    def test_two_references_use_both_when_top_k_is_three(self) -> None:
+        target = _target_with_references(
+            1,
+            [np.asarray((1.0, 0.0)), np.asarray((0.8, 0.6))],
+        )
+        candidate = np.asarray((1.0, 0.0), dtype=np.float32)
+
+        support = recovery_reference_support_score(target, candidate, top_k=3)
+
+        self.assertAlmostEqual(support, (1.0 + 0.8) / 2.0, places=5)
 
 
 class CoordinatorTests(unittest.TestCase):
@@ -321,6 +409,104 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(target.last_track_id, 8)
         self.assertEqual(target.state, TargetState.ACTIVE)
         self.assertEqual(manager.selected_track_ids, {8})
+
+    def test_recovery_does_not_immediately_add_candidate_to_reference_bank(self) -> None:
+        extractor = _FakeReIDExtractor(
+            np.asarray((1, 0)),
+            np.asarray((0.98, 0.20)),
+        )
+        manager, coordinator = self._coordinator(
+            extractor,
+            recovery_confirmation_hits=1,
+            recovery_threshold=0.85,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+
+        matches = coordinator.process_frame(self.frame, [self.track_b], 2)
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(len(target.reference_embeddings), 1)
+        np.testing.assert_allclose(target.reference_embeddings[0], np.asarray((1, 0)))
+        np.testing.assert_allclose(target.centroid, np.asarray((1, 0)))
+
+    def test_open_set_strangers_never_recover_permanently_lost_target(self) -> None:
+        stranger = np.asarray((0.84, np.sqrt(1.0 - 0.84**2)), dtype=np.float32)
+        extractor = _FakeReIDExtractor(np.asarray((1, 0)), stranger)
+        manager, coordinator = self._coordinator(
+            extractor,
+            recovery_threshold=0.85,
+            recovery_reference_support_threshold=0.80,
+            recovery_confirmation_hits=2,
+            recovery_min_track_age_frames=1,
+            recovery_interval_frames=1,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+
+        for frame_index in range(2, 1002):
+            coordinator.process_frame(self.frame, [self.track_b], frame_index)
+
+        self.assertEqual(target.state, TargetState.LOST)
+        self.assertIsNone(target.current_track_id)
+        self.assertEqual(coordinator.recovery_accepted_count, 0)
+        self.assertEqual(manager.target_recovered_count, 0)
+
+    def test_hard_negative_centroid_passes_but_support_blocks_recovery(self) -> None:
+        target = _target_with_references(
+            1,
+            [
+                np.asarray((np.cos(np.deg2rad(-60)), np.sin(np.deg2rad(-60)))),
+                np.asarray((1.0, 0.0)),
+                np.asarray((np.cos(np.deg2rad(60)), np.sin(np.deg2rad(60)))),
+            ],
+        )
+        candidate_embedding = np.asarray(
+            (np.cos(np.deg2rad(30)), np.sin(np.deg2rad(30))),
+            dtype=np.float32,
+        )
+        candidate = RecoveryCandidate(
+            Track(11, (10, 5, 50, 110), 0.9, 0),
+            candidate_embedding,
+        )
+
+        matches = assign_recovery_matches(
+            [target],
+            [candidate],
+            recovery_threshold=0.85,
+            recovery_margin=0.05,
+            recovery_reference_support_threshold=0.80,
+            recovery_reference_support_top_k=3,
+        )
+
+        self.assertGreater(recovery_reference_support_score(target, candidate_embedding), 0.0)
+        self.assertEqual(matches, [])
+
+    def test_true_return_passes_centroid_support_and_confirmation(self) -> None:
+        extractor = _FakeReIDExtractor(
+            np.asarray((1, 0)),
+            np.asarray((0.98, 0.20)),
+        )
+        manager, coordinator = self._coordinator(
+            extractor,
+            recovery_threshold=0.85,
+            recovery_reference_support_threshold=0.80,
+            recovery_confirmation_hits=2,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+
+        self.assertEqual(coordinator.process_frame(self.frame, [self.track_b], 2), [])
+        self.assertEqual(coordinator.pending, {(target.target_id, 8): 1})
+        matches = coordinator.process_frame(self.frame, [self.track_b], 3)
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(target.state, TargetState.ACTIVE)
+        self.assertEqual(target.current_track_id, 8)
+        self.assertEqual(manager.target_recovered_count, 1)
 
     def test_low_similarity_candidate_stays_lost(self) -> None:
         extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((0, 1)))

@@ -33,7 +33,14 @@ class RecoveryMatch:
 
     target_id: int
     candidate: RecoveryCandidate
-    similarity: float
+    centroid_similarity: float
+    reference_support_similarity: float
+
+    @property
+    def similarity(self) -> float:
+        """Backward-compatible alias for the primary centroid score."""
+
+        return self.centroid_similarity
 
 
 @dataclass
@@ -57,17 +64,55 @@ class ReferenceUpdateEvent:
 
 
 def recovery_score(target: SessionTarget, embedding: np.ndarray) -> float:
-    """Score a candidate against the normalized centroid, not max bank score.
-
-    A centroid-based score makes one anomalous historical embedding unable to
-    force recovery by itself.  The reference bank remains available for
-    stable centroid construction and bounded history, while the conservative
-    MVP-5 decision uses only the normalized centroid similarity.
-    """
+    """Return the candidate-to-target centroid cosine similarity."""
 
     if target.centroid.size == 0:
         raise ValueError(f"target {target.target_id} has no reference centroid")
     return cosine_similarity(target.centroid, embedding)
+
+
+def recovery_reference_support_score(
+    target: SessionTarget,
+    embedding: np.ndarray,
+    top_k: int = 3,
+) -> float:
+    """Return the mean of the candidate's strongest reference similarities.
+
+    This is deliberately a top-k mean rather than a maximum.  One accidental
+    high score from a single historical reference must not be sufficient to
+    recover a LOST target in an open-set scene.  If the target has fewer than
+    ``top_k`` references, all available references are used.
+    """
+
+    if top_k < 1:
+        raise ValueError("top_k must be positive")
+    if not target.reference_embeddings:
+        raise ValueError(f"target {target.target_id} has no reference embeddings")
+    scores = sorted(
+        (
+            cosine_similarity(reference, embedding)
+            for reference in target.reference_embeddings
+        ),
+        reverse=True,
+    )
+    return float(np.mean(scores[: min(top_k, len(scores))]))
+
+
+def recovery_evidence(
+    target: SessionTarget,
+    embedding: np.ndarray,
+    reference_support_top_k: int = 3,
+) -> tuple[float, float]:
+    """Return ``(centroid_similarity, reference_support_similarity)``."""
+
+    return (
+        recovery_score(target, embedding),
+        recovery_reference_support_score(
+            target,
+            embedding,
+            top_k=reference_support_top_k,
+        ),
+    )
 
 
 def assign_recovery_matches(
@@ -75,35 +120,47 @@ def assign_recovery_matches(
     candidates: Sequence[RecoveryCandidate],
     recovery_threshold: float,
     recovery_margin: float,
+    recovery_reference_support_threshold: float = 0.80,
+    recovery_reference_support_top_k: int = 3,
 ) -> list[RecoveryMatch]:
     """Return conservative one-to-one target/candidate assignments.
 
-    Both sides must be confident: the best score must clear the threshold and,
-    when a second choice exists, beat that second-best score by the configured
-    margin.  With no second candidate/target, that side's margin check passes
-    automatically.  Accepted pairs are sorted by score and greedily claimed,
-    which is deterministic, dependency-free, and favors avoiding false
-    recovery over maximizing the number of assignments.
+    Both absolute identity checks must pass: centroid similarity and the
+    top-k reference-support score.  Then both sides must be confident: the
+    best centroid score must beat a second choice by the configured margin
+    when one exists.  With no second candidate/target, that side's margin
+    check passes automatically.  Accepted pairs are sorted by centroid score
+    and greedily claimed, which is deterministic and one-to-one.
     """
 
     if not 0.0 < recovery_threshold <= 1.0:
         raise ValueError("recovery_threshold must be in (0, 1]")
     if recovery_margin < 0.0:
         raise ValueError("recovery_margin must be non-negative")
+    if not 0.0 < recovery_reference_support_threshold <= 1.0:
+        raise ValueError(
+            "recovery_reference_support_threshold must be in (0, 1]"
+        )
+    if recovery_reference_support_top_k < 1:
+        raise ValueError("recovery_reference_support_top_k must be positive")
 
     target_list = [target for target in lost_targets if target.state is TargetState.LOST]
     candidate_list = list(candidates)
     if not target_list or not candidate_list:
         return []
 
-    scores: dict[tuple[int, int], float] = {}
+    scores: dict[tuple[int, int], tuple[float, float]] = {}
     for target_index, target in enumerate(target_list):
         for candidate_index, candidate in enumerate(candidate_list):
             try:
-                score = recovery_score(target, candidate.embedding)
+                evidence = recovery_evidence(
+                    target,
+                    candidate.embedding,
+                    reference_support_top_k=recovery_reference_support_top_k,
+                )
             except ValueError:
                 continue
-            scores[(target_index, candidate_index)] = score
+            scores[(target_index, candidate_index)] = evidence
 
     if not scores:
         return []
@@ -112,10 +169,10 @@ def assign_recovery_matches(
     for target_index in range(len(target_list)):
         ranking = sorted(
             (
-                score,
+                evidence[0],
                 candidate_index,
             )
-            for (row, candidate_index), score in scores.items()
+            for (row, candidate_index), evidence in scores.items()
             if row == target_index
         )
         target_rankings[target_index] = list(reversed(ranking))
@@ -124,10 +181,10 @@ def assign_recovery_matches(
     for candidate_index in range(len(candidate_list)):
         ranking = sorted(
             (
-                score,
+                evidence[0],
                 target_index,
             )
-            for (target_index, column), score in scores.items()
+            for (target_index, column), evidence in scores.items()
             if column == candidate_index
         )
         candidate_rankings[candidate_index] = list(reversed(ranking))
@@ -138,6 +195,9 @@ def assign_recovery_matches(
             continue
         best_score, best_candidate_index = ranking[0]
         if best_score < recovery_threshold:
+            continue
+        best_support = scores[(target_index, best_candidate_index)][1]
+        if best_support < recovery_reference_support_threshold:
             continue
         target_margin_ok = (
             len(ranking) == 1
@@ -173,7 +233,10 @@ def assign_recovery_matches(
             RecoveryMatch(
                 target_id=target_list[target_index].target_id,
                 candidate=candidate_list[candidate_index],
-                similarity=score,
+                centroid_similarity=score,
+                reference_support_similarity=scores[
+                    (target_index, candidate_index)
+                ][1],
             )
         )
     return matches
@@ -404,6 +467,18 @@ class TargetRecoveryCoordinator:
             recovery_candidates,
             recovery_threshold=self.recovery_config.recovery_threshold,
             recovery_margin=self.recovery_config.recovery_margin,
+            recovery_reference_support_threshold=(
+                self.recovery_config.recovery_reference_support_threshold
+            ),
+            recovery_reference_support_top_k=(
+                self.recovery_config.recovery_reference_support_top_k
+            ),
+        )
+        self._log_recovery_rejections(
+            due_lost_targets,
+            recovery_candidates,
+            matches,
+            frame_index,
         )
         accepted_pairs = {
             (match.target_id, match.candidate.track.track_id) for match in matches
@@ -425,13 +500,15 @@ class TargetRecoveryCoordinator:
                 )
                 self.recovery_pending_count += 1
                 LOGGER.debug(
-                    "TARGET_RECOVERY_PENDING frame=%d target_id=%d candidate_track_id=%d hits=%d/%d similarity=%.4f",
+                    "TARGET_RECOVERY_PENDING frame=%d target_id=%d "
+                    "candidate_track_id=%d hits=%d/%d centroid=%.4f support=%.4f",
                     frame_index,
                     match.target_id,
                     match.candidate.track.track_id,
                     hits,
                     self.recovery_config.recovery_confirmation_hits,
-                    match.similarity,
+                    match.centroid_similarity,
+                    match.reference_support_similarity,
                 )
                 continue
             self.target_manager.recover(
@@ -442,6 +519,7 @@ class TargetRecoveryCoordinator:
                 frame_index=frame_index,
                 max_reference_embeddings=self.recovery_config.max_reference_embeddings,
                 reference_update_threshold=self.recovery_config.reference_update_threshold,
+                reference_support_similarity=match.reference_support_similarity,
             )
             self._pending.pop(key, None)
             self.recovery_accepted_count += 1
@@ -450,6 +528,70 @@ class TargetRecoveryCoordinator:
             match.candidate.track.track_id for match in recovered_matches
         )
         return recovered_matches
+
+    def _log_recovery_rejections(
+        self,
+        lost_targets: Sequence[SessionTarget],
+        candidates: Sequence[RecoveryCandidate],
+        matches: Sequence[RecoveryMatch],
+        frame_index: int,
+    ) -> None:
+        """Log the strongest rejected evidence without changing matching.
+
+        This is intentionally diagnostic only.  Matching remains implemented
+        by ``assign_recovery_matches``; the log helps distinguish an absolute
+        evidence rejection from a margin/assignment rejection in open-set
+        footage without producing INFO-level per-frame noise.
+        """
+
+        matched_target_ids = {match.target_id for match in matches}
+        for target in lost_targets:
+            if target.target_id in matched_target_ids:
+                continue
+            scored: list[tuple[float, float, RecoveryCandidate]] = []
+            for candidate in candidates:
+                try:
+                    centroid, support = recovery_evidence(
+                        target,
+                        candidate.embedding,
+                        reference_support_top_k=(
+                            self.recovery_config.recovery_reference_support_top_k
+                        ),
+                    )
+                except ValueError:
+                    continue
+                scored.append((centroid, support, candidate))
+            if not scored:
+                continue
+
+            centroid, support, candidate = max(
+                scored,
+                key=lambda item: (
+                    item[0],
+                    item[1],
+                    -item[2].track.track_id,
+                ),
+            )
+            if centroid < self.recovery_config.recovery_threshold:
+                reason = "centroid_threshold"
+            elif (
+                support
+                < self.recovery_config.recovery_reference_support_threshold
+            ):
+                reason = "reference_support"
+            else:
+                reason = "margin"
+            LOGGER.debug(
+                "TARGET_RECOVERY_REJECTED frame=%d target_id=%d "
+                "candidate_track_id=%d centroid_score=%.4f "
+                "reference_support_score=%.4f reason=%s",
+                frame_index,
+                target.target_id,
+                candidate.track.track_id,
+                centroid,
+                support,
+                reason,
+            )
 
     def _update_track_ages(
         self,

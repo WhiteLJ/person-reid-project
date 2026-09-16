@@ -44,9 +44,13 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.reid_recovery.reference_update_interval_frames, 15)
         self.assertEqual(config.reid_recovery.recovery_interval_frames, 5)
         self.assertEqual(config.reid_recovery.max_reference_embeddings, 8)
-        self.assertAlmostEqual(config.reid_recovery.recovery_threshold, 0.80)
+        self.assertAlmostEqual(config.reid_recovery.recovery_threshold, 0.85)
         self.assertAlmostEqual(config.reid_recovery.recovery_margin, 0.05)
         self.assertAlmostEqual(config.reid_recovery.reference_update_threshold, 0.80)
+        self.assertAlmostEqual(
+            config.reid_recovery.recovery_reference_support_threshold, 0.80
+        )
+        self.assertEqual(config.reid_recovery.recovery_reference_support_top_k, 3)
         self.assertEqual(config.reid_recovery.recovery_min_track_age_frames, 3)
         self.assertEqual(config.reid_recovery.recovery_confirmation_hits, 2)
         self.assertEqual(config.reid_recovery.recovery_pending_max_age_frames, 60)
@@ -90,7 +94,11 @@ class ConfigTests(unittest.TestCase):
             Path("weights/atlas/osnet_x0_25.om").resolve(),
         )
         self.assertEqual(config.ascend.reid_dynamic_batches, (1, 2, 4, 8))
-        self.assertEqual(config.reid_recovery.recovery_threshold, 0.80)
+        self.assertEqual(config.reid_recovery.recovery_threshold, 0.85)
+        self.assertEqual(
+            config.reid_recovery.recovery_reference_support_threshold, 0.80
+        )
+        self.assertEqual(config.reid_recovery.recovery_reference_support_top_k, 3)
         self.assertEqual(config.gallery_recognition.recognition_threshold, 0.80)
         self.assertAlmostEqual(
             config.reid_quality.min_frame_edge_margin_ratio, 0.01
