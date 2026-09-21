@@ -200,6 +200,57 @@ uncontrolled grid for MVP-8.1.
 mode is Track fragmentation followed by false LOST recovery, so no extra per-frame
 ACTIVE verification is enabled in this stage.
 
+## MVP-8.3-PC1 Vehicle ReID
+
+MVP-8.3-PC1 is an independent PC-only Vehicle ReID validation tool. It does not
+connect Vehicle ReID to detection, tracking, SessionTarget, Recovery, Gallery,
+SQLite, or Atlas. The project-owned configuration is
+`config/vehicle_reid/sbs_R50-ibn.yml`, based on the official FastReID VeRi
+`SBS(R50-ibn)` configuration.
+
+The official checkpoint is:
+
+```text
+https://github.com/JDAI-CV/fast-reid/releases/download/v0.1.1/veri_sbs_R50-ibn.pth
+```
+
+Download it to `weights/vehicle_reid/` before running the smoke test. PowerShell:
+
+```powershell
+Invoke-WebRequest `
+  -Uri "https://github.com/JDAI-CV/fast-reid/releases/download/v0.1.1/veri_sbs_R50-ibn.pth" `
+  -OutFile "weights/vehicle_reid/veri_sbs_R50-ibn.pth"
+```
+
+Linux/macOS:
+
+```bash
+curl -L \
+  -o weights/vehicle_reid/veri_sbs_R50-ibn.pth \
+  https://github.com/JDAI-CV/fast-reid/releases/download/v0.1.1/veri_sbs_R50-ibn.pth
+```
+
+The standalone extractor uses the official VeRi SBS R50-IBN inference structure,
+including IBN, Non-local blocks, Generalized Mean Pooling, and BN neck. It accepts
+BGR crops, converts them to RGB, resizes with cubic interpolation to `256x256`,
+and applies the FastReID ImageNet normalization. The true output dimension is
+reported after the first real model inference; it is not treated as the Person
+OSNet 512-D contract.
+
+Run the PC smoke test with three vehicle crops/frames:
+
+```bash
+python -m tools.vehicle_reid_smoke_test \
+  --config config/config.yaml \
+  --image-a path/to/vehicle_a_frame1.jpg \
+  --image-b path/to/vehicle_a_frame2.jpg \
+  --image-c path/to/vehicle_b.jpg
+```
+
+The current implementation adds no new runtime dependency and does not alter the
+Person ReID or Atlas paths. FastReID remains a read-only reference under
+`references/fast-reid`; formal project code does not import from that directory.
+
 ## Run
 
 Use the default camera:

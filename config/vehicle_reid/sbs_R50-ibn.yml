@@ -1,0 +1,31 @@
+# Project-owned copy of the official FastReID VeRi configuration:
+# references/fast-reid/configs/VeRi/sbs_R50-ibn.yml
+# It is documentation/configuration for the PC-only MVP-8.3 extractor. Runtime
+# code does not import from references/.
+
+MODEL:
+  META_ARCHITECTURE: Baseline
+  BACKBONE:
+    NAME: build_resnet_backbone
+    NORM: BN
+    DEPTH: 50x
+    LAST_STRIDE: 1
+    FEAT_DIM: 2048
+    WITH_IBN: true
+    WITH_NL: true
+    PRETRAIN: true
+  HEADS:
+    NAME: EmbeddingHead
+    NORM: BN
+    WITH_BNNECK: true
+    NECK_FEAT: after
+    POOL_LAYER: GeneralizedMeanPoolingP
+    EMBEDDING_DIM: 0
+
+INPUT:
+  SIZE_TRAIN: [256, 256]
+  SIZE_TEST: [256, 256]
+
+DATASETS:
+  NAMES: [VeRi]
+  TESTS: [VeRi]

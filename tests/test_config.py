@@ -40,6 +40,20 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual((config.reid.image_height, config.reid.image_width), (256, 128))
         self.assertEqual((config.reid.min_crop_width, config.reid.min_crop_height), (40, 100))
+        self.assertTrue(config.vehicle_reid.enabled)
+        self.assertEqual(config.vehicle_reid.model_name, "sbs_R50-ibn")
+        self.assertEqual(
+            config.vehicle_reid.weight,
+            Path("weights/vehicle_reid/veri_sbs_R50-ibn.pth").resolve(),
+        )
+        self.assertEqual(
+            config.vehicle_reid.config,
+            Path("config/vehicle_reid/sbs_R50-ibn.yml").resolve(),
+        )
+        self.assertEqual(
+            (config.vehicle_reid.image_height, config.vehicle_reid.image_width),
+            (256, 256),
+        )
         self.assertEqual(config.reid_recovery.lost_grace_frames, 5)
         self.assertEqual(config.reid_recovery.reference_update_interval_frames, 15)
         self.assertEqual(config.reid_recovery.recovery_interval_frames, 5)

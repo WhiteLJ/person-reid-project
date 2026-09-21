@@ -71,6 +71,19 @@ class ReIDConfig:
 
 
 @dataclass(frozen=True)
+class VehicleReIDConfig:
+    """PC-only Vehicle ReID model settings for MVP-8.3-PC1."""
+
+    enabled: bool
+    model_name: str
+    weight: Path
+    config: Path
+    device: str
+    image_height: int
+    image_width: int
+
+
+@dataclass(frozen=True)
 class ReIDRecoveryConfig:
     """Runtime controls for in-memory target recovery in MVP-5."""
 
@@ -158,6 +171,7 @@ class AppConfig:
     tracking: TrackingConfig
     selection: SelectionConfig
     reid: ReIDConfig
+    vehicle_reid: VehicleReIDConfig
     reid_recovery: ReIDRecoveryConfig
     gallery_enrichment: GalleryEnrichmentConfig
     reid_quality: ReIDQualityConfig
@@ -234,6 +248,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     tracking = _section(raw, "tracking")
     selection = _section(raw, "selection")
     reid = _section(raw, "reid")
+    vehicle_reid = _section(raw, "vehicle_reid")
     reid_recovery = _section(raw, "reid_recovery")
     gallery_enrichment = _section(raw, "gallery_enrichment")
     reid_quality = _section(raw, "reid_quality")
@@ -302,6 +317,30 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         raise ValueError("reid image dimensions must be positive")
     if min_crop_width <= 0 or min_crop_height <= 0:
         raise ValueError("reid minimum crop dimensions must be positive")
+
+    vehicle_model_name = str(
+        vehicle_reid.get("model_name", "sbs_R50-ibn")
+    ).strip()
+    if not vehicle_model_name:
+        raise ValueError("vehicle_reid.model_name cannot be empty")
+    vehicle_weight_value = vehicle_reid.get(
+        "weight", "weights/vehicle_reid/veri_sbs_R50-ibn.pth"
+    )
+    vehicle_weight_path = resolve_project_path(
+        vehicle_weight_value, "weights/vehicle_reid/veri_sbs_R50-ibn.pth"
+    )
+    vehicle_config_path = resolve_project_path(
+        vehicle_reid.get("config"), "config/vehicle_reid/sbs_R50-ibn.yml"
+    )
+    vehicle_image_height = int(vehicle_reid.get("image_height", 256))
+    vehicle_image_width = int(vehicle_reid.get("image_width", 256))
+    if vehicle_image_height <= 0 or vehicle_image_width <= 0:
+        raise ValueError("vehicle_reid image dimensions must be positive")
+    vehicle_device = str(vehicle_reid.get("device", "auto")).strip().lower()
+    if vehicle_device == "auto":
+        vehicle_device = resolve_device("auto")
+    else:
+        vehicle_device = resolve_device(vehicle_device)
 
     lost_grace_frames = int(reid_recovery.get("lost_grace_frames", 10))
     reference_update_interval_frames = int(
@@ -510,6 +549,15 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             image_width=image_width,
             min_crop_width=min_crop_width,
             min_crop_height=min_crop_height,
+        ),
+        vehicle_reid=VehicleReIDConfig(
+            enabled=bool(vehicle_reid.get("enabled", True)),
+            model_name=vehicle_model_name,
+            weight=vehicle_weight_path,
+            config=vehicle_config_path,
+            device=vehicle_device,
+            image_height=vehicle_image_height,
+            image_width=vehicle_image_width,
         ),
         reid_recovery=ReIDRecoveryConfig(
             lost_grace_frames=lost_grace_frames,

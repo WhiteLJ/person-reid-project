@@ -41,6 +41,16 @@ reid:
   min_crop_width: 40
   min_crop_height: 100
 
+vehicle_reid:
+  # MVP-8.3-PC1 only; not connected to the person runtime pipeline yet.
+  enabled: true
+  model_name: "sbs_R50-ibn"
+  weight: "weights/vehicle_reid/veri_sbs_R50-ibn.pth"
+  config: "config/vehicle_reid/sbs_R50-ibn.yml"
+  device: "auto"
+  image_height: 256
+  image_width: 256
+
 reid_recovery:
   # Conservative, configurable engineering starting values; not universal optima.
   lost_grace_frames: 5
