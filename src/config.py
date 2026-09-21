@@ -91,6 +91,25 @@ class VehicleReIDConfig:
 
 
 @dataclass(frozen=True)
+class VehicleRecoveryConfig:
+    """PC-only runtime controls for Vehicle SessionTarget recovery."""
+
+    lost_grace_frames: int = 5
+    reference_update_interval_frames: int = 15
+    recovery_interval_frames: int = 5
+    max_reference_embeddings: int = 8
+    recovery_threshold: float = 0.80
+    recovery_margin: float = 0.05
+    reference_update_threshold: float = 0.80
+    recovery_reference_support_threshold: float = 0.75
+    recovery_reference_support_top_k: int = 3
+    recovery_min_track_age_frames: int = 3
+    recovery_confirmation_hits: int = 2
+    recovery_pending_max_age_frames: int = 60
+    recovery_candidates_per_frame: int = 1
+
+
+@dataclass(frozen=True)
 class ReIDRecoveryConfig:
     """Runtime controls for in-memory target recovery in MVP-5."""
 
@@ -129,6 +148,18 @@ class ReIDQualityConfig:
     max_edge_truncation_ratio: float = 0.30
     max_person_overlap_ratio: float = 0.50
     min_frame_edge_margin_ratio: float = 0.01
+
+
+@dataclass(frozen=True)
+class VehicleReIDQualityConfig:
+    """Vehicle-only quality gates for ReID evidence."""
+
+    min_track_confidence: float = 0.35
+    max_edge_truncation_ratio: float = 0.30
+    max_vehicle_overlap_ratio: float = 0.60
+    min_frame_edge_margin_ratio: float = 0.01
+    min_crop_width: int = 40
+    min_crop_height: int = 40
 
 
 @dataclass(frozen=True)
@@ -181,9 +212,11 @@ class AppConfig:
     selection: SelectionConfig
     reid: ReIDConfig
     vehicle_reid: VehicleReIDConfig
+    vehicle_recovery: VehicleRecoveryConfig
     reid_recovery: ReIDRecoveryConfig
     gallery_enrichment: GalleryEnrichmentConfig
     reid_quality: ReIDQualityConfig
+    vehicle_reid_quality: VehicleReIDQualityConfig
     gallery_recognition: GalleryRecognitionConfig
     database: DatabaseConfig
     ui: UIConfig
@@ -259,9 +292,11 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     selection = _section(raw, "selection")
     reid = _section(raw, "reid")
     vehicle_reid = _section(raw, "vehicle_reid")
+    vehicle_recovery = _section(raw, "vehicle_recovery")
     reid_recovery = _section(raw, "reid_recovery")
     gallery_enrichment = _section(raw, "gallery_enrichment")
     reid_quality = _section(raw, "reid_quality")
+    vehicle_reid_quality = _section(raw, "vehicle_reid_quality")
     gallery_recognition = _section(raw, "gallery_recognition")
     database = _section(raw, "database")
     ui = _section(raw, "ui")
@@ -430,6 +465,68 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             "reid_recovery.recovery_candidates_per_frame must be positive"
         )
 
+    vehicle_recovery_values = {
+        "lost_grace_frames": int(vehicle_recovery.get("lost_grace_frames", 5)),
+        "reference_update_interval_frames": int(
+            vehicle_recovery.get("reference_update_interval_frames", 15)
+        ),
+        "recovery_interval_frames": int(
+            vehicle_recovery.get("recovery_interval_frames", 5)
+        ),
+        "max_reference_embeddings": int(
+            vehicle_recovery.get("max_reference_embeddings", 8)
+        ),
+        "recovery_threshold": float(
+            vehicle_recovery.get("recovery_threshold", 0.80)
+        ),
+        "recovery_margin": float(vehicle_recovery.get("recovery_margin", 0.05)),
+        "reference_update_threshold": float(
+            vehicle_recovery.get("reference_update_threshold", 0.80)
+        ),
+        "recovery_reference_support_threshold": float(
+            vehicle_recovery.get("recovery_reference_support_threshold", 0.75)
+        ),
+        "recovery_reference_support_top_k": int(
+            vehicle_recovery.get("recovery_reference_support_top_k", 3)
+        ),
+        "recovery_min_track_age_frames": int(
+            vehicle_recovery.get("recovery_min_track_age_frames", 3)
+        ),
+        "recovery_confirmation_hits": int(
+            vehicle_recovery.get("recovery_confirmation_hits", 2)
+        ),
+        "recovery_pending_max_age_frames": int(
+            vehicle_recovery.get("recovery_pending_max_age_frames", 60)
+        ),
+        "recovery_candidates_per_frame": int(
+            vehicle_recovery.get("recovery_candidates_per_frame", 1)
+        ),
+    }
+    for name in (
+        "lost_grace_frames",
+        "reference_update_interval_frames",
+        "recovery_interval_frames",
+        "max_reference_embeddings",
+        "recovery_reference_support_top_k",
+        "recovery_min_track_age_frames",
+        "recovery_confirmation_hits",
+        "recovery_pending_max_age_frames",
+        "recovery_candidates_per_frame",
+    ):
+        if vehicle_recovery_values[name] < 1:
+            raise ValueError(f"vehicle_recovery.{name} must be positive")
+    for name in (
+        "recovery_threshold",
+        "reference_update_threshold",
+        "recovery_reference_support_threshold",
+    ):
+        if not 0.0 < vehicle_recovery_values[name] <= 1.0:
+            raise ValueError(
+                f"vehicle_recovery.{name} must be greater than 0 and at most 1"
+            )
+    if vehicle_recovery_values["recovery_margin"] < 0.0:
+        raise ValueError("vehicle_recovery.recovery_margin must be non-negative")
+
     post_recovery_stable_frames = int(
         gallery_enrichment.get("post_recovery_stable_frames", 30)
     )
@@ -477,6 +574,37 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         raise ValueError(
             "reid_quality.min_frame_edge_margin_ratio must be in [0, 0.5)"
         )
+
+    vehicle_min_track_confidence = float(
+        vehicle_reid_quality.get("min_track_confidence", 0.35)
+    )
+    vehicle_max_edge_truncation_ratio = float(
+        vehicle_reid_quality.get("max_edge_truncation_ratio", 0.30)
+    )
+    vehicle_max_overlap_ratio = float(
+        vehicle_reid_quality.get("max_vehicle_overlap_ratio", 0.60)
+    )
+    vehicle_edge_margin_ratio = float(
+        vehicle_reid_quality.get("min_frame_edge_margin_ratio", 0.01)
+    )
+    vehicle_min_crop_width = int(vehicle_reid_quality.get("min_crop_width", 40))
+    vehicle_min_crop_height = int(vehicle_reid_quality.get("min_crop_height", 40))
+    if not 0.0 <= vehicle_min_track_confidence <= 1.0:
+        raise ValueError(
+            "vehicle_reid_quality.min_track_confidence must be in [0, 1]"
+        )
+    for name, value in (
+        ("max_edge_truncation_ratio", vehicle_max_edge_truncation_ratio),
+        ("max_vehicle_overlap_ratio", vehicle_max_overlap_ratio),
+    ):
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"vehicle_reid_quality.{name} must be in [0, 1]")
+    if not 0.0 <= vehicle_edge_margin_ratio < 0.5:
+        raise ValueError(
+            "vehicle_reid_quality.min_frame_edge_margin_ratio must be in [0, 0.5)"
+        )
+    if vehicle_min_crop_width < 1 or vehicle_min_crop_height < 1:
+        raise ValueError("vehicle_reid_quality crop dimensions must be positive")
 
     recognition_interval_frames = int(
         gallery_recognition.get("recognition_interval_frames", 10)
@@ -600,6 +728,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             image_height=vehicle_image_height,
             image_width=vehicle_image_width,
         ),
+        vehicle_recovery=VehicleRecoveryConfig(**vehicle_recovery_values),
         reid_recovery=ReIDRecoveryConfig(
             lost_grace_frames=lost_grace_frames,
             reference_update_interval_frames=reference_update_interval_frames,
@@ -625,6 +754,14 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             max_edge_truncation_ratio=max_edge_truncation_ratio,
             max_person_overlap_ratio=max_person_overlap_ratio,
             min_frame_edge_margin_ratio=min_frame_edge_margin_ratio,
+        ),
+        vehicle_reid_quality=VehicleReIDQualityConfig(
+            min_track_confidence=vehicle_min_track_confidence,
+            max_edge_truncation_ratio=vehicle_max_edge_truncation_ratio,
+            max_vehicle_overlap_ratio=vehicle_max_overlap_ratio,
+            min_frame_edge_margin_ratio=vehicle_edge_margin_ratio,
+            min_crop_width=vehicle_min_crop_width,
+            min_crop_height=vehicle_min_crop_height,
         ),
         gallery_recognition=GalleryRecognitionConfig(
             enabled=bool(gallery_recognition.get("enabled", True)),

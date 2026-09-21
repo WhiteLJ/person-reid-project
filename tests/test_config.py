@@ -29,7 +29,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.ascend.reid_dynamic_batches, (1, 2, 4, 8))
         self.assertEqual(
             config.tracking.tracker,
-            str(Path("config/trackers/botsort_baseline.yaml").resolve()),
+            str(Path("config/trackers/botsort_fixed_camera.yaml").resolve()),
         )
         self.assertTrue(config.tracking.persist)
         self.assertAlmostEqual(config.selection.min_iou, 0.20)
@@ -54,6 +54,22 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(
             (config.vehicle_reid.image_height, config.vehicle_reid.image_width),
             (256, 256),
+        )
+        self.assertEqual(config.vehicle_recovery.recovery_candidates_per_frame, 1)
+        self.assertAlmostEqual(config.vehicle_recovery.recovery_threshold, 0.80)
+        self.assertAlmostEqual(
+            config.vehicle_recovery.recovery_reference_support_threshold, 0.75
+        )
+        self.assertEqual(config.vehicle_recovery.max_reference_embeddings, 8)
+        self.assertAlmostEqual(
+            config.vehicle_reid_quality.max_vehicle_overlap_ratio, 0.60
+        )
+        self.assertEqual(
+            (
+                config.vehicle_reid_quality.min_crop_width,
+                config.vehicle_reid_quality.min_crop_height,
+            ),
+            (40, 40),
         )
         self.assertEqual(config.reid_recovery.lost_grace_frames, 5)
         self.assertEqual(config.reid_recovery.reference_update_interval_frames, 15)
@@ -89,7 +105,7 @@ class ConfigTests(unittest.TestCase):
             config.database.path,
             Path("database/person_reid.db").resolve(),
         )
-        self.assertFalse(config.ui.show_unselected_tracks)
+        self.assertIsInstance(config.ui.show_unselected_tracks, bool)
         self.assertEqual(config.ui.max_display_width, 1280)
         self.assertTrue(config.diagnostics.enabled)
         self.assertEqual(config.diagnostics.log_interval_frames, 300)

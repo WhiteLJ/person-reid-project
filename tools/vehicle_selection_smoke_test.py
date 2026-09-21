@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Sequence
 
@@ -106,6 +107,8 @@ def _run_vehicle_edit_session(
     wait_key_ms: int,
     max_display_width: int | None,
     show_unselected_tracks: bool,
+    select_handler: Callable[..., object] | None = None,
+    window_name: str = WINDOW_NAME,
 ) -> UIAction:
     """Run a frozen multi-ROI Vehicle add/remove edit session."""
 
@@ -143,6 +146,13 @@ def _run_vehicle_edit_session(
         del ignored_tracks
         if mode is EditMode.REMOVE_TARGETS:
             controller.remove_from_roi(selectable_tracks, roi)
+        elif select_handler is not None:
+            select_handler(
+                frozen_frame,
+                frozen_vehicle_tracks,
+                roi,
+                frame_index,
+            )
         else:
             controller.select_from_roi(
                 frozen_frame,
@@ -152,7 +162,7 @@ def _run_vehicle_edit_session(
             )
 
     session = ROIEditSession(
-        window_name=WINDOW_NAME,
+        window_name=window_name,
         frame=frozen_frame,
         tracks=tuple(selectable_tracks),
         mode=EditMode.REMOVE_TARGETS if remove else EditMode.ADD_TARGETS,

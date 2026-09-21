@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from logging import getLogger
 from time import perf_counter
+from typing import Any
 
 import numpy as np
 
@@ -304,6 +305,8 @@ class TargetRecoveryCoordinator:
         embedding_cache: ReIDFrameCache | None = None,
         quality_config: ReIDQualityConfig | None = None,
         person_class_id: int = 0,
+        track_class_id: int | None = None,
+        quality_assessor: Callable[..., Any] | None = None,
     ) -> None:
         self.target_manager = target_manager
         self.reid_extractor = reid_extractor
@@ -312,6 +315,10 @@ class TargetRecoveryCoordinator:
         self.embedding_cache = embedding_cache
         self.quality_config = quality_config or ReIDQualityConfig()
         self.person_class_id = person_class_id
+        self.track_class_id = (
+            person_class_id if track_class_id is None else track_class_id
+        )
+        self.quality_assessor = quality_assessor
         self.last_recovered_track_ids: frozenset[int] = frozenset()
         self._track_ages: dict[int, int] = {}
         self._last_seen_frame: dict[int, int] = {}
@@ -347,6 +354,7 @@ class TargetRecoveryCoordinator:
         frame: np.ndarray,
         track: Track,
         frame_index: int,
+        tracks: Sequence[Track] | None = None,
     ) -> SessionTarget | None:
         """Create a recoverable target from one frozen-frame Track crop."""
 
@@ -359,7 +367,11 @@ class TargetRecoveryCoordinator:
             )
             return existing
 
-        quality = self._quality(frame, track, (track,))
+        quality = self._quality(
+            frame,
+            track,
+            (track,) if tracks is None else tracks,
+        )
         if not quality.accepted or quality.crop is None:
             LOGGER.info(
                 "TARGET_SELECTION_REJECTED track=%d reason=%s",
@@ -455,7 +467,7 @@ class TargetRecoveryCoordinator:
                     sorted(
                         track.track_id
                         for track in self.target_manager.recovery_candidates(tracks)
-                        if track.class_id == self.person_class_id
+                        if track.class_id == self.track_class_id
                         and self._track_ages.get(track.track_id, 0)
                         >= self.recovery_config.recovery_min_track_age_frames
                     )
@@ -614,7 +626,7 @@ class TargetRecoveryCoordinator:
         currently_unbound = {
             track.track_id
             for track in self.target_manager.recovery_candidates(tracks)
-            if track.class_id == self.person_class_id
+            if track.class_id == self.track_class_id
         }
         recovery_candidates = [
             RecoveryCandidate(current_tracks[track_id], embedding.copy())
@@ -830,6 +842,8 @@ class TargetRecoveryCoordinator:
         track: Track,
         tracks: Sequence[Track],
     ) -> ReIDQualityResult:
+        if self.quality_assessor is not None:
+            return self.quality_assessor(frame, track, tracks)
         return assess_reid_quality(
             frame,
             track,

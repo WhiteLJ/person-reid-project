@@ -275,6 +275,41 @@ Press `Q` to stop. On exit the tool reports processed frames, average FPS,
 unique Person/Vehicle Track counts, and the YOLO inference count. For a run of
 `N` processed frames, the inference count must also be `N`.
 
+## MVP-8.3-PC4A: Vehicle LOST and incremental Recovery
+
+PC4A is a PC-only calibration/infrastructure stage. It reuses the shared
+SessionTarget Recovery core with an independent Vehicle TargetManager,
+Vehicle ReID frame cache, 2048-D Vehicle embeddings, and a Vehicle-only quality
+gate. The default PC tracker profile is
+`config/trackers/botsort_fixed_camera.yaml`, because the supported cameras are
+fixed and the profile disables BoT-SORT GMC while keeping `with_reid: false`.
+
+Vehicle Recovery uses an incremental sweep. The initial
+`vehicle_recovery.recovery_candidates_per_frame: 1` is intentionally
+conservative and the Vehicle thresholds are engineering placeholders only;
+calibrate them before judging real recovery accuracy.
+
+Calibrate same-vehicle/different-vehicle similarity distributions with one
+directory per vehicle:
+
+```bash
+python -m tools.vehicle_reid_calibration \
+  --config config/config.yaml \
+  --root data/vehicle_calibration
+```
+
+Run the interactive PC4A smoke test with `S`, `R`, `C`, and `Q`:
+
+```bash
+python -m tools.vehicle_recovery_smoke_test \
+  --config config/config.yaml \
+  --source data/vehicle_pc4/test.mp4
+```
+
+PC4A does not implement Vehicle Gallery, SQLite, restart recognition, Atlas,
+or Vehicle persistence. Do not treat the initial Vehicle Recovery thresholds as
+calibrated until the calibration output has been reviewed.
+
 ## Run
 
 Use the default camera:

@@ -25,8 +25,8 @@ runtime:
   log_level: "INFO"
 
 tracking:
-  # Project-owned baseline; change this path for a controlled crowd A/B run.
-  tracker: "config/trackers/botsort_baseline.yaml"
+  # Fixed-camera PC default; GMC is disabled in this profile.
+  tracker: "config/trackers/botsort_fixed_camera.yaml"
   persist: true
   show_track_id: true
 
@@ -54,6 +54,22 @@ vehicle_reid:
   device: "auto"
   image_height: 256
   image_width: 256
+
+vehicle_recovery:
+  # PC4A initial values; calibrate Vehicle thresholds before real recovery use.
+  lost_grace_frames: 5
+  reference_update_interval_frames: 15
+  recovery_interval_frames: 5
+  max_reference_embeddings: 8
+  recovery_threshold: 0.80
+  recovery_margin: 0.05
+  reference_update_threshold: 0.80
+  recovery_reference_support_threshold: 0.75
+  recovery_reference_support_top_k: 3
+  recovery_min_track_age_frames: 3
+  recovery_confirmation_hits: 2
+  recovery_pending_max_age_frames: 60
+  recovery_candidates_per_frame: 1
 
 reid_recovery:
   # Conservative, configurable engineering starting values; not universal optima.
@@ -85,6 +101,14 @@ reid_quality:
   max_edge_truncation_ratio: 0.30
   max_person_overlap_ratio: 0.60
   min_frame_edge_margin_ratio: 0.01
+
+vehicle_reid_quality:
+  min_track_confidence: 0.35
+  max_edge_truncation_ratio: 0.30
+  max_vehicle_overlap_ratio: 0.60
+  min_frame_edge_margin_ratio: 0.01
+  min_crop_width: 40
+  min_crop_height: 40
 
 gallery_recognition:
   # Conservative, configurable engineering starting values; not universal optima.

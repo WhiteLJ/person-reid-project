@@ -120,14 +120,19 @@ def main(argv: list[str] | None = None) -> int:
     elapsed = time.perf_counter() - start
     stats = pipeline.stats()
     average_fps = frames / elapsed if elapsed > 0 else 0.0
+    divisor = max(1, stats.frames)
     LOGGER.info(
         "PC2_STATS frames=%s average_fps=%.2f unique_person_tracks=%s "
-        "unique_vehicle_tracks=%s yolo_inference_count=%s",
+        "unique_vehicle_tracks=%s yolo_inference_count=%s "
+        "yolo_ms=%.2f person_tracker_ms=%.2f vehicle_tracker_ms=%.2f",
         stats.frames,
         average_fps,
         stats.unique_person_tracks,
         stats.unique_vehicle_tracks,
         stats.yolo_inference_count,
+        stats.yolo_ms_total / divisor,
+        stats.person_tracker_ms_total / divisor,
+        stats.vehicle_tracker_ms_total / divisor,
     )
     if stats.yolo_inference_count != stats.frames:
         LOGGER.error(

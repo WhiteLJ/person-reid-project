@@ -12,6 +12,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -234,6 +235,9 @@ class MultiClassTrackingStats:
     yolo_inference_count: int
     unique_person_tracks: int
     unique_vehicle_tracks: int
+    yolo_ms_total: float = 0.0
+    person_tracker_ms_total: float = 0.0
+    vehicle_tracker_ms_total: float = 0.0
 
 
 class MultiClassTrackingPipeline:
@@ -283,10 +287,14 @@ class MultiClassTrackingPipeline:
         self.yolo_inference_count = 0
         self._person_track_ids: set[int] = set()
         self._vehicle_track_ids: set[int] = set()
+        self.yolo_ms_total = 0.0
+        self.person_tracker_ms_total = 0.0
+        self.vehicle_tracker_ms_total = 0.0
 
     def process(self, frame: np.ndarray) -> MultiClassTrackingResult:
         """Detect both classes once, then update each independent tracker once."""
 
+        yolo_started = perf_counter()
         results = self.model.predict(
             source=frame,
             conf=self.config.model.conf_threshold,
@@ -297,6 +305,7 @@ class MultiClassTrackingPipeline:
             workers=self.config.runtime.num_workers,
             verbose=False,
         )
+        self.yolo_ms_total += (perf_counter() - yolo_started) * 1000.0
         self.frame_count += 1
         self.yolo_inference_count += 1
         result = results[0] if results else None
@@ -315,8 +324,16 @@ class MultiClassTrackingPipeline:
             for detection in detections
             if detection.class_id in self.vehicle_class_ids
         ]
+        person_tracker_started = perf_counter()
         person_tracks = self.person_tracker.update(person_detections, frame)
+        self.person_tracker_ms_total += (
+            perf_counter() - person_tracker_started
+        ) * 1000.0
+        vehicle_tracker_started = perf_counter()
         vehicle_tracks = self.vehicle_tracker.update(vehicle_detections, frame)
+        self.vehicle_tracker_ms_total += (
+            perf_counter() - vehicle_tracker_started
+        ) * 1000.0
         self._person_track_ids.update(track.track_id for track in person_tracks)
         self._vehicle_track_ids.update(track.track_id for track in vehicle_tracks)
         return MultiClassTrackingResult(
@@ -330,6 +347,9 @@ class MultiClassTrackingPipeline:
             yolo_inference_count=self.yolo_inference_count,
             unique_person_tracks=len(self._person_track_ids),
             unique_vehicle_tracks=len(self._vehicle_track_ids),
+            yolo_ms_total=self.yolo_ms_total,
+            person_tracker_ms_total=self.person_tracker_ms_total,
+            vehicle_tracker_ms_total=self.vehicle_tracker_ms_total,
         )
 
     def class_name(self, class_id: int) -> str:
