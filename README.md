@@ -251,6 +251,30 @@ The current implementation adds no new runtime dependency and does not alter the
 Person ReID or Atlas paths. FastReID remains a read-only reference under
 `references/fast-reid`; formal project code does not import from that directory.
 
+## MVP-8.3-PC2: Person + Vehicle tracking smoke test
+
+PC2 is an independent PC-only validation pipeline. It performs one YOLO
+prediction per frame for COCO `person` (class `0`) and `car` (class `2`), then
+sends the two detection groups to separate CPU BoT-SORT instances. It does not
+connect Vehicle ReID to SessionTarget, Recovery, Gallery, SQLite, or Atlas.
+
+The class split is configured under `multiclass_tracking.vehicle_class_ids` in
+`config/config.yaml`. The temporary tracker namespaces are intentionally shown
+as `P-T{id}` and `V-T{id}`; a numeric Person Track ID and Vehicle Track ID may
+be equal because they belong to different tracker instances.
+
+Run it with a video containing people and cars:
+
+```bash
+python -m tools.multiclass_tracking_smoke_test \
+  --config config/config.yaml \
+  --source data/vehicle_pc2/test.mp4
+```
+
+Press `Q` to stop. On exit the tool reports processed frames, average FPS,
+unique Person/Vehicle Track counts, and the YOLO inference count. For a run of
+`N` processed frames, the inference count must also be `N`.
+
 ## Run
 
 Use the default camera:

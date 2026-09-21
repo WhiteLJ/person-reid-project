@@ -42,6 +42,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual((config.reid.min_crop_width, config.reid.min_crop_height), (40, 100))
         self.assertTrue(config.vehicle_reid.enabled)
         self.assertEqual(config.vehicle_reid.model_name, "sbs_R50-ibn")
+        self.assertEqual(config.multiclass_tracking.vehicle_class_ids, (2,))
         self.assertEqual(
             config.vehicle_reid.weight,
             Path("weights/vehicle_reid/veri_sbs_R50-ibn.pth").resolve(),

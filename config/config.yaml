@@ -30,6 +30,10 @@ tracking:
   persist: true
   show_track_id: true
 
+multiclass_tracking:
+  # MVP-8.3-PC2 currently tracks COCO person and car only.
+  vehicle_class_ids: [2]
+
 selection:
   min_iou: 0.20
 

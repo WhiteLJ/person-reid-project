@@ -56,6 +56,13 @@ class TrackingConfig:
 
 
 @dataclass(frozen=True)
+class MultiClassTrackingConfig:
+    """PC-only class split settings for MVP-8.3-PC2."""
+
+    vehicle_class_ids: tuple[int, ...] = (2,)
+
+
+@dataclass(frozen=True)
 class SelectionConfig:
     min_iou: float
 
@@ -169,6 +176,7 @@ class AppConfig:
     ascend: AscendConfig
     runtime: RuntimeConfig
     tracking: TrackingConfig
+    multiclass_tracking: MultiClassTrackingConfig
     selection: SelectionConfig
     reid: ReIDConfig
     vehicle_reid: VehicleReIDConfig
@@ -246,6 +254,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     ascend = _section(raw, "ascend")
     runtime = _section(raw, "runtime")
     tracking = _section(raw, "tracking")
+    multiclass_tracking = _section(raw, "multiclass_tracking")
     selection = _section(raw, "selection")
     reid = _section(raw, "reid")
     vehicle_reid = _section(raw, "vehicle_reid")
@@ -514,13 +523,31 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         if project_tracker_path.is_file():
             tracker_value = str(project_tracker_path)
 
+    person_class_id = int(model.get("person_class_id", 0))
+    configured_vehicle_classes = multiclass_tracking.get("vehicle_class_ids", [2])
+    if not isinstance(configured_vehicle_classes, (list, tuple)):
+        raise ValueError("multiclass_tracking.vehicle_class_ids must be a list")
+    vehicle_class_ids = tuple(
+        dict.fromkeys(int(value) for value in configured_vehicle_classes)
+    )
+    if not vehicle_class_ids:
+        raise ValueError("multiclass_tracking.vehicle_class_ids cannot be empty")
+    if any(value < 0 for value in vehicle_class_ids):
+        raise ValueError(
+            "multiclass_tracking.vehicle_class_ids must be non-negative"
+        )
+    if person_class_id in vehicle_class_ids:
+        raise ValueError(
+            "multiclass_tracking.vehicle_class_ids must not contain the person class"
+        )
+
     return AppConfig(
         project_root=project_root,
         video=VideoConfig(source=source),
         model=ModelConfig(
             yolo_weight=weight_path,
             device=resolve_device(str(model.get("device", "auto"))),
-            person_class_id=int(model.get("person_class_id", 0)),
+            person_class_id=person_class_id,
             conf_threshold=float(model.get("conf_threshold", 0.35)),
             iou_threshold=float(model.get("iou_threshold", 0.50)),
             image_size=int(model.get("image_size", 640)),
@@ -540,6 +567,9 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             tracker=tracker_value,
             persist=bool(tracking.get("persist", True)),
             show_track_id=bool(tracking.get("show_track_id", True)),
+        ),
+        multiclass_tracking=MultiClassTrackingConfig(
+            vehicle_class_ids=vehicle_class_ids,
         ),
         selection=SelectionConfig(min_iou=min_iou),
         reid=ReIDConfig(

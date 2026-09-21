@@ -10,7 +10,7 @@ import numpy as np
 
 @dataclass(frozen=True)
 class Detection:
-    """A single person detection in ``xyxy`` image coordinates."""
+    """A single detector output in ``xyxy`` image coordinates."""
 
     bbox: tuple[float, float, float, float]
     confidence: float

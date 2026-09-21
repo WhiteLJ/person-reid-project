@@ -10,3 +10,10 @@ database/*-wal
 database/*-shm
 database/*-journal
 .test_tmp/
+
+# Local reference repositories and test media are not project source.
+references/
+data/
+
+# Vehicle ReID checkpoint is downloaded locally and is too large for GitHub.
+weights/vehicle_reid/*.pth
