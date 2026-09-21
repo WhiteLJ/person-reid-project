@@ -90,6 +90,7 @@ class ConfigTests(unittest.TestCase):
             Path("database/person_reid.db").resolve(),
         )
         self.assertFalse(config.ui.show_unselected_tracks)
+        self.assertEqual(config.ui.max_display_width, 1280)
         self.assertTrue(config.diagnostics.enabled)
         self.assertEqual(config.diagnostics.log_interval_frames, 300)
 

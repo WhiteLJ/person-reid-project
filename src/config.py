@@ -165,6 +165,7 @@ class UIConfig:
     show_class_name: bool
     show_confidence: bool
     show_unselected_tracks: bool = False
+    max_display_width: int | None = 1280
 
 
 @dataclass(frozen=True)
@@ -541,6 +542,16 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             "multiclass_tracking.vehicle_class_ids must not contain the person class"
         )
 
+    max_display_width_value = ui.get("max_display_width", 1280)
+    if max_display_width_value is None:
+        max_display_width: int | None = None
+    else:
+        max_display_width = int(max_display_width_value)
+        if max_display_width < 0:
+            raise ValueError("ui.max_display_width must be non-negative or null")
+        if max_display_width == 0:
+            max_display_width = None
+
     return AppConfig(
         project_root=project_root,
         video=VideoConfig(source=source),
@@ -630,6 +641,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             show_class_name=bool(ui.get("show_class_name", True)),
             show_confidence=bool(ui.get("show_confidence", True)),
             show_unselected_tracks=bool(ui.get("show_unselected_tracks", False)),
+            max_display_width=max_display_width,
         ),
         diagnostics=DiagnosticsConfig(
             enabled=bool(diagnostics.get("enabled", True)),

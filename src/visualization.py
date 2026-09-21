@@ -10,6 +10,10 @@ import numpy as np
 from .models import Detection, Track
 
 
+VEHICLE_COLOR = (139, 0, 0)
+VEHICLE_SELECTED_COLOR = (0, 0, 255)
+
+
 def draw_detections(
     frame: np.ndarray,
     detections: list[Detection],

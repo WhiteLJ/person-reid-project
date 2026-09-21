@@ -18,49 +18,22 @@ from src.target_manager import TargetManager
 from src.vehicle_reid import VehicleReIDExtractor
 from src.vehicle_selection import VehicleSelectionController
 from src.video_source import VideoSource
-from tools.multiclass_tracking_smoke_test import (
-    DEFAULT_MAX_DISPLAY_WIDTH,
-    _draw_track,
-    _fit_display_width,
-)
+from src.display_transform import DisplayTransform
+from src.visualization import VEHICLE_COLOR, VEHICLE_SELECTED_COLOR
+from tools.multiclass_tracking_smoke_test import _draw_track
+from ui.roi_editor import EditMode, ROIEditSession, UIAction
 
 
 LOGGER = logging.getLogger(__name__)
 WINDOW_NAME = "MVP-8.3-PC3 Vehicle Selection"
 
 
-def _display_roi_to_source(
-    roi: Sequence[float],
-    source_shape: Sequence[int],
-    display_shape: Sequence[int],
-) -> tuple[int, int, int, int] | None:
-    """Map a ROI drawn on the scaled display back to the original frame."""
-
-    if len(roi) != 4 or len(source_shape) < 2 or len(display_shape) < 2:
-        raise ValueError("invalid ROI or frame shape")
-    x, y, width, height = (float(value) for value in roi)
-    if width <= 0 or height <= 0:
-        return None
-    source_height, source_width = int(source_shape[0]), int(source_shape[1])
-    display_height, display_width = int(display_shape[0]), int(display_shape[1])
-    if min(source_height, source_width, display_height, display_width) <= 0:
-        raise ValueError("frame dimensions must be positive")
-
-    scale_x = source_width / float(display_width)
-    scale_y = source_height / float(display_height)
-    x1 = max(0, min(source_width, int(round(x * scale_x))))
-    y1 = max(0, min(source_height, int(round(y * scale_y))))
-    x2 = max(0, min(source_width, int(round((x + width) * scale_x))))
-    y2 = max(0, min(source_height, int(round((y + height) * scale_y))))
-    if x2 <= x1 or y2 <= y1:
-        return None
-    return x1, y1, x2 - x1, y2 - y1
-
-
 def _draw_vehicle_track(
     frame: np.ndarray,
     track: Track,
     target_manager: TargetManager,
+    *,
+    show_unselected_tracks: bool,
 ) -> None:
     height, width = frame.shape[:2]
     x1, y1, x2, y2 = (
@@ -72,7 +45,9 @@ def _draw_vehicle_track(
 
     target = target_manager.target_for_track(track.track_id)
     selected = target is not None
-    color = (0, 0, 255) if selected else (0, 165, 255)
+    if not selected and not show_unselected_tracks:
+        return
+    color = VEHICLE_SELECTED_COLOR if selected else VEHICLE_COLOR
     thickness = 4 if selected else 2
     label = (
         f"VT-{target.target_id} / V-T{track.track_id} {track.confidence:.2f}"
@@ -97,21 +72,29 @@ def _render_frame(
     person_tracks: Sequence[Track],
     vehicle_tracks: Sequence[Track],
     target_manager: TargetManager,
+    *,
+    show_unselected_tracks: bool,
 ) -> np.ndarray:
     annotated = frame.copy()
-    for track in person_tracks:
-        _draw_track(
+    if show_unselected_tracks:
+        for track in person_tracks:
+            _draw_track(
+                annotated,
+                track,
+                prefix="Person P-T",
+                color=(0, 200, 0),
+            )
+    for track in vehicle_tracks:
+        _draw_vehicle_track(
             annotated,
             track,
-            prefix="Person P-T",
-            color=(0, 200, 0),
+            target_manager,
+            show_unselected_tracks=show_unselected_tracks,
         )
-    for track in vehicle_tracks:
-        _draw_vehicle_track(annotated, track, target_manager)
     return annotated
 
 
-def _select_vehicle_roi(
+def _run_vehicle_edit_session(
     frame: np.ndarray,
     person_tracks: Sequence[Track],
     vehicle_tracks: Sequence[Track],
@@ -121,8 +104,10 @@ def _select_vehicle_roi(
     *,
     remove: bool,
     wait_key_ms: int,
-) -> None:
-    """Pause on the current frame, select one ROI, then resume playback."""
+    max_display_width: int | None,
+    show_unselected_tracks: bool,
+) -> UIAction:
+    """Run a frozen multi-ROI Vehicle add/remove edit session."""
 
     frozen_frame = frame.copy()
     frozen_person_tracks = tuple(person_tracks)
@@ -132,48 +117,51 @@ def _select_vehicle_roi(
         if remove
         else list(frozen_vehicle_tracks)
     )
-    display_source = _render_frame(
+    display_transform = DisplayTransform.from_frame(
         frozen_frame,
-        frozen_person_tracks,
-        frozen_vehicle_tracks,
-        target_manager,
+        max_display_width,
     )
-    display = _fit_display_width(display_source, DEFAULT_MAX_DISPLAY_WIDTH)
-    cv2.imshow(WINDOW_NAME, display)
-    roi_on_display = cv2.selectROI(
-        WINDOW_NAME,
-        display,
-        fromCenter=False,
-        showCrosshair=True,
-    )
-    roi_on_source = _display_roi_to_source(
-        roi_on_display,
-        frozen_frame.shape,
-        display.shape,
-    )
-    if roi_on_source is not None:
-        if remove:
-            controller.remove_from_roi(selectable_tracks, roi_on_source)
+
+    def render_frame(
+        source_frame: np.ndarray,
+        ignored_tracks: tuple[Track, ...],
+    ) -> np.ndarray:
+        del ignored_tracks
+        return _render_frame(
+            source_frame,
+            frozen_person_tracks,
+            frozen_vehicle_tracks,
+            target_manager,
+            show_unselected_tracks=show_unselected_tracks,
+        )
+
+    def on_roi(
+        roi: tuple[int, int, int, int],
+        ignored_tracks: tuple[Track, ...],
+        mode: EditMode,
+    ) -> None:
+        del ignored_tracks
+        if mode is EditMode.REMOVE_TARGETS:
+            controller.remove_from_roi(selectable_tracks, roi)
         else:
             controller.select_from_roi(
                 frozen_frame,
                 frozen_vehicle_tracks,
-                roi_on_source,
+                roi,
                 frame_index,
             )
-    cv2.imshow(
-        WINDOW_NAME,
-        _fit_display_width(
-            _render_frame(
-                frozen_frame,
-                frozen_person_tracks,
-                frozen_vehicle_tracks,
-                target_manager,
-            ),
-            DEFAULT_MAX_DISPLAY_WIDTH,
-        ),
+
+    session = ROIEditSession(
+        window_name=WINDOW_NAME,
+        frame=frozen_frame,
+        tracks=tuple(selectable_tracks),
+        mode=EditMode.REMOVE_TARGETS if remove else EditMode.ADD_TARGETS,
+        wait_key_ms=wait_key_ms,
+        on_roi=on_roi,
+        render_frame=render_frame,
+        display_transform=display_transform,
     )
-    cv2.waitKey(max(1, int(wait_key_ms)))
+    return session.run()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -218,14 +206,18 @@ def main(argv: list[str] | None = None) -> int:
                 if frame is None:
                     break
                 output = tracking_pipeline.process(frame)
-                display = _fit_display_width(
+                display_transform = DisplayTransform.from_frame(
+                    frame,
+                    config.ui.max_display_width,
+                )
+                display = display_transform.source_to_display(
                     _render_frame(
                         frame,
                         output.person_tracks,
                         output.vehicle_tracks,
                         vehicle_target_manager,
-                    ),
-                    DEFAULT_MAX_DISPLAY_WIDTH,
+                        show_unselected_tracks=config.ui.show_unselected_tracks,
+                    )
                 )
                 cv2.imshow(WINDOW_NAME, display)
                 frame_count += 1
@@ -233,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
                 if key in (ord("q"), ord("Q")):
                     break
                 if key in (ord("s"), ord("S")):
-                    _select_vehicle_roi(
+                    edit_action = _run_vehicle_edit_session(
                         frame,
                         output.person_tracks,
                         output.vehicle_tracks,
@@ -242,9 +234,13 @@ def main(argv: list[str] | None = None) -> int:
                         frame_count - 1,
                         remove=False,
                         wait_key_ms=config.ui.wait_key_ms,
+                        max_display_width=config.ui.max_display_width,
+                        show_unselected_tracks=config.ui.show_unselected_tracks,
                     )
+                    if edit_action is UIAction.QUIT:
+                        break
                 elif key in (ord("r"), ord("R")):
-                    _select_vehicle_roi(
+                    edit_action = _run_vehicle_edit_session(
                         frame,
                         output.person_tracks,
                         output.vehicle_tracks,
@@ -253,7 +249,11 @@ def main(argv: list[str] | None = None) -> int:
                         frame_count - 1,
                         remove=True,
                         wait_key_ms=config.ui.wait_key_ms,
+                        max_display_width=config.ui.max_display_width,
+                        show_unselected_tracks=config.ui.show_unselected_tracks,
                     )
+                    if edit_action is UIAction.QUIT:
+                        break
                 elif key in (ord("c"), ord("C")):
                     count = len(vehicle_target_manager.targets)
                     vehicle_target_manager.clear()
@@ -280,4 +280,3 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
     raise SystemExit(main())
-

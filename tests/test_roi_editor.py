@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from src.models import Track
+from src.display_transform import DisplayTransform
 from ui.roi_editor import EditMode, ROIEditSession, UIAction, normalize_roi_xyxy
 
 
@@ -148,6 +149,26 @@ class ROIEditSessionTests(unittest.TestCase):
 
         self.assertEqual(result, UIAction.NONE)
         self.assertEqual(received, [(1, EditMode.ENROLL_GALLERY), (41, EditMode.ENROLL_GALLERY)])
+
+    @patch("ui.roi_editor.cv2.imshow")
+    def test_display_roi_is_mapped_back_to_source_coordinates(self, imshow) -> None:
+        source_frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        received: list[tuple[int, int, int, int]] = []
+        session = ROIEditSession(
+            window_name="test-window",
+            frame=source_frame,
+            tracks=self.tracks,
+            mode=EditMode.ADD_TARGETS,
+            wait_key_ms=1,
+            on_roi=lambda roi, tracks, mode: received.append(roi),
+            render_frame=lambda frame, tracks: frame.copy(),
+            display_transform=DisplayTransform.from_frame(source_frame, 1280),
+        )
+
+        session._on_mouse(cv2.EVENT_LBUTTONDOWN, 100, 100, 0, None)
+        session._on_mouse(cv2.EVENT_LBUTTONUP, 300, 200, 0, None)
+
+        self.assertEqual(received, [(150, 150, 300, 150)])
 
 
 if __name__ == "__main__":

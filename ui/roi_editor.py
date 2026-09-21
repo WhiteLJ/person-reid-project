@@ -9,6 +9,7 @@ from logging import getLogger
 import cv2
 import numpy as np
 
+from src.display_transform import DisplayTransform
 from src.models import Track
 
 
@@ -87,6 +88,7 @@ class ROIEditSession:
         on_roi: Callable[[tuple[int, int, int, int], tuple[Track, ...], EditMode], None],
         render_frame: Callable[[np.ndarray, tuple[Track, ...]], np.ndarray],
         min_roi_size: int = MIN_ROI_SIZE,
+        display_transform: DisplayTransform | None = None,
     ) -> None:
         self.window_name = window_name
         self.frozen_frame = frame.copy()
@@ -96,6 +98,9 @@ class ROIEditSession:
         self.on_roi = on_roi
         self.render_frame = render_frame
         self.min_roi_size = min_roi_size
+        self.display_transform = display_transform
+        if self.display_transform is not None:
+            self.display_transform.validate_source_frame(self.frozen_frame)
 
         self._dragging = False
         self._drag_start: tuple[int, int] | None = None
@@ -161,8 +166,9 @@ class ROIEditSession:
                     self.mode.name,
                 )
             else:
+                source_roi = self._display_roi_to_source(normalized_roi)
                 self.on_roi(
-                    roi_xyxy_to_xywh(normalized_roi),
+                    source_roi,
                     self.frozen_tracks,
                     self.mode,
                 )
@@ -174,12 +180,14 @@ class ROIEditSession:
         return normalize_roi_xyxy(
             self._drag_start,
             self._drag_current,
-            self.frozen_frame.shape,
+            self._display_frame_shape(),
             min_size=self.min_roi_size,
         )
 
     def _redraw(self) -> None:
         annotated = self.render_frame(self.frozen_frame, self.frozen_tracks)
+        if self.display_transform is not None:
+            annotated = self.display_transform.source_to_display(annotated)
         if self._preview_roi is not None:
             x1, y1, x2, y2 = self._preview_roi
             cv2.rectangle(
@@ -190,6 +198,25 @@ class ROIEditSession:
                 2,
             )
         cv2.imshow(self.window_name, annotated)
+
+    def _display_frame_shape(self) -> tuple[int, int, int]:
+        if self.display_transform is None:
+            return self.frozen_frame.shape
+        height, width = self.display_transform.display_shape
+        return height, width, self.frozen_frame.shape[2]
+
+    def _display_roi_to_source(
+        self,
+        roi: tuple[int, int, int, int],
+    ) -> tuple[int, int, int, int]:
+        if self.display_transform is None:
+            return roi_xyxy_to_xywh(roi)
+        source_roi = self.display_transform.display_roi_xywh_to_source(
+            roi_xyxy_to_xywh(roi)
+        )
+        if source_roi is None:
+            raise ValueError("display ROI became empty after source mapping")
+        return source_roi
 
     def _cancel_drag(self) -> None:
         self._dragging = False
