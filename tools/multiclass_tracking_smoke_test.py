@@ -17,6 +17,21 @@ from src.video_source import VideoSource
 
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_MAX_DISPLAY_WIDTH = 960
+
+
+def _fit_display_width(
+    frame: np.ndarray,
+    max_width: int = DEFAULT_MAX_DISPLAY_WIDTH,
+) -> np.ndarray:
+    """Resize only the display copy while preserving the frame aspect ratio."""
+
+    height, width = frame.shape[:2]
+    if width <= max_width:
+        return frame
+    scale = max_width / float(width)
+    display_size = (max_width, max(1, int(round(height * scale))))
+    return cv2.resize(frame, display_size, interpolation=cv2.INTER_AREA)
 
 
 def _draw_track(
@@ -80,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         config.multiclass_tracking.vehicle_class_ids,
         config.tracking.tracker,
     )
+    cv2.namedWindow("MVP-8.3-PC2", cv2.WINDOW_NORMAL)
     try:
         with VideoSource(source) as video:
             while True:
@@ -102,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
                         prefix="Vehicle V-T",
                         color=(0, 165, 255),
                     )
+                display = _fit_display_width(display)
                 cv2.imshow("MVP-8.3-PC2", display)
                 frames += 1
                 if cv2.waitKey(config.ui.wait_key_ms) & 0xFF in (ord("q"), ord("Q")):
