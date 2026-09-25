@@ -117,3 +117,112 @@ def draw_tracks(
                 cv2.LINE_AA,
             )
     return annotated
+
+
+def draw_vehicle_tracks(
+    frame: np.ndarray,
+    tracks: Sequence[Track],
+    target_manager: object,
+    *,
+    class_name: Callable[[int], str] | None = None,
+    show_class_name: bool = True,
+    show_track_id: bool = True,
+    show_confidence: bool = True,
+    show_unselected_tracks: bool = True,
+    gallery_labels_by_target: Mapping[int, str] | None = None,
+) -> np.ndarray:
+    """Draw Vehicle tracks using the project's Vehicle color semantics.
+
+    This renderer deliberately receives a separate TargetManager.  Person and
+    Vehicle trackers may reuse the same numeric Track ID, so selection state is
+    never inferred from a combined integer-ID set.
+    """
+
+    annotated = frame.copy()
+    height, width = annotated.shape[:2]
+    selected_lookup = getattr(target_manager, "target_for_track")
+    for track in tracks:
+        x1, y1, x2, y2 = (int(round(value)) for value in track.bbox)
+        x1 = max(0, min(width - 1, x1))
+        y1 = max(0, min(height - 1, y1))
+        x2 = max(0, min(width - 1, x2))
+        y2 = max(0, min(height - 1, y2))
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        target = selected_lookup(track.track_id)
+        if target is None and not show_unselected_tracks:
+            continue
+        selected = target is not None
+        color = VEHICLE_SELECTED_COLOR if selected else VEHICLE_COLOR
+        thickness = 4 if selected else 2
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
+
+        label_parts: list[str] = []
+        if selected:
+            gallery_label = (gallery_labels_by_target or {}).get(target.target_id)
+            if gallery_label is not None:
+                label_parts.append(gallery_label)
+            label_parts.append(f"VT-{target.target_id} / V-T{track.track_id}")
+        else:
+            if show_class_name and class_name is not None:
+                label_parts.append(class_name(track.class_id))
+            if show_track_id:
+                label_parts.append(f"V-T{track.track_id}")
+        if show_confidence:
+            label_parts.append(f"conf={track.confidence:.2f}")
+        if label_parts:
+            label = " ".join(label_parts)
+            text_y = y1 - 8 if y1 > 24 else min(height - 4, y2 + 20)
+            cv2.putText(
+                annotated,
+                label,
+                (x1, text_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                color,
+                thickness,
+                cv2.LINE_AA,
+            )
+    return annotated
+
+
+def draw_multiclass_tracks(
+    frame: np.ndarray,
+    person_tracks: Sequence[Track],
+    vehicle_tracks: Sequence[Track],
+    person_target_manager: object,
+    vehicle_target_manager: object,
+    *,
+    class_name: Callable[[int], str] | None = None,
+    show_class_name: bool = True,
+    show_track_id: bool = True,
+    show_confidence: bool = True,
+    show_unselected_tracks: bool = True,
+    person_gallery_labels_by_track: Mapping[int, str] | None = None,
+    vehicle_gallery_labels_by_target: Mapping[int, str] | None = None,
+) -> np.ndarray:
+    """Render the two independent tracking domains on one source frame."""
+
+    annotated = draw_tracks(
+        frame,
+        person_tracks,
+        show_track_id=show_track_id,
+        show_confidence=show_confidence,
+        class_name=class_name,
+        show_class_name=show_class_name,
+        selected_track_ids=person_target_manager.selected_track_ids,
+        show_unselected_tracks=show_unselected_tracks,
+        gallery_labels_by_track=person_gallery_labels_by_track,
+    )
+    return draw_vehicle_tracks(
+        annotated,
+        vehicle_tracks,
+        vehicle_target_manager,
+        class_name=class_name,
+        show_class_name=show_class_name,
+        show_track_id=show_track_id,
+        show_confidence=show_confidence,
+        show_unselected_tracks=show_unselected_tracks,
+        gallery_labels_by_target=vehicle_gallery_labels_by_target,
+    )

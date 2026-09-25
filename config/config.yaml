@@ -151,7 +151,7 @@ ui:
   max_display_width: 1280
   show_class_name: true
   show_confidence: true
-  show_unselected_tracks: true
+  show_unselected_tracks: false
 
 diagnostics:
   enabled: true
