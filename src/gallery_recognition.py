@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from logging import getLogger
+from typing import Any
 
 import numpy as np
 
@@ -14,7 +15,7 @@ from .config import (
     ReIDQualityConfig,
     ReIDRecoveryConfig,
 )
-from .gallery import GalleryPerson, TargetGallery
+from .gallery import TargetGallery
 from .models import Track
 from .reid import ReIDExtractor, cosine_similarity
 from .reid_frame_cache import ReIDFrameCache
@@ -41,6 +42,39 @@ class GalleryRecognitionMatch:
     candidate: GalleryRecognitionCandidate
     similarity: float
 
+    @property
+    def identity_id(self) -> int:
+        """Generic alias; ``person_id`` remains for Person compatibility."""
+
+        return self.person_id
+
+
+@dataclass(frozen=True)
+class GalleryRecognitionAdapter:
+    """Domain callbacks shared by Person and Vehicle recognition."""
+
+    all_identities: Callable[[], Sequence[Any]]
+    attached_identity_ids: Callable[[], Collection[int]]
+    get_identity: Callable[[int], Any | None]
+    identity_for_session_target: Callable[[int], Any | None]
+    attach_session_target: Callable[[int, int], bool]
+    identity_id: Callable[[Any], int]
+    identity_label: Callable[[int], str]
+
+
+def person_gallery_adapter(gallery: TargetGallery) -> GalleryRecognitionAdapter:
+    """Build the default adapter without changing Person behavior."""
+
+    return GalleryRecognitionAdapter(
+        all_identities=gallery.all_people,
+        attached_identity_ids=gallery.attached_person_ids,
+        get_identity=gallery.get,
+        identity_for_session_target=gallery.person_for_session_target,
+        attach_session_target=gallery.attach_session_target,
+        identity_id=lambda person: person.person_id,
+        identity_label=_person_label,
+    )
+
 
 @dataclass
 class _PendingRecognition:
@@ -48,7 +82,7 @@ class _PendingRecognition:
 
 
 def gallery_recognition_score(
-    person: GalleryPerson,
+    person: Any,
     embedding: np.ndarray,
 ) -> float:
     """Score a candidate against the stable normalized Gallery centroid."""
@@ -57,10 +91,12 @@ def gallery_recognition_score(
 
 
 def assign_gallery_matches(
-    people: Sequence[GalleryPerson],
+    people: Sequence[Any],
     candidates: Sequence[GalleryRecognitionCandidate],
     recognition_threshold: float,
     recognition_margin: float,
+    *,
+    identity_id_getter: Callable[[Any], int] | None = None,
 ) -> list[GalleryRecognitionMatch]:
     """Return conservative, deterministic one-to-one Gallery assignments.
 
@@ -76,6 +112,7 @@ def assign_gallery_matches(
         raise ValueError("recognition_margin must be non-negative")
 
     person_list = list(people)
+    identity_id = identity_id_getter or (lambda person: person.person_id)
     candidate_list = list(candidates)
     if not person_list or not candidate_list:
         return []
@@ -112,7 +149,7 @@ def assign_gallery_matches(
         ]
         candidate_rankings[candidate_index] = sorted(
             ranking,
-            key=lambda item: (-item[0], person_list[item[1]].person_id),
+            key=lambda item: (-item[0], identity_id(person_list[item[1]])),
         )
 
     eligible: list[tuple[float, int, int]] = []
@@ -140,7 +177,7 @@ def assign_gallery_matches(
     eligible.sort(
         key=lambda item: (
             -item[0],
-            person_list[item[1]].person_id,
+            identity_id(person_list[item[1]]),
             candidate_list[item[2]].track.track_id,
         )
     )
@@ -154,7 +191,7 @@ def assign_gallery_matches(
         used_candidates.add(candidate_index)
         matches.append(
             GalleryRecognitionMatch(
-                person_id=person_list[person_index].person_id,
+                person_id=identity_id(person_list[person_index]),
                 candidate=candidate_list[candidate_index],
                 similarity=score,
             )
@@ -177,6 +214,9 @@ class GalleryRecognitionCoordinator:
         person_class_id: int = 0,
         embedding_cache: ReIDFrameCache | None = None,
         quality_config: ReIDQualityConfig | None = None,
+        quality_assessor: Callable[..., Any] | None = None,
+        track_class_id: int | None = None,
+        gallery_adapter: GalleryRecognitionAdapter | None = None,
     ) -> None:
         self.target_manager = target_manager
         self.gallery = gallery
@@ -185,8 +225,13 @@ class GalleryRecognitionCoordinator:
         self.recognition_config = recognition_config
         self.recovery_config = recovery_config
         self.person_class_id = person_class_id
+        self.track_class_id = (
+            person_class_id if track_class_id is None else track_class_id
+        )
         self.embedding_cache = embedding_cache
         self.quality_config = quality_config or ReIDQualityConfig()
+        self.quality_assessor = quality_assessor
+        self.gallery_adapter = gallery_adapter or person_gallery_adapter(gallery)
         self._track_ages: dict[int, int] = {}
         self._last_seen_frame: dict[int, int] = {}
         self._pending: dict[tuple[int, int], _PendingRecognition] = {}
@@ -237,8 +282,9 @@ class GalleryRecognitionCoordinator:
 
         people = [
             person
-            for person in self.gallery.all_people()
-            if person.person_id not in self.gallery.attached_person_ids()
+            for person in self.gallery_adapter.all_identities()
+            if self.gallery_adapter.identity_id(person)
+            not in self.gallery_adapter.attached_identity_ids()
         ]
         if not people:
             return []
@@ -263,6 +309,7 @@ class GalleryRecognitionCoordinator:
             candidates,
             recognition_threshold=self.recognition_config.recognition_threshold,
             recognition_margin=self.recognition_config.recognition_margin,
+            identity_id_getter=self.gallery_adapter.identity_id,
         )
         accepted_pairs = {
             (match.person_id, match.candidate.track.track_id) for match in matches
@@ -278,8 +325,8 @@ class GalleryRecognitionCoordinator:
             if hits < self.recognition_config.confirmation_hits:
                 self._pending[key] = _PendingRecognition(hits=hits)
                 LOGGER.debug(
-                    "GALLERY_RECOGNITION_PENDING person=%s track=%d hits=%d/%d similarity=%.4f",
-                    _person_label(match.person_id),
+                    "GALLERY_RECOGNITION_PENDING identity=%s track=%d hits=%d/%d similarity=%.4f",
+                    self.gallery_adapter.identity_label(match.person_id),
                     match.candidate.track.track_id,
                     hits,
                     self.recognition_config.confirmation_hits,
@@ -325,7 +372,7 @@ class GalleryRecognitionCoordinator:
     ) -> list[tuple[Track, np.ndarray]]:
         candidates: list[tuple[Track, np.ndarray]] = []
         for track in tracks:
-            if track.class_id != self.person_class_id:
+            if track.class_id != self.track_class_id:
                 continue
             if self._track_ages.get(track.track_id, 0) < self.recognition_config.min_track_age_frames:
                 continue
@@ -338,18 +385,23 @@ class GalleryRecognitionCoordinator:
             active_target = self.target_manager.target_for_track(track.track_id)
             if (
                 active_target is not None
-                and self.gallery.person_for_session_target(active_target.target_id)
+                and self.gallery_adapter.identity_for_session_target(
+                    active_target.target_id
+                )
                 is not None
             ):
                 continue
-            quality = assess_reid_quality(
-                frame,
-                track,
-                tracks,
-                self.reid_config,
-                self.quality_config,
-                person_class_id=self.person_class_id,
-            )
+            if self.quality_assessor is None:
+                quality = assess_reid_quality(
+                    frame,
+                    track,
+                    tracks,
+                    self.reid_config,
+                    self.quality_config,
+                    person_class_id=self.track_class_id,
+                )
+            else:
+                quality = self.quality_assessor(frame, track, tracks)
             if not quality.accepted or quality.crop is None:
                 self.quality_rejected_count += 1
                 LOGGER.debug(
@@ -411,7 +463,7 @@ class GalleryRecognitionCoordinator:
         match: GalleryRecognitionMatch,
         frame_index: int,
     ) -> bool:
-        person = self.gallery.get(match.person_id)
+        person = self.gallery_adapter.get_identity(match.person_id)
         if person is None:
             return False
         track = match.candidate.track
@@ -430,32 +482,32 @@ class GalleryRecognitionCoordinator:
                 created_target = True
             except (TypeError, ValueError):
                 LOGGER.warning(
-                    "GALLERY_RECOGNITION_REJECTED person=%s track=%d reason=invalid_reference",
-                    _person_label(person.person_id),
+                    "GALLERY_RECOGNITION_REJECTED identity=%s track=%d reason=invalid_reference",
+                    self.gallery_adapter.identity_label(match.person_id),
                     track.track_id,
                 )
                 return False
 
         try:
-            self.gallery.attach_session_target(
+            self.gallery_adapter.attach_session_target(
                 existing_target.target_id,
-                person.person_id,
+                match.person_id,
             )
         except (KeyError, ValueError):
             if created_target:
                 self.target_manager.remove_by_track_id(track.track_id)
             LOGGER.info(
-                "GALLERY_RECOGNITION_REJECTED person=%s track=%d reason=association_conflict",
-                _person_label(person.person_id),
+                "GALLERY_RECOGNITION_REJECTED identity=%s track=%d reason=association_conflict",
+                self.gallery_adapter.identity_label(match.person_id),
                 track.track_id,
             )
             return False
 
         LOGGER.info(
-            "GALLERY_RECOGNIZED frame=%d person_id=%d target_id=%d "
+            "GALLERY_RECOGNIZED frame=%d identity_id=%s target_id=%d "
             "track_id=%d similarity=%.4f",
             frame_index,
-            person.person_id,
+            self.gallery_adapter.identity_label(match.person_id),
             existing_target.target_id,
             track.track_id,
             match.similarity,

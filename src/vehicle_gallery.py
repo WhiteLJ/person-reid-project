@@ -119,6 +119,58 @@ class VehicleTargetGallery:
     def get(self, vehicle_id: int) -> GalleryVehicle | None:
         return self._vehicles.get(_validate_vehicle_id(vehicle_id))
 
+    def feature_snapshot(
+        self,
+        vehicle_id: int,
+        reference_embeddings: Iterable[np.ndarray],
+        centroid: np.ndarray,
+    ) -> GalleryVehicle:
+        """Build a validated detached feature snapshot without mutation."""
+
+        current = self.get(vehicle_id)
+        if current is None:
+            raise KeyError(f"unknown Vehicle Gallery identity: {vehicle_id}")
+        return _copy_gallery_vehicle(
+            GalleryVehicle(
+                vehicle_id=current.vehicle_id,
+                label=current.label,
+                reference_embeddings=[
+                    np.asarray(reference).copy()
+                    for reference in reference_embeddings
+                ],
+                centroid=np.asarray(centroid).copy(),
+            )
+        )
+
+    def apply_feature_snapshot(self, snapshot: GalleryVehicle) -> GalleryVehicle:
+        """Apply validated features while preserving SessionTarget mappings."""
+
+        current = self.get(snapshot.vehicle_id)
+        if current is None:
+            raise KeyError(
+                f"unknown Vehicle Gallery identity: {snapshot.vehicle_id}"
+            )
+        if snapshot.label != current.label:
+            raise ValueError(
+                "feature update cannot change label for "
+                f"vehicle_id={snapshot.vehicle_id}"
+            )
+        updated = _copy_gallery_vehicle(snapshot)
+        self._vehicles[snapshot.vehicle_id] = updated
+        return updated
+
+    def update_vehicle_features(
+        self,
+        vehicle_id: int,
+        reference_embeddings: Iterable[np.ndarray],
+        centroid: np.ndarray,
+    ) -> GalleryVehicle:
+        """Replace one bounded normalized feature snapshot in memory."""
+
+        return self.apply_feature_snapshot(
+            self.feature_snapshot(vehicle_id, reference_embeddings, centroid)
+        )
+
     def all_vehicles(self) -> tuple[GalleryVehicle, ...]:
         return tuple(self._vehicles[index] for index in sorted(self._vehicles))
 
@@ -142,6 +194,11 @@ class VehicleTargetGallery:
 
     def attached_vehicle_ids(self) -> frozenset[int]:
         return frozenset(self._session_target_to_vehicle.values())
+
+    def session_target_ids(self) -> tuple[int, ...]:
+        """Return current runtime mapping keys for lifecycle coordination."""
+
+        return tuple(self._session_target_to_vehicle)
 
     def attach_session_target(self, target_id: int, vehicle_id: int) -> bool:
         """Attach one current-session target to an existing Vehicle identity."""
@@ -266,4 +323,3 @@ def _copy_vehicle_embedding(embedding: np.ndarray, *, context: str) -> np.ndarra
     if not np.isclose(norm, 1.0, atol=1e-3):
         raise ValueError(f"{context} must be L2 normalized")
     return np.asarray(array, dtype=np.float32).copy()
-

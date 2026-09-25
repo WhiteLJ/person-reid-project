@@ -184,6 +184,18 @@ class GalleryRecognitionConfig:
 
 
 @dataclass(frozen=True)
+class VehicleGalleryRecognitionConfig:
+    """PC-only automatic recognition controls for Vehicle Gallery identities."""
+
+    enabled: bool
+    recognition_interval_frames: int
+    min_track_age_frames: int
+    recognition_threshold: float
+    recognition_margin: float
+    confirmation_hits: int
+
+
+@dataclass(frozen=True)
 class DatabaseConfig:
     """SQLite persistence settings."""
 
@@ -195,6 +207,15 @@ class VehicleDatabaseConfig:
     """Vehicle Gallery SQLite persistence settings."""
 
     path: Path
+
+
+@dataclass(frozen=True)
+class VehicleGalleryEnrichmentConfig:
+    """PC-only persistent feature enrichment policy for Vehicle Gallery."""
+
+    post_recovery_stable_frames: int = 30
+    max_reference_embeddings: int = 8
+    duplicate_similarity_threshold: float = 0.95
 
 
 @dataclass(frozen=True)
@@ -226,8 +247,10 @@ class AppConfig:
     reid_quality: ReIDQualityConfig
     vehicle_reid_quality: VehicleReIDQualityConfig
     gallery_recognition: GalleryRecognitionConfig
+    vehicle_gallery_recognition: VehicleGalleryRecognitionConfig
     database: DatabaseConfig
     vehicle_database: VehicleDatabaseConfig
+    vehicle_gallery_enrichment: VehicleGalleryEnrichmentConfig
     ui: UIConfig
     diagnostics: DiagnosticsConfig
 
@@ -307,8 +330,10 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     reid_quality = _section(raw, "reid_quality")
     vehicle_reid_quality = _section(raw, "vehicle_reid_quality")
     gallery_recognition = _section(raw, "gallery_recognition")
+    vehicle_gallery_recognition = _section(raw, "vehicle_gallery_recognition")
     database = _section(raw, "database")
     vehicle_database = _section(raw, "vehicle_database")
+    vehicle_gallery_enrichment = _section(raw, "vehicle_gallery_enrichment")
     ui = _section(raw, "ui")
     diagnostics = _section(raw, "diagnostics")
 
@@ -648,6 +673,66 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     if confirmation_hits < 1:
         raise ValueError("gallery_recognition.confirmation_hits must be positive")
 
+    vehicle_recognition_interval_frames = int(
+        vehicle_gallery_recognition.get("recognition_interval_frames", 10)
+    )
+    vehicle_min_track_age_frames = int(
+        vehicle_gallery_recognition.get("min_track_age_frames", 5)
+    )
+    vehicle_recognition_threshold = float(
+        vehicle_gallery_recognition.get("recognition_threshold", 0.60)
+    )
+    vehicle_recognition_margin = float(
+        vehicle_gallery_recognition.get("recognition_margin", 0.08)
+    )
+    vehicle_confirmation_hits = int(
+        vehicle_gallery_recognition.get("confirmation_hits", 2)
+    )
+    if vehicle_recognition_interval_frames < 1:
+        raise ValueError(
+            "vehicle_gallery_recognition.recognition_interval_frames must be positive"
+        )
+    if vehicle_min_track_age_frames < 1:
+        raise ValueError(
+            "vehicle_gallery_recognition.min_track_age_frames must be positive"
+        )
+    if not 0.0 < vehicle_recognition_threshold <= 1.0:
+        raise ValueError(
+            "vehicle_gallery_recognition.recognition_threshold must be greater "
+            "than 0 and at most 1"
+        )
+    if vehicle_recognition_margin < 0.0:
+        raise ValueError(
+            "vehicle_gallery_recognition.recognition_margin must be non-negative"
+        )
+    if vehicle_confirmation_hits < 1:
+        raise ValueError(
+            "vehicle_gallery_recognition.confirmation_hits must be positive"
+        )
+
+    vehicle_post_recovery_stable_frames = int(
+        vehicle_gallery_enrichment.get("post_recovery_stable_frames", 30)
+    )
+    vehicle_gallery_max_reference_embeddings = int(
+        vehicle_gallery_enrichment.get("max_reference_embeddings", 8)
+    )
+    vehicle_duplicate_similarity_threshold = float(
+        vehicle_gallery_enrichment.get("duplicate_similarity_threshold", 0.95)
+    )
+    if vehicle_post_recovery_stable_frames < 0:
+        raise ValueError(
+            "vehicle_gallery_enrichment.post_recovery_stable_frames must be non-negative"
+        )
+    if vehicle_gallery_max_reference_embeddings < 1:
+        raise ValueError(
+            "vehicle_gallery_enrichment.max_reference_embeddings must be positive"
+        )
+    if not 0.0 < vehicle_duplicate_similarity_threshold <= 1.0:
+        raise ValueError(
+            "vehicle_gallery_enrichment.duplicate_similarity_threshold must be "
+            "greater than 0 and at most 1"
+        )
+
     database_value = database.get("path", "database/person_reid.db")
     database_path = Path(database_value)
     if not str(database_path).strip():
@@ -790,8 +875,21 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             recognition_margin=recognition_margin,
             confirmation_hits=confirmation_hits,
         ),
+        vehicle_gallery_recognition=VehicleGalleryRecognitionConfig(
+            enabled=bool(vehicle_gallery_recognition.get("enabled", True)),
+            recognition_interval_frames=vehicle_recognition_interval_frames,
+            min_track_age_frames=vehicle_min_track_age_frames,
+            recognition_threshold=vehicle_recognition_threshold,
+            recognition_margin=vehicle_recognition_margin,
+            confirmation_hits=vehicle_confirmation_hits,
+        ),
         database=DatabaseConfig(path=database_path),
         vehicle_database=VehicleDatabaseConfig(path=vehicle_database_path),
+        vehicle_gallery_enrichment=VehicleGalleryEnrichmentConfig(
+            post_recovery_stable_frames=vehicle_post_recovery_stable_frames,
+            max_reference_embeddings=vehicle_gallery_max_reference_embeddings,
+            duplicate_similarity_threshold=vehicle_duplicate_similarity_threshold,
+        ),
         ui=UIConfig(
             window_name=str(ui.get("window_name", "Person Tracking - MVP-8.2")),
             wait_key_ms=max(1, int(ui.get("wait_key_ms", 1))),

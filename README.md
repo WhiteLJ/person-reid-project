@@ -350,6 +350,36 @@ The admin tool only modifies `vehicle_reid.db`; it does not modify Person Galler
 records. Close the running smoke/application process before `remove` or `clear` so
 its in-memory runtime mappings cannot diverge from SQLite.
 
+## MVP-8.3-PC6: Vehicle persistent Gallery recognition
+
+PC6 extends the standalone PC-only Vehicle smoke path with automatic recognition
+of Vehicles loaded from `database/vehicle_reid.db`. It uses the shared Gallery
+recognition core with Vehicle-specific class filtering, quality checks, thresholds,
+the independent Vehicle `ReIDFrameCache`, one-to-one matching, and confirmation
+hits. A cold-start match creates a new runtime `Vehicle SessionTarget` from only
+the current live embedding and attaches it to the existing persistent identity;
+historical Gallery references are not copied into the runtime recovery bank.
+
+The PC6 tool keeps the existing `S`, `R`, `C`, `G`, and `Q` interactions. `G` is
+still explicit and idempotent for the current session target. `R` and `C` detach
+runtime targets without deleting persistent `V001`/`V002` records. Automatically
+recognized Vehicles may enrich their persistent feature bank only after the
+configured stable-active cooldown; no extra ReID inference is introduced.
+
+Run it with:
+
+```bash
+python -m tools.vehicle_gallery_recognition_smoke_test \
+  --config config/config.yaml \
+  --source data/vehicle_pc6/test.mp4
+```
+
+The initial Vehicle recognition values (`0.60` threshold, `0.08` margin, two
+confirmation hits) are engineering starting values based on the AIC21 calibration
+set and must be recalibrated for a final deployment. PC6 does not merge the
+Vehicle path into `app.py`, does not implement automatic Atlas inference, and does
+not restore old SessionTarget-to-Vehicle mappings after restart.
+
 ## Run
 
 Use the default camera:

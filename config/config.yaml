@@ -120,6 +120,21 @@ gallery_recognition:
   recognition_margin: 0.05
   confirmation_hits: 2
 
+vehicle_gallery_recognition:
+  # AIC21 Track2 engineering starting values; recalibrate for deployment.
+  enabled: true
+  recognition_interval_frames: 10
+  min_track_age_frames: 5
+  recognition_threshold: 0.60
+  recognition_margin: 0.08
+  confirmation_hits: 2
+
+vehicle_gallery_enrichment:
+  # Independent Vehicle policy; final deployment must be recalibrated.
+  post_recovery_stable_frames: 30
+  max_reference_embeddings: 8
+  duplicate_similarity_threshold: 0.95
+
 database:
   path: "database/person_reid.db"
 
@@ -132,7 +147,7 @@ ui:
   max_display_width: 1280
   show_class_name: true
   show_confidence: true
-  show_unselected_tracks: false
+  show_unselected_tracks: true
 
 diagnostics:
   enabled: true

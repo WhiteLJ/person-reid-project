@@ -105,6 +105,27 @@ class ConfigTests(unittest.TestCase):
         self.assertAlmostEqual(config.gallery_recognition.recognition_threshold, 0.80)
         self.assertAlmostEqual(config.gallery_recognition.recognition_margin, 0.05)
         self.assertEqual(config.gallery_recognition.confirmation_hits, 2)
+        self.assertTrue(config.vehicle_gallery_recognition.enabled)
+        self.assertEqual(
+            config.vehicle_gallery_recognition.recognition_interval_frames, 10
+        )
+        self.assertEqual(config.vehicle_gallery_recognition.min_track_age_frames, 5)
+        self.assertAlmostEqual(
+            config.vehicle_gallery_recognition.recognition_threshold, 0.60
+        )
+        self.assertAlmostEqual(
+            config.vehicle_gallery_recognition.recognition_margin, 0.08
+        )
+        self.assertEqual(config.vehicle_gallery_recognition.confirmation_hits, 2)
+        self.assertEqual(
+            config.vehicle_gallery_enrichment.post_recovery_stable_frames, 30
+        )
+        self.assertEqual(
+            config.vehicle_gallery_enrichment.max_reference_embeddings, 8
+        )
+        self.assertAlmostEqual(
+            config.vehicle_gallery_enrichment.duplicate_similarity_threshold, 0.95
+        )
         self.assertEqual(
             config.database.path,
             Path("database/person_reid.db").resolve(),
