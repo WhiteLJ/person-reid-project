@@ -42,7 +42,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual((config.reid.min_crop_width, config.reid.min_crop_height), (40, 100))
         self.assertTrue(config.vehicle_reid.enabled)
         self.assertEqual(config.vehicle_reid.model_name, "sbs_R50-ibn")
-        self.assertEqual(config.multiclass_tracking.vehicle_class_ids, (2,))
+        self.assertEqual(config.multiclass_tracking.vehicle_class_ids, (2, 5, 7))
         self.assertEqual(
             config.vehicle_reid.weight,
             Path("weights/vehicle_reid/veri_sbs_R50-ibn.pth").resolve(),
@@ -89,7 +89,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.reid_recovery.recovery_min_track_age_frames, 3)
         self.assertEqual(config.reid_recovery.recovery_confirmation_hits, 2)
         self.assertEqual(config.reid_recovery.recovery_pending_max_age_frames, 60)
-        self.assertEqual(config.reid_recovery.recovery_candidates_per_frame, 4)
+        self.assertEqual(config.reid_recovery.recovery_candidates_per_frame, 3)
         self.assertEqual(config.gallery_enrichment.post_recovery_stable_frames, 30)
         self.assertEqual(config.gallery_enrichment.max_reference_embeddings, 8)
         self.assertAlmostEqual(
@@ -105,11 +105,13 @@ class ConfigTests(unittest.TestCase):
         self.assertAlmostEqual(config.gallery_recognition.recognition_threshold, 0.80)
         self.assertAlmostEqual(config.gallery_recognition.recognition_margin, 0.05)
         self.assertEqual(config.gallery_recognition.confirmation_hits, 2)
+        self.assertEqual(config.gallery_recognition.recognition_candidates_per_frame, 3)
+        self.assertEqual(config.gallery_recognition.unmatched_retry_interval_frames, 15)
         self.assertTrue(config.vehicle_gallery_recognition.enabled)
         self.assertEqual(
-            config.vehicle_gallery_recognition.recognition_interval_frames, 10
+            config.vehicle_gallery_recognition.recognition_interval_frames, 5
         )
-        self.assertEqual(config.vehicle_gallery_recognition.min_track_age_frames, 5)
+        self.assertEqual(config.vehicle_gallery_recognition.min_track_age_frames, 3)
         self.assertAlmostEqual(
             config.vehicle_gallery_recognition.recognition_threshold, 0.60
         )
@@ -117,6 +119,12 @@ class ConfigTests(unittest.TestCase):
             config.vehicle_gallery_recognition.recognition_margin, 0.08
         )
         self.assertEqual(config.vehicle_gallery_recognition.confirmation_hits, 2)
+        self.assertEqual(
+            config.vehicle_gallery_recognition.recognition_candidates_per_frame, 1
+        )
+        self.assertEqual(
+            config.vehicle_gallery_recognition.unmatched_retry_interval_frames, 15
+        )
         self.assertEqual(
             config.vehicle_gallery_enrichment.post_recovery_stable_frames, 30
         )
@@ -161,7 +169,10 @@ class ConfigTests(unittest.TestCase):
             config.reid_recovery.recovery_reference_support_threshold, 0.80
         )
         self.assertEqual(config.reid_recovery.recovery_reference_support_top_k, 3)
+        self.assertEqual(config.reid_recovery.recovery_candidates_per_frame, 3)
         self.assertEqual(config.gallery_recognition.recognition_threshold, 0.80)
+        self.assertEqual(config.gallery_recognition.recognition_candidates_per_frame, 3)
+        self.assertEqual(config.gallery_recognition.unmatched_retry_interval_frames, 15)
         self.assertAlmostEqual(
             config.reid_quality.min_frame_edge_margin_ratio, 0.01
         )

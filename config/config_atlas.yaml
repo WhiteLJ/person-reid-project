@@ -58,7 +58,7 @@ reid_recovery:
   recovery_min_track_age_frames: 3
   recovery_confirmation_hits: 2
   recovery_pending_max_age_frames: 60
-  recovery_candidates_per_frame: 4
+  recovery_candidates_per_frame: 3
 
 gallery_enrichment:
   post_recovery_stable_frames: 30
@@ -78,6 +78,8 @@ gallery_recognition:
   recognition_threshold: 0.80
   recognition_margin: 0.05
   confirmation_hits: 2
+  recognition_candidates_per_frame: 3
+  unmatched_retry_interval_frames: 15
 
 database:
   path: "database/person_reid.db"

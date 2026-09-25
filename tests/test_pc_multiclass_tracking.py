@@ -89,7 +89,7 @@ class MultiClassTrackingTests(unittest.TestCase):
         stats = pipeline.stats()
 
         self.assertEqual(len(model.calls), 1)
-        self.assertEqual(model.calls[0]["classes"], [0, 2])
+        self.assertEqual(model.calls[0]["classes"], [0, 2, 5, 7])
         self.assertEqual(len(person_tracker.received), 1)
         self.assertEqual(len(vehicle_tracker.received), 1)
         self.assertEqual(

@@ -37,8 +37,8 @@ def _vehicle(vehicle_id: int, index: int = 0) -> GalleryVehicle:
     )
 
 
-def _track(track_id: int, x1: int = 10) -> Track:
-    return Track(track_id, (x1, 5, x1 + 40, 110), 0.95, 2)
+def _track(track_id: int, x1: int = 10, class_id: int = 2) -> Track:
+    return Track(track_id, (x1, 5, x1 + 40, 110), 0.95, class_id)
 
 
 def _vehicle_reid_config() -> VehicleReIDConfig:
@@ -127,6 +127,7 @@ def _coordinator(
     extractor: _FakeVehicleReID,
     *,
     cache: ReIDFrameCache | None = None,
+    vehicle_class_ids: tuple[int, ...] = (2,),
     **overrides: object,
 ) -> VehicleGalleryRecognitionCoordinator:
     return VehicleGalleryRecognitionCoordinator(
@@ -137,14 +138,91 @@ def _coordinator(
         recognition_config=_recognition_config(**overrides),
         recovery_config=_recovery_config(),
         quality_config=_quality_config(),
-        vehicle_class_ids=(2,),
+        vehicle_class_ids=vehicle_class_ids,
         embedding_cache=cache,
     )
 
 
 class VehicleGalleryRecognitionTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.frame = np.zeros((120, 160, 3), dtype=np.uint8)
+        self.frame = np.zeros((120, 300, 3), dtype=np.uint8)
+
+    def test_incremental_vehicle_recognition_budget_is_one(self) -> None:
+        high = _unit(0)
+        low = _unit(1)
+        extractor = _FakeVehicleReID([high, low, low, low])
+        coordinator = _coordinator(
+            TargetManager(),
+            _gallery(_vehicle(1, 0)),
+            extractor,
+            recognition_candidates_per_frame=1,
+        )
+        tracks = [
+            _track(27, 10),
+            _track(28, 70),
+            _track(29, 130),
+            _track(30, 190),
+        ]
+
+        observed_processed: list[int] = []
+        self.assertEqual(coordinator.process_frame(self.frame, tracks, 0), [])
+        observed_processed.append(
+            coordinator.last_frame_recognition_stats.sweep_processed_this_frame
+        )
+        self.assertEqual(coordinator.process_frame(self.frame, tracks, 1), [])
+        observed_processed.append(
+            coordinator.last_frame_recognition_stats.sweep_processed_this_frame
+        )
+        self.assertEqual(coordinator.process_frame(self.frame, tracks, 2), [])
+        observed_processed.append(
+            coordinator.last_frame_recognition_stats.sweep_processed_this_frame
+        )
+        matches = coordinator.process_frame(self.frame, tracks, 3)
+        observed_processed.append(
+            coordinator.last_frame_recognition_stats.sweep_processed_this_frame
+        )
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].candidate.track.track_id, 27)
+        self.assertEqual(extractor.batch_sizes, [1, 1, 1, 1])
+        self.assertTrue(all(value <= 1 for value in observed_processed))
+
+    def test_car_bus_truck_share_vehicle_recognition_path(self) -> None:
+        extractor = _FakeVehicleReID([_unit(0)])
+        coordinator = _coordinator(
+            TargetManager(),
+            _gallery(_vehicle(1, 0)),
+            extractor,
+            vehicle_class_ids=(2, 5, 7),
+        )
+
+        matches = coordinator.process_frame(
+            self.frame,
+            [_track(27, 10, 5)],
+            0,
+        )
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].candidate.track.class_id, 5)
+
+    def test_unmatched_vehicle_uses_retry_cooldown_without_reducing_quality_retries(self) -> None:
+        low = _unit(1)
+        extractor = _FakeVehicleReID([low, low])
+        coordinator = _coordinator(
+            TargetManager(),
+            _gallery(_vehicle(1, 0)),
+            extractor,
+        )
+        track = _track(27)
+
+        self.assertEqual(coordinator.process_frame(self.frame, [track], 0), [])
+        self.assertEqual(extractor.batch_sizes, [1])
+        for frame_index in range(1, 15):
+            coordinator.process_frame(self.frame, [track], frame_index)
+        self.assertEqual(extractor.batch_sizes, [1])
+        self.assertEqual(coordinator.retry_until_frame, {27: 15})
+        coordinator.process_frame(self.frame, [track], 15)
+        self.assertEqual(extractor.batch_sizes, [1, 1])
 
     def test_loaded_vehicle_is_recognized_as_new_target_with_live_only_bank(self) -> None:
         live = _unit(0)

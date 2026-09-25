@@ -126,7 +126,7 @@ class ReIDRecoveryConfig:
     recovery_min_track_age_frames: int = 3
     recovery_confirmation_hits: int = 2
     recovery_pending_max_age_frames: int = 60
-    recovery_candidates_per_frame: int = 4
+    recovery_candidates_per_frame: int = 3
 
 
 @dataclass(frozen=True)
@@ -181,6 +181,10 @@ class GalleryRecognitionConfig:
     recognition_threshold: float
     recognition_margin: float
     confirmation_hits: int
+    # Zero is a legacy-programmatic-construction sentinel. YAML-loaded
+    # configurations always provide a positive budget.
+    recognition_candidates_per_frame: int = 0
+    unmatched_retry_interval_frames: int = 15
 
 
 @dataclass(frozen=True)
@@ -193,6 +197,8 @@ class VehicleGalleryRecognitionConfig:
     recognition_threshold: float
     recognition_margin: float
     confirmation_hits: int
+    recognition_candidates_per_frame: int = 1
+    unmatched_retry_interval_frames: int = 15
 
 
 @dataclass(frozen=True)
@@ -455,7 +461,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         reid_recovery.get("recovery_pending_max_age_frames", 60)
     )
     recovery_candidates_per_frame = int(
-        reid_recovery.get("recovery_candidates_per_frame", 4)
+        reid_recovery.get("recovery_candidates_per_frame", 3)
     )
     if lost_grace_frames < 1:
         raise ValueError("reid_recovery.lost_grace_frames must be positive")
@@ -654,6 +660,12 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         gallery_recognition.get("recognition_margin", 0.05)
     )
     confirmation_hits = int(gallery_recognition.get("confirmation_hits", 2))
+    recognition_candidates_per_frame = int(
+        gallery_recognition.get("recognition_candidates_per_frame", 3)
+    )
+    unmatched_retry_interval_frames = int(
+        gallery_recognition.get("unmatched_retry_interval_frames", 15)
+    )
     if recognition_interval_frames < 1:
         raise ValueError(
             "gallery_recognition.recognition_interval_frames must be positive"
@@ -672,6 +684,14 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         )
     if confirmation_hits < 1:
         raise ValueError("gallery_recognition.confirmation_hits must be positive")
+    if recognition_candidates_per_frame < 1:
+        raise ValueError(
+            "gallery_recognition.recognition_candidates_per_frame must be positive"
+        )
+    if unmatched_retry_interval_frames < 1:
+        raise ValueError(
+            "gallery_recognition.unmatched_retry_interval_frames must be positive"
+        )
 
     vehicle_recognition_interval_frames = int(
         vehicle_gallery_recognition.get("recognition_interval_frames", 10)
@@ -687,6 +707,12 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     )
     vehicle_confirmation_hits = int(
         vehicle_gallery_recognition.get("confirmation_hits", 2)
+    )
+    vehicle_recognition_candidates_per_frame = int(
+        vehicle_gallery_recognition.get("recognition_candidates_per_frame", 1)
+    )
+    vehicle_unmatched_retry_interval_frames = int(
+        vehicle_gallery_recognition.get("unmatched_retry_interval_frames", 15)
     )
     if vehicle_recognition_interval_frames < 1:
         raise ValueError(
@@ -708,6 +734,16 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     if vehicle_confirmation_hits < 1:
         raise ValueError(
             "vehicle_gallery_recognition.confirmation_hits must be positive"
+        )
+    if vehicle_recognition_candidates_per_frame < 1:
+        raise ValueError(
+            "vehicle_gallery_recognition.recognition_candidates_per_frame "
+            "must be positive"
+        )
+    if vehicle_unmatched_retry_interval_frames < 1:
+        raise ValueError(
+            "vehicle_gallery_recognition.unmatched_retry_interval_frames "
+            "must be positive"
         )
 
     vehicle_post_recovery_stable_frames = int(
@@ -874,6 +910,8 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             recognition_threshold=recognition_threshold,
             recognition_margin=recognition_margin,
             confirmation_hits=confirmation_hits,
+            recognition_candidates_per_frame=recognition_candidates_per_frame,
+            unmatched_retry_interval_frames=unmatched_retry_interval_frames,
         ),
         vehicle_gallery_recognition=VehicleGalleryRecognitionConfig(
             enabled=bool(vehicle_gallery_recognition.get("enabled", True)),
@@ -882,6 +920,10 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             recognition_threshold=vehicle_recognition_threshold,
             recognition_margin=vehicle_recognition_margin,
             confirmation_hits=vehicle_confirmation_hits,
+            recognition_candidates_per_frame=(
+                vehicle_recognition_candidates_per_frame
+            ),
+            unmatched_retry_interval_frames=vehicle_unmatched_retry_interval_frames,
         ),
         database=DatabaseConfig(path=database_path),
         vehicle_database=VehicleDatabaseConfig(path=vehicle_database_path),

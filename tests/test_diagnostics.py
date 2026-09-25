@@ -101,6 +101,51 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("recovery_sweep_frames=3", summary)
         self.assertIn("recovery_sweep_reid_ms=32.00", summary)
 
+    def test_recognition_sweep_counters_are_aggregated_once_per_sweep(self) -> None:
+        diagnostics = RuntimeDiagnostics(enabled=True, log_interval_frames=100)
+        diagnostics.record_frame(
+            0.010,
+            0,
+            recognition_reid_batch_count=1,
+            recognition_reid_seconds=0.004,
+            recognition_sweep_started=True,
+            recognition_sweep_candidate_total=7,
+            recognition_sweep_processed_this_frame=3,
+            recognition_sweep_frames=1,
+            recognition_sweep_reid_ms=4.0,
+            recognition_retry_skipped=2,
+        )
+        diagnostics.record_frame(
+            0.010,
+            1,
+            recognition_reid_batch_count=1,
+            recognition_reid_seconds=0.003,
+            recognition_sweep_processed_this_frame=3,
+            recognition_sweep_frames=2,
+            recognition_sweep_reid_ms=7.0,
+        )
+        diagnostics.record_frame(
+            0.010,
+            2,
+            recognition_reid_batch_count=1,
+            recognition_reid_seconds=0.002,
+            recognition_sweep_completed=True,
+            recognition_sweep_processed_this_frame=1,
+            recognition_sweep_frames=3,
+            recognition_sweep_reid_ms=9.0,
+        )
+
+        summary = diagnostics.summary()
+        self.assertIn("recognition_reid_batches=3", summary)
+        self.assertIn("recognition_reid_ms=9.00", summary)
+        self.assertIn("recognition_sweep_started=1", summary)
+        self.assertIn("recognition_sweep_completed=1", summary)
+        self.assertIn("recognition_sweep_candidate_total=7", summary)
+        self.assertIn("recognition_sweep_processed_this_frame=7", summary)
+        self.assertIn("recognition_sweep_frames=3", summary)
+        self.assertIn("recognition_sweep_reid_ms=9.00", summary)
+        self.assertIn("recognition_retry_skipped=2", summary)
+
 
 if __name__ == "__main__":
     unittest.main()

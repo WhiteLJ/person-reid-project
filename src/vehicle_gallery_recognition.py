@@ -8,6 +8,7 @@ from .config import (
     GalleryRecognitionConfig,
     ReIDRecoveryConfig,
     VehicleReIDConfig,
+    VehicleGalleryRecognitionConfig,
     VehicleReIDQualityConfig,
 )
 from .gallery_recognition import (
@@ -29,7 +30,9 @@ class VehicleGalleryRecognitionCoordinator(GalleryRecognitionCoordinator):
         gallery: VehicleTargetGallery,
         reid_extractor: object,
         reid_config: VehicleReIDConfig,
-        recognition_config: GalleryRecognitionConfig,
+        recognition_config: (
+            GalleryRecognitionConfig | VehicleGalleryRecognitionConfig
+        ),
         recovery_config: ReIDRecoveryConfig,
         quality_config: VehicleReIDQualityConfig,
         *,
@@ -37,10 +40,8 @@ class VehicleGalleryRecognitionCoordinator(GalleryRecognitionCoordinator):
         embedding_cache: ReIDFrameCache | None = None,
     ) -> None:
         classes = tuple(sorted({int(class_id) for class_id in vehicle_class_ids}))
-        if classes != (2,):
-            raise ValueError(
-                "Vehicle Gallery recognition currently supports COCO car class 2"
-            )
+        if not classes:
+            raise ValueError("Vehicle Gallery recognition requires a class")
 
         def quality_assessor(frame, track, tracks):
             return assess_vehicle_reid_quality(
@@ -68,7 +69,7 @@ class VehicleGalleryRecognitionCoordinator(GalleryRecognitionCoordinator):
             recognition_config=recognition_config,
             recovery_config=recovery_config,
             person_class_id=2,
-            track_class_id=2,
+            track_class_ids=classes,
             embedding_cache=embedding_cache,
             quality_assessor=quality_assessor,
             gallery_adapter=adapter,

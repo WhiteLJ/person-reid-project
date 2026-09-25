@@ -207,6 +207,7 @@ def run(config: AppConfig) -> int:
             else:
                 gallery.detach_session_target(target.target_id)
                 target_manager.deselect(track)
+                gallery_recognition.notify_gallery_changed()
                 LOGGER.info(
                     "TARGET_REMOVED target=%d track=%d",
                     target.target_id,
@@ -239,6 +240,7 @@ def run(config: AppConfig) -> int:
                 track.track_id,
                 already_enrolled is not None,
             )
+            gallery_recognition.notify_gallery_changed()
 
     try:
         source.open()
@@ -272,6 +274,7 @@ def run(config: AppConfig) -> int:
                 current_frame_index,
                 protected_track_ids=target_recovery.last_recovered_track_ids,
             )
+            recognition_stats = gallery_recognition.last_frame_recognition_stats
             gallery_seconds = perf_counter() - gallery_started
             frame_index += 1
             render_started = perf_counter()
@@ -302,6 +305,19 @@ def run(config: AppConfig) -> int:
                 ),
                 recovery_sweep_frames=recovery_stats.sweep_frames,
                 recovery_sweep_reid_ms=recovery_stats.sweep_reid_ms,
+                recognition_reid_batch_count=recognition_stats.reid_batch_count,
+                recognition_reid_seconds=recognition_stats.reid_ms / 1000.0,
+                recognition_sweep_started=recognition_stats.sweep_started,
+                recognition_sweep_completed=recognition_stats.sweep_completed,
+                recognition_sweep_candidate_total=(
+                    recognition_stats.sweep_candidate_total
+                ),
+                recognition_sweep_processed_this_frame=(
+                    recognition_stats.sweep_processed_this_frame
+                ),
+                recognition_sweep_frames=recognition_stats.sweep_frames,
+                recognition_sweep_reid_ms=recognition_stats.sweep_reid_ms,
+                recognition_retry_skipped=recognition_stats.skipped_retry_cooldown,
             )
             if action == UIAction.QUIT:
                 LOGGER.info("USER_QUIT key=q")
@@ -310,6 +326,7 @@ def run(config: AppConfig) -> int:
                 selected_count = len(target_manager.targets)
                 gallery.detach_all_session_targets(tuple(target_manager.targets))
                 target_manager.clear()
+                gallery_recognition.notify_gallery_changed()
                 LOGGER.info("TARGETS_CLEARED count=%d", selected_count)
                 continue
 

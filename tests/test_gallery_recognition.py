@@ -221,7 +221,7 @@ class GalleryRecognitionTests(unittest.TestCase):
             _gallery(_person(1, (1, 0))),
             extractor,  # type: ignore[arg-type]
             _reid_config(),
-            _recognition_config(),
+            _recognition_config(unmatched_retry_interval_frames=1),
             _recovery_config(),
             embedding_cache=cache,
         )

@@ -130,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return None
         vehicle = persistence.enroll(target)
+        recognition.notify_gallery_changed()
         refresh_gallery_labels()
         LOGGER.info(
             "VEHICLE_GALLERY_ENROLLED vehicle=%s target_id=%d track_id=%d",
@@ -143,6 +144,22 @@ def main(argv: list[str] | None = None) -> int:
     started = time.perf_counter()
     recognition_matches = 0
     enrichment_updates = 0
+    recovery_reid_ms_total = 0.0
+    recognition_reid_ms_total = 0.0
+    recognition_reid_batches = 0
+    recognition_retry_skipped = 0
+    recovery_sweep_started = 0
+    recovery_sweep_completed = 0
+    recovery_sweep_candidate_total = 0
+    recovery_sweep_processed = 0
+    recovery_sweep_frames = 0
+    recovery_sweep_reid_ms = 0.0
+    recognition_sweep_started = 0
+    recognition_sweep_completed = 0
+    recognition_sweep_candidate_total = 0
+    recognition_sweep_processed = 0
+    recognition_sweep_frames = 0
+    recognition_sweep_reid_ms = 0.0
     try:
         cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
         with VideoSource(source) as video:
@@ -153,6 +170,18 @@ def main(argv: list[str] | None = None) -> int:
 
                 output = tracking_pipeline.process(frame)
                 recovery.process_frame(frame, output.vehicle_tracks, frame_count)
+                recovery_stats = recovery.last_frame_recovery_stats
+                recovery_reid_ms_total += recovery_stats.reid_ms
+                recovery_sweep_started += int(recovery_stats.sweep_started)
+                recovery_sweep_completed += int(recovery_stats.sweep_completed)
+                if recovery_stats.sweep_started:
+                    recovery_sweep_candidate_total += (
+                        recovery_stats.sweep_candidate_total
+                    )
+                recovery_sweep_processed += recovery_stats.sweep_processed_this_frame
+                if recovery_stats.sweep_completed:
+                    recovery_sweep_frames += recovery_stats.sweep_frames
+                    recovery_sweep_reid_ms += recovery_stats.sweep_reid_ms
                 persistence.update_runtime_state(
                     target_manager.targets.values(),
                     frame_count,
@@ -166,6 +195,22 @@ def main(argv: list[str] | None = None) -> int:
                     frame_count,
                     protected_track_ids=recovery.last_recovered_track_ids,
                 )
+                recognition_stats = recognition.last_frame_recognition_stats
+                recognition_reid_ms_total += recognition_stats.reid_ms
+                recognition_reid_batches += recognition_stats.reid_batch_count
+                recognition_retry_skipped += recognition_stats.skipped_retry_cooldown
+                recognition_sweep_started += int(recognition_stats.sweep_started)
+                recognition_sweep_completed += int(recognition_stats.sweep_completed)
+                if recognition_stats.sweep_started:
+                    recognition_sweep_candidate_total += (
+                        recognition_stats.sweep_candidate_total
+                    )
+                recognition_sweep_processed += (
+                    recognition_stats.sweep_processed_this_frame
+                )
+                if recognition_stats.sweep_completed:
+                    recognition_sweep_frames += recognition_stats.sweep_frames
+                    recognition_sweep_reid_ms += recognition_stats.sweep_reid_ms
                 for match in matches:
                     target = target_manager.target_for_track(
                         match.candidate.track.track_id
@@ -257,6 +302,7 @@ def main(argv: list[str] | None = None) -> int:
                     persistence.detach_all_session_targets(
                         before.difference(target_manager.targets)
                     )
+                    recognition.notify_gallery_changed()
                     refresh_gallery_labels()
                     if action is UIAction.QUIT:
                         break
@@ -264,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
                     target_ids = tuple(target_manager.targets)
                     target_manager.clear()
                     persistence.detach_all_session_targets(target_ids)
+                    recognition.notify_gallery_changed()
                     refresh_gallery_labels()
                     LOGGER.info("VEHICLE_TARGETS_CLEARED")
     finally:
@@ -275,7 +322,15 @@ def main(argv: list[str] | None = None) -> int:
         "PC6_STATS frames=%d average_fps=%.2f unique_person_tracks=%d "
         "unique_vehicle_tracks=%d yolo_inference_count=%d vehicle_targets=%d "
         "gallery_vehicles=%d recognized=%d enrichment_updates=%d "
-        "recognition_reid_batches=%d recognition_quality_rejected=%d",
+        "recognition_reid_ms=%.2f recognition_reid_batches=%d "
+        "recognition_retry_skipped=%d recognition_quality_rejected=%d "
+        "recovery_reid_ms=%.2f recovery_sweep_started=%d "
+        "recovery_sweep_completed=%d recovery_sweep_candidate_total=%d "
+        "recovery_sweep_processed=%d recovery_sweep_frames=%d "
+        "recovery_sweep_reid_ms=%.2f recognition_sweep_started=%d "
+        "recognition_sweep_completed=%d recognition_sweep_candidate_total=%d "
+        "recognition_sweep_processed=%d recognition_sweep_frames=%d "
+        "recognition_sweep_reid_ms=%.2f",
         frame_count,
         frame_count / elapsed if elapsed > 0 else 0.0,
         stats.unique_person_tracks,
@@ -285,8 +340,23 @@ def main(argv: list[str] | None = None) -> int:
         len(gallery.all_vehicles()),
         recognition_matches,
         enrichment_updates,
-        recognition.reid_batch_count,
+        recognition_reid_ms_total,
+        recognition_reid_batches,
+        recognition_retry_skipped,
         recognition.quality_rejected_count,
+        recovery_reid_ms_total,
+        recovery_sweep_started,
+        recovery_sweep_completed,
+        recovery_sweep_candidate_total,
+        recovery_sweep_processed,
+        recovery_sweep_frames,
+        recovery_sweep_reid_ms,
+        recognition_sweep_started,
+        recognition_sweep_completed,
+        recognition_sweep_candidate_total,
+        recognition_sweep_processed,
+        recognition_sweep_frames,
+        recognition_sweep_reid_ms,
     )
     return 0
 

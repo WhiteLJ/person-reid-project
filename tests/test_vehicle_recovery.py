@@ -34,8 +34,8 @@ class _FakeVehicleReID:
         return result
 
 
-def _track(track_id: int, bbox=(20, 20, 80, 120)) -> Track:
-    return Track(track_id, bbox, 0.95, 2)
+def _track(track_id: int, bbox=(20, 20, 80, 120), class_id: int = 2) -> Track:
+    return Track(track_id, bbox, 0.95, class_id)
 
 
 def _quality_config() -> VehicleReIDQualityConfig:
@@ -74,7 +74,7 @@ class VehicleRecoveryTests(unittest.TestCase):
         self.frame = np.zeros((240, 640, 3), dtype=np.uint8)
         self.initial_track = _track(4)
 
-    def _coordinator(self, extractor=None, **overrides):
+    def _coordinator(self, extractor=None, vehicle_class_ids=(2,), **overrides):
         manager = TargetManager()
         extractor = extractor or _FakeVehicleReID()
         coordinator = VehicleRecoveryCoordinator(
@@ -83,7 +83,7 @@ class VehicleRecoveryTests(unittest.TestCase):
             reid_config=type("VehicleConfig", (), {})(),
             recovery_config=_recovery_config(**overrides),
             quality_config=_quality_config(),
-            vehicle_class_ids=(2,),
+            vehicle_class_ids=vehicle_class_ids,
             embedding_cache=ReIDFrameCache(),
         )
         return manager, coordinator, extractor
@@ -196,6 +196,27 @@ class VehicleRecoveryTests(unittest.TestCase):
 
         np.testing.assert_array_equal(person_cache.get(4, 10), person_embedding)
         np.testing.assert_array_equal(vehicle_cache.get(4, 10), vehicle_embedding)
+
+    def test_recovery_accepts_bus_and_truck_classes_in_shared_vehicle_path(self) -> None:
+        manager, coordinator, _extractor = self._coordinator(
+            vehicle_class_ids=(2, 5, 7),
+        )
+        target = coordinator.select_from_track(
+            self.frame,
+            self.initial_track,
+            0,
+            tracks=[self.initial_track],
+        )
+        assert target is not None
+        coordinator.process_frame(self.frame, [], 1)
+
+        bus = _track(38, (120, 20, 180, 120), class_id=5)
+        matches = coordinator.process_frame(self.frame, [bus], 2)
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(target.target_id, 1)
+        self.assertEqual(target.current_track_id, bus.track_id)
+        self.assertEqual(manager.target_recovered_count, 1)
 
     def test_vehicle_state_logs_are_emitted_only_on_recovery_events(self) -> None:
         _manager, coordinator, _extractor = self._coordinator(

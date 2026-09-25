@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field, replace
 from logging import getLogger
 from time import perf_counter
@@ -307,6 +307,7 @@ class TargetRecoveryCoordinator:
         person_class_id: int = 0,
         track_class_id: int | None = None,
         quality_assessor: Callable[..., Any] | None = None,
+        track_class_ids: Collection[int] | None = None,
     ) -> None:
         self.target_manager = target_manager
         self.reid_extractor = reid_extractor
@@ -315,8 +316,27 @@ class TargetRecoveryCoordinator:
         self.embedding_cache = embedding_cache
         self.quality_config = quality_config or ReIDQualityConfig()
         self.person_class_id = person_class_id
+        if track_class_ids is None:
+            resolved_track_class_ids = (
+                person_class_id if track_class_id is None else track_class_id,
+            )
+        else:
+            resolved_track_class_ids = tuple(
+                sorted({int(class_id) for class_id in track_class_ids})
+            )
+            if track_class_id is not None and tuple(resolved_track_class_ids) != (
+                int(track_class_id),
+            ):
+                raise ValueError(
+                    "track_class_id and track_class_ids specify different classes"
+                )
+        if not resolved_track_class_ids:
+            raise ValueError("track_class_ids must not be empty")
+        self.track_class_ids = frozenset(resolved_track_class_ids)
         self.track_class_id = (
-            person_class_id if track_class_id is None else track_class_id
+            next(iter(self.track_class_ids))
+            if len(self.track_class_ids) == 1
+            else None
         )
         self.quality_assessor = quality_assessor
         self.last_recovered_track_ids: frozenset[int] = frozenset()
@@ -467,7 +487,7 @@ class TargetRecoveryCoordinator:
                     sorted(
                         track.track_id
                         for track in self.target_manager.recovery_candidates(tracks)
-                        if track.class_id == self.track_class_id
+                        if track.class_id in self.track_class_ids
                         and self._track_ages.get(track.track_id, 0)
                         >= self.recovery_config.recovery_min_track_age_frames
                     )
@@ -626,7 +646,7 @@ class TargetRecoveryCoordinator:
         currently_unbound = {
             track.track_id
             for track in self.target_manager.recovery_candidates(tracks)
-            if track.class_id == self.track_class_id
+            if track.class_id in self.track_class_ids
         }
         recovery_candidates = [
             RecoveryCandidate(current_tracks[track_id], embedding.copy())

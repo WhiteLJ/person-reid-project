@@ -45,11 +45,6 @@ class VehicleRecoveryCoordinator(TargetRecoveryCoordinator):
         classes = tuple(sorted({int(class_id) for class_id in vehicle_class_ids}))
         if not classes:
             raise ValueError("Vehicle Recovery requires at least one vehicle class")
-        if len(classes) != 1:
-            raise ValueError(
-                "PC4A Vehicle Recovery currently supports one class: COCO car=2"
-            )
-        vehicle_class_id = classes[0]
 
         def quality_assessor(frame, track, tracks):
             return assess_vehicle_reid_quality(
@@ -66,7 +61,7 @@ class VehicleRecoveryCoordinator(TargetRecoveryCoordinator):
             reid_config=reid_config,  # type: ignore[arg-type]
             recovery_config=recovery_config,  # type: ignore[arg-type]
             embedding_cache=embedding_cache,
-            track_class_id=vehicle_class_id,
+            track_class_ids=classes,
             quality_assessor=quality_assessor,
         )
 

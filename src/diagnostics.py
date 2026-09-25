@@ -52,6 +52,15 @@ class RuntimeDiagnostics:
         self._recovery_sweep_processed_count = 0
         self._recovery_sweep_frame_count = 0
         self._recovery_sweep_reid_seconds = 0.0
+        self._recognition_sweep_started_count = 0
+        self._recognition_sweep_completed_count = 0
+        self._recognition_sweep_candidate_count = 0
+        self._recognition_sweep_processed_count = 0
+        self._recognition_sweep_frame_count = 0
+        self._recognition_sweep_reid_seconds = 0.0
+        self._recognition_reid_batch_count = 0
+        self._recognition_reid_seconds = 0.0
+        self._recognition_retry_skipped_count = 0
 
     def observe_tracks(self, tracks: Sequence[Track], frame_index: int) -> None:
         """Record Track IDs entering/leaving the current result set."""
@@ -92,6 +101,15 @@ class RuntimeDiagnostics:
         recovery_sweep_processed_this_frame: int = 0,
         recovery_sweep_frames: int = 0,
         recovery_sweep_reid_ms: float = 0.0,
+        recognition_reid_batch_count: int = 0,
+        recognition_reid_seconds: float = 0.0,
+        recognition_sweep_started: bool = False,
+        recognition_sweep_completed: bool = False,
+        recognition_sweep_candidate_total: int = 0,
+        recognition_sweep_processed_this_frame: int = 0,
+        recognition_sweep_frames: int = 0,
+        recognition_sweep_reid_ms: float = 0.0,
+        recognition_retry_skipped: int = 0,
     ) -> None:
         if not self.enabled:
             return
@@ -104,6 +122,8 @@ class RuntimeDiagnostics:
         ui_seconds = max(0.0, ui_seconds)
         recovery_reid_seconds = max(0.0, recovery_reid_seconds)
         recovery_sweep_reid_ms = max(0.0, recovery_sweep_reid_ms)
+        recognition_reid_seconds = max(0.0, recognition_reid_seconds)
+        recognition_sweep_reid_ms = max(0.0, recognition_sweep_reid_ms)
         self._elapsed_seconds += frame_seconds
         self._frame_total_seconds += frame_seconds
         self._tracking_seconds += tracking_seconds
@@ -140,6 +160,25 @@ class RuntimeDiagnostics:
             0, recovery_sweep_processed_this_frame
         )
         self._recovery_sweep_reid_seconds += recovery_sweep_reid_ms / 1000.0 if recovery_sweep_completed else 0.0
+        self._recognition_reid_batch_count += max(0, recognition_reid_batch_count)
+        self._recognition_reid_seconds += recognition_reid_seconds
+        self._recognition_retry_skipped_count += max(0, recognition_retry_skipped)
+        if recognition_sweep_started:
+            self._recognition_sweep_started_count += 1
+            self._recognition_sweep_candidate_count += max(
+                0, recognition_sweep_candidate_total
+            )
+        if recognition_sweep_completed:
+            self._recognition_sweep_completed_count += 1
+            self._recognition_sweep_frame_count += max(0, recognition_sweep_frames)
+        self._recognition_sweep_processed_count += max(
+            0, recognition_sweep_processed_this_frame
+        )
+        self._recognition_sweep_reid_seconds += (
+            recognition_sweep_reid_ms / 1000.0
+            if recognition_sweep_completed
+            else 0.0
+        )
         if self.processed_frames % self.log_interval_frames == 0:
             LOGGER.info("CROWD_STATS %s", self.summary())
 
@@ -176,6 +215,15 @@ class RuntimeDiagnostics:
             "recovery_sweep_processed_this_frame": self._recovery_sweep_processed_count,
             "recovery_sweep_frames": self._recovery_sweep_frame_count,
             "recovery_sweep_reid_ms": f"{self._recovery_sweep_reid_seconds * 1000.0:.2f}",
+            "recognition_reid_batches": self._recognition_reid_batch_count,
+            "recognition_reid_ms": f"{self._recognition_reid_seconds * 1000.0:.2f}",
+            "recognition_sweep_started": self._recognition_sweep_started_count,
+            "recognition_sweep_completed": self._recognition_sweep_completed_count,
+            "recognition_sweep_candidate_total": self._recognition_sweep_candidate_count,
+            "recognition_sweep_processed_this_frame": self._recognition_sweep_processed_count,
+            "recognition_sweep_frames": self._recognition_sweep_frame_count,
+            "recognition_sweep_reid_ms": f"{self._recognition_sweep_reid_seconds * 1000.0:.2f}",
+            "recognition_retry_skipped": self._recognition_retry_skipped_count,
         }
         values.update(counters)
         return " ".join(f"{key}={value}" for key, value in values.items())
