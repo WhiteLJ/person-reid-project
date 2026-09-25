@@ -191,6 +191,13 @@ class DatabaseConfig:
 
 
 @dataclass(frozen=True)
+class VehicleDatabaseConfig:
+    """Vehicle Gallery SQLite persistence settings."""
+
+    path: Path
+
+
+@dataclass(frozen=True)
 class UIConfig:
     window_name: str
     wait_key_ms: int
@@ -220,6 +227,7 @@ class AppConfig:
     vehicle_reid_quality: VehicleReIDQualityConfig
     gallery_recognition: GalleryRecognitionConfig
     database: DatabaseConfig
+    vehicle_database: VehicleDatabaseConfig
     ui: UIConfig
     diagnostics: DiagnosticsConfig
 
@@ -300,6 +308,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     vehicle_reid_quality = _section(raw, "vehicle_reid_quality")
     gallery_recognition = _section(raw, "gallery_recognition")
     database = _section(raw, "database")
+    vehicle_database = _section(raw, "vehicle_database")
     ui = _section(raw, "ui")
     diagnostics = _section(raw, "diagnostics")
 
@@ -646,6 +655,15 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     if not database_path.is_absolute():
         database_path = project_root / database_path
 
+    vehicle_database_value = vehicle_database.get(
+        "path", "database/vehicle_reid.db"
+    )
+    vehicle_database_path = Path(vehicle_database_value)
+    if not str(vehicle_database_path).strip():
+        raise ValueError("vehicle_database.path cannot be empty")
+    if not vehicle_database_path.is_absolute():
+        vehicle_database_path = project_root / vehicle_database_path
+
     tracker_value = str(tracking.get("tracker", "botsort.yaml"))
     tracker_path = Path(tracker_value)
     if not tracker_path.is_absolute():
@@ -773,6 +791,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             confirmation_hits=confirmation_hits,
         ),
         database=DatabaseConfig(path=database_path),
+        vehicle_database=VehicleDatabaseConfig(path=vehicle_database_path),
         ui=UIConfig(
             window_name=str(ui.get("window_name", "Person Tracking - MVP-8.2")),
             wait_key_ms=max(1, int(ui.get("wait_key_ms", 1))),

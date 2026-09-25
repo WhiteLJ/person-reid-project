@@ -314,6 +314,42 @@ PC4A does not implement Vehicle Gallery, SQLite, restart recognition, Atlas,
 or Vehicle persistence. Do not treat the initial Vehicle Recovery thresholds as
 calibrated until the calibration output has been reviewed.
 
+## MVP-8.3-PC5: Vehicle Gallery and SQLite persistence
+
+PC5 adds a separate, PC-only persistent Vehicle Gallery to the standalone Vehicle
+recovery smoke tool. A selected Vehicle SessionTarget can be explicitly enrolled
+with `G`; the current runtime reference bank is snapshotted into the independent
+`database/vehicle_reid.db` database and receives a monotonic identity such as
+`V001`. Vehicle Track IDs (`V-T17`) and session target IDs (`VT-1`) remain separate
+from this persistent identity.
+
+The Vehicle database uses its own `gallery_vehicle`,
+`gallery_vehicle_embedding`, and `gallery_vehicle_meta` tables and validates
+2048-D float32 normalized embeddings. It never writes the Person Gallery database,
+and SessionTarget/Track mappings are runtime-only and are not restored after a
+restart. PC5 does not automatically recognize loaded vehicles; that is reserved
+for PC6.
+
+Run the PC5 smoke tool with `S`, `R`, `C`, `G`, and `Q`:
+
+```bash
+python -m tools.vehicle_gallery_smoke_test \
+  --config config/config.yaml \
+  --source data/vehicle_pc5/test.mp4
+```
+
+Use the offline Vehicle Gallery tool while the main application is closed:
+
+```bash
+python -m tools.vehicle_gallery_admin list
+python -m tools.vehicle_gallery_admin remove V001
+python -m tools.vehicle_gallery_admin clear
+```
+
+The admin tool only modifies `vehicle_reid.db`; it does not modify Person Gallery
+records. Close the running smoke/application process before `remove` or `clear` so
+its in-memory runtime mappings cannot diverge from SQLite.
+
 ## Run
 
 Use the default camera:

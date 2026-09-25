@@ -109,6 +109,10 @@ class ConfigTests(unittest.TestCase):
             config.database.path,
             Path("database/person_reid.db").resolve(),
         )
+        self.assertEqual(
+            config.vehicle_database.path,
+            Path("database/vehicle_reid.db").resolve(),
+        )
         self.assertIsInstance(config.ui.show_unselected_tracks, bool)
         self.assertEqual(config.ui.max_display_width, 1280)
         self.assertTrue(config.diagnostics.enabled)
@@ -142,6 +146,10 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertAlmostEqual(
             config.gallery_enrichment.duplicate_similarity_threshold, 0.95
+        )
+        self.assertEqual(
+            config.vehicle_database.path,
+            Path("database/vehicle_reid.db").resolve(),
         )
 
 

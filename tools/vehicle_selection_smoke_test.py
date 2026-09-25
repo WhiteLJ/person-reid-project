@@ -7,7 +7,7 @@ import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import cv2
 import numpy as np
@@ -35,6 +35,7 @@ def _draw_vehicle_track(
     target_manager: TargetManager,
     *,
     show_unselected_tracks: bool,
+    gallery_labels_by_target: Mapping[int, str] | None = None,
 ) -> None:
     height, width = frame.shape[:2]
     x1, y1, x2, y2 = (
@@ -50,11 +51,17 @@ def _draw_vehicle_track(
         return
     color = VEHICLE_SELECTED_COLOR if selected else VEHICLE_COLOR
     thickness = 4 if selected else 2
-    label = (
-        f"VT-{target.target_id} / V-T{track.track_id} {track.confidence:.2f}"
-        if target is not None
-        else f"Vehicle V-T{track.track_id} {track.confidence:.2f}"
-    )
+    if target is not None:
+        gallery_label = (
+            gallery_labels_by_target or {}
+        ).get(target.target_id)
+        prefix = f"{gallery_label} / " if gallery_label else ""
+        label = (
+            f"{prefix}VT-{target.target_id} / V-T{track.track_id} "
+            f"{track.confidence:.2f}"
+        )
+    else:
+        label = f"Vehicle V-T{track.track_id} {track.confidence:.2f}"
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
     cv2.putText(
         frame,
@@ -75,6 +82,7 @@ def _render_frame(
     target_manager: TargetManager,
     *,
     show_unselected_tracks: bool,
+    gallery_labels_by_target: Mapping[int, str] | None = None,
 ) -> np.ndarray:
     annotated = frame.copy()
     if show_unselected_tracks:
@@ -91,6 +99,7 @@ def _render_frame(
             track,
             target_manager,
             show_unselected_tracks=show_unselected_tracks,
+            gallery_labels_by_target=gallery_labels_by_target,
         )
     return annotated
 
@@ -108,6 +117,7 @@ def _run_vehicle_edit_session(
     max_display_width: int | None,
     show_unselected_tracks: bool,
     select_handler: Callable[..., object] | None = None,
+    gallery_labels_by_target: Mapping[int, str] | None = None,
     window_name: str = WINDOW_NAME,
 ) -> UIAction:
     """Run a frozen multi-ROI Vehicle add/remove edit session."""
@@ -136,6 +146,7 @@ def _run_vehicle_edit_session(
             frozen_vehicle_tracks,
             target_manager,
             show_unselected_tracks=show_unselected_tracks,
+            gallery_labels_by_target=gallery_labels_by_target,
         )
 
     def on_roi(

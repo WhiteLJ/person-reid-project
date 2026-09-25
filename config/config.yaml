@@ -123,13 +123,16 @@ gallery_recognition:
 database:
   path: "database/person_reid.db"
 
+vehicle_database:
+  path: "database/vehicle_reid.db"
+
 ui:
   window_name: "Person Tracking - MVP-8.2"
   wait_key_ms: 1
   max_display_width: 1280
   show_class_name: true
   show_confidence: true
-  show_unselected_tracks: true
+  show_unselected_tracks: false
 
 diagnostics:
   enabled: true
