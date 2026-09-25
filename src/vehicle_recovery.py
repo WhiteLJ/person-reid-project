@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
+from logging import getLogger
+
+import numpy as np
 
 from .config import (
     VehicleReIDConfig,
@@ -10,9 +13,13 @@ from .config import (
     VehicleRecoveryConfig,
 )
 from .reid_frame_cache import ReIDFrameCache
+from .models import TargetState, Track
 from .target_manager import TargetManager
-from .target_recovery import TargetRecoveryCoordinator
+from .target_recovery import RecoveryMatch, TargetRecoveryCoordinator
 from .vehicle_reid_quality import assess_vehicle_reid_quality
+
+
+LOGGER = getLogger(__name__)
 
 
 class VehicleRecoveryCoordinator(TargetRecoveryCoordinator):
@@ -62,3 +69,70 @@ class VehicleRecoveryCoordinator(TargetRecoveryCoordinator):
             track_class_id=vehicle_class_id,
             quality_assessor=quality_assessor,
         )
+
+    def process_frame(
+        self,
+        frame: np.ndarray,
+        tracks: Sequence[Track],
+        frame_index: int,
+    ) -> list[RecoveryMatch]:
+        """Run the shared recovery core and emit Vehicle-specific state logs."""
+
+        before_states = {
+            target.target_id: (
+                target.state,
+                target.current_track_id,
+                target.last_track_id,
+            )
+            for target in self.target_manager.targets.values()
+        }
+        pending_before = self.pending
+        matches = super().process_frame(frame, tracks, frame_index)
+
+        for target in self.target_manager.targets.values():
+            previous = before_states.get(target.target_id)
+            if previous is None:
+                continue
+            previous_state, previous_track_id, previous_last_track_id = previous
+            if previous_state is TargetState.ACTIVE and target.state is TargetState.LOST:
+                LOGGER.info(
+                    "VEHICLE_TARGET_LOST frame=%d target_id=%d old_track_id=%s",
+                    frame_index,
+                    target.target_id,
+                    previous_track_id
+                    if previous_track_id is not None
+                    else previous_last_track_id,
+                )
+
+        for (target_id, candidate_track_id), hits in self.pending.items():
+            if pending_before.get((target_id, candidate_track_id)) == hits:
+                continue
+            LOGGER.info(
+                "VEHICLE_RECOVERY_PENDING frame=%d target_id=%d "
+                "candidate_track_id=%d hits=%d/%d",
+                frame_index,
+                target_id,
+                candidate_track_id,
+                hits,
+                self.recovery_config.recovery_confirmation_hits,
+            )
+
+        for match in matches:
+            previous = before_states.get(match.target_id)
+            old_track_id = (
+                previous[2]
+                if previous is not None
+                else None
+            )
+            LOGGER.info(
+                "VEHICLE_TARGET_RECOVERED frame=%d target_id=%d "
+                "old_track_id=%s new_track_id=%d centroid_similarity=%.4f "
+                "reference_support_similarity=%.4f",
+                frame_index,
+                match.target_id,
+                old_track_id,
+                match.candidate.track.track_id,
+                match.centroid_similarity,
+                match.reference_support_similarity,
+            )
+        return matches

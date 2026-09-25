@@ -56,15 +56,16 @@ vehicle_reid:
   image_width: 256
 
 vehicle_recovery:
-  # PC4A initial values; calibrate Vehicle thresholds before real recovery use.
+  # AIC21 Track2 engineering initial values: 50 vehicles / 400 samples.
+  # Recalibrate these values for the final deployment site.
   lost_grace_frames: 5
   reference_update_interval_frames: 15
   recovery_interval_frames: 5
   max_reference_embeddings: 8
-  recovery_threshold: 0.80
-  recovery_margin: 0.05
-  reference_update_threshold: 0.80
-  recovery_reference_support_threshold: 0.75
+  recovery_threshold: 0.60
+  recovery_margin: 0.08
+  reference_update_threshold: 0.55
+  recovery_reference_support_threshold: 0.55
   recovery_reference_support_top_k: 3
   recovery_min_track_age_frames: 3
   recovery_confirmation_hits: 2

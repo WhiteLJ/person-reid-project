@@ -286,8 +286,12 @@ fixed and the profile disables BoT-SORT GMC while keeping `with_reid: false`.
 
 Vehicle Recovery uses an incremental sweep. The initial
 `vehicle_recovery.recovery_candidates_per_frame: 1` is intentionally
-conservative and the Vehicle thresholds are engineering placeholders only;
-calibrate them before judging real recovery accuracy.
+conservative. The current Vehicle initial values (`recovery_threshold: 0.60`,
+`recovery_margin: 0.08`, `reference_update_threshold: 0.55`, and
+`recovery_reference_support_threshold: 0.55`) are engineering values derived
+from the AIC21 Track2 calibration subset (50 vehicles, 400 samples), not
+universal optima. Recalibrate them for the final deployment site before
+judging real recovery accuracy.
 
 Calibrate same-vehicle/different-vehicle similarity distributions with one
 directory per vehicle:

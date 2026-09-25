@@ -56,9 +56,13 @@ class ConfigTests(unittest.TestCase):
             (256, 256),
         )
         self.assertEqual(config.vehicle_recovery.recovery_candidates_per_frame, 1)
-        self.assertAlmostEqual(config.vehicle_recovery.recovery_threshold, 0.80)
+        self.assertAlmostEqual(config.vehicle_recovery.recovery_threshold, 0.60)
+        self.assertAlmostEqual(config.vehicle_recovery.recovery_margin, 0.08)
         self.assertAlmostEqual(
-            config.vehicle_recovery.recovery_reference_support_threshold, 0.75
+            config.vehicle_recovery.reference_update_threshold, 0.55
+        )
+        self.assertAlmostEqual(
+            config.vehicle_recovery.recovery_reference_support_threshold, 0.55
         )
         self.assertEqual(config.vehicle_recovery.max_reference_embeddings, 8)
         self.assertAlmostEqual(

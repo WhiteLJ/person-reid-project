@@ -98,10 +98,11 @@ class VehicleRecoveryConfig:
     reference_update_interval_frames: int = 15
     recovery_interval_frames: int = 5
     max_reference_embeddings: int = 8
-    recovery_threshold: float = 0.80
-    recovery_margin: float = 0.05
-    reference_update_threshold: float = 0.80
-    recovery_reference_support_threshold: float = 0.75
+    # AIC21 Track2 engineering starting values; recalibrate for deployment.
+    recovery_threshold: float = 0.60
+    recovery_margin: float = 0.08
+    reference_update_threshold: float = 0.55
+    recovery_reference_support_threshold: float = 0.55
     recovery_reference_support_top_k: int = 3
     recovery_min_track_age_frames: int = 3
     recovery_confirmation_hits: int = 2
@@ -477,14 +478,14 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             vehicle_recovery.get("max_reference_embeddings", 8)
         ),
         "recovery_threshold": float(
-            vehicle_recovery.get("recovery_threshold", 0.80)
+            vehicle_recovery.get("recovery_threshold", 0.60)
         ),
-        "recovery_margin": float(vehicle_recovery.get("recovery_margin", 0.05)),
+        "recovery_margin": float(vehicle_recovery.get("recovery_margin", 0.08)),
         "reference_update_threshold": float(
-            vehicle_recovery.get("reference_update_threshold", 0.80)
+            vehicle_recovery.get("reference_update_threshold", 0.55)
         ),
         "recovery_reference_support_threshold": float(
-            vehicle_recovery.get("recovery_reference_support_threshold", 0.75)
+            vehicle_recovery.get("recovery_reference_support_threshold", 0.55)
         ),
         "recovery_reference_support_top_k": int(
             vehicle_recovery.get("recovery_reference_support_top_k", 3)

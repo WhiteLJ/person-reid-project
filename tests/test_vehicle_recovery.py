@@ -196,3 +196,30 @@ class VehicleRecoveryTests(unittest.TestCase):
 
         np.testing.assert_array_equal(person_cache.get(4, 10), person_embedding)
         np.testing.assert_array_equal(vehicle_cache.get(4, 10), vehicle_embedding)
+
+    def test_vehicle_state_logs_are_emitted_only_on_recovery_events(self) -> None:
+        _manager, coordinator, _extractor = self._coordinator(
+            recovery_confirmation_hits=2,
+        )
+        target = coordinator.select_from_track(
+            self.frame,
+            self.initial_track,
+            0,
+            tracks=[self.initial_track],
+        )
+        assert target is not None
+        candidate = _track(38, (120, 20, 180, 120))
+
+        with self.assertLogs("src.vehicle_recovery", level="INFO") as captured:
+            coordinator.process_frame(self.frame, [], 1)
+            coordinator.process_frame(self.frame, [candidate], 2)
+
+        messages = "\n".join(captured.output)
+        self.assertIn("VEHICLE_TARGET_LOST", messages)
+        self.assertIn("VEHICLE_RECOVERY_PENDING", messages)
+        self.assertNotIn("VEHICLE_TARGET_RECOVERED", messages)
+
+        with self.assertLogs("src.vehicle_recovery", level="INFO") as captured:
+            coordinator.process_frame(self.frame, [candidate], 3)
+
+        self.assertIn("VEHICLE_TARGET_RECOVERED", "\n".join(captured.output))
