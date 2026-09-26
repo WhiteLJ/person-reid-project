@@ -186,16 +186,6 @@ SQLite persistence remain separate business domains. Vehicle OM runtime
 validation must still be performed on the real Atlas 310B board; PC tests do not
 claim hardware success.
 
-### Atlas2B.1 temporal-safe ReID scheduling
-
-Incremental Recovery and Gallery Recognition keep their full-snapshot matching
-semantics, then perform fresh commit-time verification on the current Track
-crop before confirmation or binding. The Person domain allows at most 3 new
-embeddings per frame; the Vehicle domain allows at most 1. Fixed-camera
-BoT-SORT uses `botsort_fixed_camera.yaml` with GMC disabled. Runtime logs split
-candidate, fresh revalidation, reference-update, cache-hit, and budget-deferred
-work so slow frames can be attributed without changing identity thresholds.
-
 ## Configuration
 
 The default configuration is in `config/config.yaml`. Important current settings are:
@@ -208,10 +198,6 @@ gallery_recognition:
   recognition_threshold: 0.80
   recognition_margin: 0.05
   confirmation_hits: 2
-
-reid_scheduling:
-  person_max_new_embeddings_per_frame: 3
-  vehicle_max_new_embeddings_per_frame: 1
 
 database:
   path: "database/person_reid.db"

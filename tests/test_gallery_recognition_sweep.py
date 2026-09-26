@@ -117,7 +117,6 @@ class GalleryRecognitionSweepTests(unittest.TestCase):
                 np.asarray((high, low, low), dtype=np.float32),
                 np.asarray((low, low, low), dtype=np.float32),
                 low,
-                high,
             ]
         )
         coordinator = _coordinator(extractor)
@@ -129,12 +128,12 @@ class GalleryRecognitionSweepTests(unittest.TestCase):
         self.assertEqual(coordinator.process_frame(self.frame, tracks, 1), [])
         self.assertEqual(extractor.batch_sizes, [3, 3])
         self.assertEqual(coordinator.process_frame(self.frame, tracks, 2)[0].person_id, 1)
-        self.assertEqual(extractor.batch_sizes, [3, 3, 1, 1])
+        self.assertEqual(extractor.batch_sizes, [3, 3, 1])
 
     def test_partial_sweep_never_matches_and_confirmation_counts_sweeps(self) -> None:
         high = _unit(0)
         low = _unit(1)
-        extractor = _FakeExtractor([high, low, low, high, high])
+        extractor = _FakeExtractor([high, low, low, high, low, low])
         coordinator = _coordinator(
             extractor,
             candidates_per_frame=1,

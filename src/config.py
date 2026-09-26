@@ -133,14 +133,6 @@ class ReIDRecoveryConfig:
 
 
 @dataclass(frozen=True)
-class ReIDSchedulingConfig:
-    """Domain-wide caps for newly computed ReID embeddings per frame."""
-
-    person_max_new_embeddings_per_frame: int = 3
-    vehicle_max_new_embeddings_per_frame: int = 1
-
-
-@dataclass(frozen=True)
 class GalleryEnrichmentConfig:
     """Runtime policy for explicitly enrolled Gallery feature enrichment."""
 
@@ -260,7 +252,6 @@ class AppConfig:
     vehicle_reid: VehicleReIDConfig
     vehicle_recovery: VehicleRecoveryConfig
     reid_recovery: ReIDRecoveryConfig
-    reid_scheduling: ReIDSchedulingConfig
     gallery_enrichment: GalleryEnrichmentConfig
     reid_quality: ReIDQualityConfig
     vehicle_reid_quality: VehicleReIDQualityConfig
@@ -344,7 +335,6 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     vehicle_reid = _section(raw, "vehicle_reid")
     vehicle_recovery = _section(raw, "vehicle_recovery")
     reid_recovery = _section(raw, "reid_recovery")
-    reid_scheduling = _section(raw, "reid_scheduling")
     gallery_enrichment = _section(raw, "gallery_enrichment")
     reid_quality = _section(raw, "reid_quality")
     vehicle_reid_quality = _section(raw, "vehicle_reid_quality")
@@ -537,15 +527,6 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         raise ValueError(
             "reid_recovery.recovery_candidates_per_frame must be positive"
         )
-
-    person_reid_budget = int(
-        reid_scheduling.get("person_max_new_embeddings_per_frame", 3)
-    )
-    vehicle_reid_budget = int(
-        reid_scheduling.get("vehicle_max_new_embeddings_per_frame", 1)
-    )
-    if person_reid_budget < 1 or vehicle_reid_budget < 1:
-        raise ValueError("reid_scheduling budgets must be positive")
 
     vehicle_recovery_values = {
         "lost_grace_frames": int(vehicle_recovery.get("lost_grace_frames", 5)),
@@ -926,10 +907,6 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             recovery_confirmation_hits=recovery_confirmation_hits,
             recovery_pending_max_age_frames=recovery_pending_max_age_frames,
             recovery_candidates_per_frame=recovery_candidates_per_frame,
-        ),
-        reid_scheduling=ReIDSchedulingConfig(
-            person_max_new_embeddings_per_frame=person_reid_budget,
-            vehicle_max_new_embeddings_per_frame=vehicle_reid_budget,
         ),
         gallery_enrichment=GalleryEnrichmentConfig(
             post_recovery_stable_frames=post_recovery_stable_frames,

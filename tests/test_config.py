@@ -95,12 +95,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.reid_recovery.recovery_confirmation_hits, 2)
         self.assertEqual(config.reid_recovery.recovery_pending_max_age_frames, 60)
         self.assertEqual(config.reid_recovery.recovery_candidates_per_frame, 3)
-        self.assertEqual(
-            config.reid_scheduling.person_max_new_embeddings_per_frame, 3
-        )
-        self.assertEqual(
-            config.reid_scheduling.vehicle_max_new_embeddings_per_frame, 1
-        )
         self.assertEqual(config.gallery_enrichment.post_recovery_stable_frames, 30)
         self.assertEqual(config.gallery_enrichment.max_reference_embeddings, 8)
         self.assertAlmostEqual(
@@ -166,10 +160,6 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.inference.backend, "ascend")
         self.assertEqual(config.model.device, "cpu")
-        self.assertEqual(
-            config.tracking.tracker,
-            str(Path("config/trackers/botsort_fixed_camera.yaml").resolve()),
-        )
         self.assertEqual(
             config.ascend.vehicle_reid_model,
             Path("weights/atlas/vehicle_sbs_r50_ibn.om").resolve(),

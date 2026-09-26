@@ -16,7 +16,6 @@ from .gallery_recognition import (
     GalleryRecognitionCoordinator,
 )
 from .reid_frame_cache import ReIDFrameCache
-from .reid_frame_budget import ReIDFrameBudget
 from .target_manager import TargetManager
 from .vehicle_gallery import VehicleTargetGallery, format_vehicle_id
 from .vehicle_reid_quality import assess_vehicle_reid_quality
@@ -39,7 +38,6 @@ class VehicleGalleryRecognitionCoordinator(GalleryRecognitionCoordinator):
         *,
         vehicle_class_ids: Collection[int] = (2,),
         embedding_cache: ReIDFrameCache | None = None,
-        reid_budget: ReIDFrameBudget | None = None,
     ) -> None:
         classes = tuple(sorted({int(class_id) for class_id in vehicle_class_ids}))
         if not classes:
@@ -75,5 +73,4 @@ class VehicleGalleryRecognitionCoordinator(GalleryRecognitionCoordinator):
             embedding_cache=embedding_cache,
             quality_assessor=quality_assessor,
             gallery_adapter=adapter,
-            reid_budget=reid_budget,
         )

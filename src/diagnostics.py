@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from logging import getLogger
 
 from .models import Track
@@ -61,8 +61,6 @@ class RuntimeDiagnostics:
         self._recognition_reid_batch_count = 0
         self._recognition_reid_seconds = 0.0
         self._recognition_retry_skipped_count = 0
-        self._reid_breakdown_totals: dict[str, float] = {}
-        self._reid_breakdown_max: dict[str, float] = {}
 
     def observe_tracks(self, tracks: Sequence[Track], frame_index: int) -> None:
         """Record Track IDs entering/leaving the current result set."""
@@ -112,7 +110,6 @@ class RuntimeDiagnostics:
         recognition_sweep_frames: int = 0,
         recognition_sweep_reid_ms: float = 0.0,
         recognition_retry_skipped: int = 0,
-        reid_breakdown: Mapping[str, float | int] | None = None,
     ) -> None:
         if not self.enabled:
             return
@@ -182,27 +179,6 @@ class RuntimeDiagnostics:
             if recognition_sweep_completed
             else 0.0
         )
-        if reid_breakdown:
-            normalized_breakdown = {
-                str(key): float(value) for key, value in reid_breakdown.items()
-            }
-            for key, value in normalized_breakdown.items():
-                self._reid_breakdown_totals[key] = (
-                    self._reid_breakdown_totals.get(key, 0.0) + value
-                )
-                self._reid_breakdown_max[key] = max(
-                    self._reid_breakdown_max.get(key, 0.0), value
-                )
-            if frame_seconds * 1000.0 > 100.0:
-                fields = " ".join(
-                    f"{key}={value:.2f}" for key, value in normalized_breakdown.items()
-                )
-                LOGGER.info(
-                    "SLOW_FRAME frame=%d total_ms=%.2f %s",
-                    frame_index,
-                    frame_seconds * 1000.0,
-                    fields,
-                )
         if self.processed_frames % self.log_interval_frames == 0:
             LOGGER.info("CROWD_STATS %s", self.summary())
 
@@ -249,11 +225,6 @@ class RuntimeDiagnostics:
             "recognition_sweep_reid_ms": f"{self._recognition_sweep_reid_seconds * 1000.0:.2f}",
             "recognition_retry_skipped": self._recognition_retry_skipped_count,
         }
-        for key, value in sorted(self._reid_breakdown_totals.items()):
-            values[key] = f"{value:.2f}" if key.endswith("_ms") else int(value)
-        for key, value in sorted(self._reid_breakdown_max.items()):
-            if key.endswith("_new_embeddings"):
-                values[f"{key}_max"] = int(value)
         values.update(counters)
         return " ".join(f"{key}={value}" for key, value in values.items())
 
