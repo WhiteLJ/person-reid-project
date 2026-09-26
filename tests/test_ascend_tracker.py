@@ -41,6 +41,21 @@ class AscendTrackerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             AscendBotSortTracker("config/trackers/botsort_crowd_reid.yaml")
 
+    def test_class_filter_can_be_vehicle_multiclass_without_changing_default(self) -> None:
+        tracker = AscendBotSortTracker(
+            "config/trackers/botsort_fixed_camera.yaml",
+            persist=True,
+            class_ids=(2, 5, 7),
+        )
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        vehicle = Detection((80, 40, 140, 200), 0.95, 2)
+        person = Detection((80, 40, 140, 200), 0.95, 0)
+
+        first = tracker.update([person, vehicle], frame)
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first[0].class_id, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

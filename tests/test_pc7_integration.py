@@ -77,6 +77,13 @@ class PC7IntegrationTests(unittest.TestCase):
             1,
         )
 
+    def test_atlas_config_exposes_multiclass_vehicle_contract(self) -> None:
+        config = load_config("config/config_atlas.yaml")
+        self.assertEqual(config.inference.backend, "ascend")
+        self.assertEqual(config.multiclass_tracking.vehicle_class_ids, (2, 5, 7))
+        self.assertEqual(config.ascend.vehicle_reid_dynamic_batches, (1, 2, 4, 8))
+        self.assertTrue(config.ui.show_unselected_tracks)
+
 
 if __name__ == "__main__":
     unittest.main()

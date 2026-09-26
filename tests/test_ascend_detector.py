@@ -5,8 +5,10 @@ import unittest
 import numpy as np
 
 from src.ascend_detector import (
+    AscendMultiClassDetector,
     AscendPersonDetector,
     LetterboxTransform,
+    decode_yolo_multiclass_output,
     decode_yolo_output,
     letterbox_bgr,
     nms_xyxy,
@@ -112,6 +114,87 @@ class AscendDetectorTests(unittest.TestCase):
         self.assertEqual(detector.inference_count, 1)
         self.assertEqual(len(runtime.inputs), 1)
         self.assertEqual(len(detections), 1)
+
+    def test_multiclass_decoder_keeps_overlapping_different_classes(self) -> None:
+        transform = LetterboxTransform(1.0, 0.0, 0.0, 640, 640)
+        output = np.zeros((1, 84, 2), dtype=np.float32)
+        output[0, :4, 0] = (100, 100, 80, 80)
+        output[0, 4 + 0, 0] = 0.90
+        output[0, :4, 1] = (100, 100, 80, 80)
+        output[0, 4 + 2, 1] = 0.85
+
+        detections = decode_yolo_multiclass_output(
+            output,
+            transform,
+            (640, 640, 3),
+            confidence_threshold=0.5,
+            iou_threshold=0.5,
+            class_ids=(0, 2),
+        )
+
+        self.assertEqual([d.class_id for d in detections], [0, 2])
+
+    def test_multiclass_decoder_supports_legacy_objectness(self) -> None:
+        transform = LetterboxTransform(1.0, 0.0, 0.0, 640, 640)
+        output = np.zeros((1, 85, 1), dtype=np.float32)
+        output[0, :4, 0] = (100, 100, 80, 80)
+        output[0, 4, 0] = 0.9
+        output[0, 5 + 2, 0] = 0.9
+
+        detections = decode_yolo_multiclass_output(
+            output,
+            transform,
+            (640, 640, 3),
+            confidence_threshold=0.5,
+            iou_threshold=0.5,
+            class_ids=(0, 2),
+        )
+
+        self.assertEqual(len(detections), 1)
+        self.assertEqual(detections[0].class_id, 2)
+        self.assertAlmostEqual(detections[0].confidence, 0.81, places=5)
+
+    def test_multiclass_decoder_supports_prediction_first_layout(self) -> None:
+        transform = LetterboxTransform(1.0, 0.0, 0.0, 640, 640)
+        output = np.zeros((1, 2, 84), dtype=np.float32)
+        output[0, 0, :4] = (100, 100, 80, 80)
+        output[0, 0, 4 + 7] = 0.9
+        output[0, 1, :4] = (300, 300, 80, 80)
+        output[0, 1, 4 + 2] = 0.85
+
+        detections = decode_yolo_multiclass_output(
+            output,
+            transform,
+            (640, 640, 3),
+            confidence_threshold=0.5,
+            iou_threshold=0.5,
+            class_ids=(0, 2, 5, 7),
+        )
+
+        self.assertEqual([d.class_id for d in detections], [2, 7])
+
+    def test_multiclass_detector_executes_one_om_call(self) -> None:
+        frame = np.zeros((100, 200, 3), dtype=np.uint8)
+        output = np.zeros((1, 84, 1), dtype=np.float32)
+        output[0, :4, 0] = (320, 320, 100, 200)
+        output[0, 4 + 5, 0] = 0.9
+        runtime = _FakeRuntime(output)
+        detector = AscendMultiClassDetector(
+            "unused.om",
+            runtime,  # type: ignore[arg-type]
+            image_size=640,
+            confidence_threshold=0.5,
+            iou_threshold=0.5,
+            class_ids=(0, 2, 5, 7),
+            model=type("Model", (), {"output_shapes": ((1, 84, 1),)})(),
+        )
+
+        detections = detector.detect(frame)
+
+        self.assertEqual(detector.inference_count, 1)
+        self.assertEqual(len(runtime.inputs), 1)
+        self.assertEqual(len(detections), 1)
+        self.assertEqual(detections[0].class_id, 5)
 
 
 if __name__ == "__main__":

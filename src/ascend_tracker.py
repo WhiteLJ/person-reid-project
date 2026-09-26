@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Sequence
+from typing import Any, Collection, Sequence
 
 import numpy as np
 import yaml
@@ -84,9 +84,19 @@ def _load_tracker_args(path: str | Path) -> dict[str, Any]:
 
 
 class AscendBotSortTracker:
-    """Instantiate one installed Ultralytics BOTSORT over external detections."""
+    """Instantiate one installed Ultralytics BOTSORT over external detections.
 
-    def __init__(self, tracker_config: str | Path, *, persist: bool = True) -> None:
+    The default remains the historical Person-only class-0 adapter.  Atlas
+    multiclass tracking creates a separate instance with its own class set.
+    """
+
+    def __init__(
+        self,
+        tracker_config: str | Path,
+        *,
+        persist: bool = True,
+        class_ids: Collection[int] = (0,),
+    ) -> None:
         try:
             from ultralytics.trackers.bot_sort import BOTSORT
         except ImportError as exc:
@@ -97,16 +107,33 @@ class AscendBotSortTracker:
         values = _load_tracker_args(tracker_config)
         self.tracker = BOTSORT(SimpleNamespace(**values))
         self.persist = persist
+        self.class_ids = tuple(sorted({int(class_id) for class_id in class_ids}))
+        if not self.class_ids or any(class_id < 0 for class_id in self.class_ids):
+            raise ValueError("class_ids must contain at least one non-negative class ID")
         self.last_output_count = 0
 
-    def update(self, detections: Sequence[Detection], frame: np.ndarray) -> list[Track]:
+    def update(
+        self,
+        detections: Sequence[Detection],
+        frame: np.ndarray,
+        class_ids: Collection[int] | None = None,
+    ) -> list[Track]:
         if not self.persist:
             self.tracker.reset()
-        person_detections = [detection for detection in detections if detection.class_id == 0]
+        accepted_class_ids = self.class_ids if class_ids is None else tuple(
+            sorted({int(class_id) for class_id in class_ids})
+        )
+        if not accepted_class_ids or any(class_id < 0 for class_id in accepted_class_ids):
+            raise ValueError("class_ids must contain at least one non-negative class ID")
+        selected_detections = [
+            detection
+            for detection in detections
+            if detection.class_id in accepted_class_ids
+        ]
         results = _DetectionResults(
-            np.asarray([detection.bbox for detection in person_detections], dtype=np.float32),
-            np.asarray([detection.confidence for detection in person_detections], dtype=np.float32),
-            np.asarray([detection.class_id for detection in person_detections], dtype=np.float32),
+            np.asarray([detection.bbox for detection in selected_detections], dtype=np.float32),
+            np.asarray([detection.confidence for detection in selected_detections], dtype=np.float32),
+            np.asarray([detection.class_id for detection in selected_detections], dtype=np.float32),
         )
         tracked = np.asarray(self.tracker.update(results, img=frame), dtype=np.float32)
         self.last_output_count = 0 if tracked.size == 0 else len(tracked)
@@ -122,6 +149,8 @@ class AscendBotSortTracker:
             confidence = float(row[5])
             class_id = float(row[6])
             if not np.isfinite((*bbox, track_id, confidence, class_id)).all():
+                continue
+            if int(class_id) not in accepted_class_ids:
                 continue
             tracks.append(
                 Track(

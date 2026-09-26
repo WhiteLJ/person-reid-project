@@ -1,4 +1,4 @@
-"""Formal PC Person + Vehicle entry point (MVP-8.3-PC7)."""
+"""Formal Person + Vehicle entry point for PC Torch and Atlas 310B."""
 
 from __future__ import annotations
 
@@ -22,9 +22,8 @@ from src.reid_frame_cache import ReIDFrameCache
 from src.roi_selector import find_track_by_roi
 from src.target_manager import TargetManager
 from src.target_recovery import TargetRecoveryCoordinator
-from src.tracking_pipeline import TrackingPipeline
 from src.video_source import VideoSource
-from src.visualization import draw_multiclass_tracks, draw_tracks
+from src.visualization import draw_multiclass_tracks
 from ui.opencv_ui import EditMode, OpenCVUI, UIAction
 
 
@@ -71,7 +70,7 @@ def _vehicle_gallery_labels(manager: TargetManager, gallery: Any, format_id: Any
 
 
 def run(config: AppConfig) -> int:
-    """Run the formal PC integration while preserving the Atlas Person path."""
+    """Run the formal Person + Vehicle integration on the selected backend."""
 
     is_torch_pc = config.inference.backend == "torch"
     ascend_runtime = None
@@ -107,69 +106,18 @@ def run(config: AppConfig) -> int:
 
     try:
         if is_torch_pc:
-            # Keep Vehicle imports lazy: the Atlas branch must not require any
-            # Vehicle checkpoint, database, or OM model.
             from src.pc_multiclass_tracking import MultiClassTrackingPipeline
-            from src.vehicle_database import VehicleGalleryRepository
-            from src.vehicle_gallery import VehicleTargetGallery, format_vehicle_id
-            from src.vehicle_gallery_recognition import VehicleGalleryRecognitionCoordinator
-            from src.vehicle_gallery_service import VehicleGalleryPersistenceService
-            from src.vehicle_recovery import VehicleRecoveryCoordinator
             from src.vehicle_reid import VehicleReIDExtractor
 
             tracking_pipeline = MultiClassTrackingPipeline(config)
             reid_extractor = ReIDExtractor(config.reid, config.model.device, backend="torch")
-            vehicle_class_ids = tuple(config.multiclass_tracking.vehicle_class_ids)
-            vehicle_target_manager = TargetManager()
-            vehicle_cache = ReIDFrameCache()
             vehicle_reid_extractor = VehicleReIDExtractor(config.vehicle_reid)
-            vehicle_repository = VehicleGalleryRepository(config.vehicle_database.path)
-            vehicle_repository.initialize()
-            vehicle_gallery = VehicleTargetGallery()
-            vehicle_gallery_service = VehicleGalleryPersistenceService(
-                vehicle_gallery,
-                vehicle_repository,
-                enrichment_config=config.vehicle_gallery_enrichment,
-            )
-            loaded_vehicles = vehicle_gallery_service.load()
-            vehicle_format_id = format_vehicle_id
-            LOGGER.info(
-                "VEHICLE_GALLERY_LOADED path=%s vehicles=%d",
-                vehicle_repository.path,
-                len(loaded_vehicles),
-            )
-            vehicle_recovery = VehicleRecoveryCoordinator(
-                target_manager=vehicle_target_manager,
-                reid_extractor=vehicle_reid_extractor,
-                reid_config=config.vehicle_reid,
-                recovery_config=config.vehicle_recovery,
-                quality_config=config.vehicle_reid_quality,
-                vehicle_class_ids=vehicle_class_ids,
-                embedding_cache=vehicle_cache,
-            )
-            vehicle_gallery_recognition = VehicleGalleryRecognitionCoordinator(
-                target_manager=vehicle_target_manager,
-                gallery=vehicle_gallery,
-                reid_extractor=vehicle_reid_extractor,
-                reid_config=config.vehicle_reid,
-                recognition_config=config.vehicle_gallery_recognition,
-                recovery_config=config.vehicle_recovery,
-                quality_config=config.vehicle_reid_quality,
-                vehicle_class_ids=vehicle_class_ids,
-                embedding_cache=vehicle_cache,
-            )
             detector_model_path = config.model.yolo_weight
         else:
-            # This remains the existing Person-only Atlas construction.
+            from src.ascend_multiclass_tracking import AscendMultiClassTrackingPipeline
+
             ascend_runtime = AscendRuntime(config.ascend.device_id)
-            tracking_pipeline = TrackingPipeline(
-                model_config=config.model,
-                runtime_config=config.runtime,
-                tracking_config=config.tracking,
-                inference_config=config.inference,
-                ascend_config=config.ascend,
-                ascend_runtime=ascend_runtime,
-            )
+            tracking_pipeline = AscendMultiClassTrackingPipeline(config, ascend_runtime)
             reid_extractor = ReIDExtractor(
                 config.reid,
                 config.model.device,
@@ -177,7 +125,62 @@ def run(config: AppConfig) -> int:
                 ascend_config=config.ascend,
                 ascend_runtime=ascend_runtime,
             )
+            from src.ascend_vehicle_reid import AscendVehicleReIDExtractor
+
+            vehicle_reid_extractor = AscendVehicleReIDExtractor(
+                config.vehicle_reid,
+                config.ascend.vehicle_reid_model,
+                config.ascend.vehicle_reid_dynamic_batches,
+                ascend_runtime,
+            )
             detector_model_path = config.ascend.yolo_model
+
+        # Person and Vehicle state is always separate.  The only difference
+        # between Torch and Atlas here is which extractor is injected.
+        from src.vehicle_database import VehicleGalleryRepository
+        from src.vehicle_gallery import VehicleTargetGallery, format_vehicle_id
+        from src.vehicle_gallery_recognition import VehicleGalleryRecognitionCoordinator
+        from src.vehicle_gallery_service import VehicleGalleryPersistenceService
+        from src.vehicle_recovery import VehicleRecoveryCoordinator
+
+        vehicle_class_ids = tuple(config.multiclass_tracking.vehicle_class_ids)
+        vehicle_target_manager = TargetManager()
+        vehicle_cache = ReIDFrameCache()
+        vehicle_repository = VehicleGalleryRepository(config.vehicle_database.path)
+        vehicle_repository.initialize()
+        vehicle_gallery = VehicleTargetGallery()
+        vehicle_gallery_service = VehicleGalleryPersistenceService(
+            vehicle_gallery,
+            vehicle_repository,
+            enrichment_config=config.vehicle_gallery_enrichment,
+        )
+        loaded_vehicles = vehicle_gallery_service.load()
+        vehicle_format_id = format_vehicle_id
+        LOGGER.info(
+            "VEHICLE_GALLERY_LOADED path=%s vehicles=%d",
+            vehicle_repository.path,
+            len(loaded_vehicles),
+        )
+        vehicle_recovery = VehicleRecoveryCoordinator(
+            target_manager=vehicle_target_manager,
+            reid_extractor=vehicle_reid_extractor,
+            reid_config=config.vehicle_reid,
+            recovery_config=config.vehicle_recovery,
+            quality_config=config.vehicle_reid_quality,
+            vehicle_class_ids=vehicle_class_ids,
+            embedding_cache=vehicle_cache,
+        )
+        vehicle_gallery_recognition = VehicleGalleryRecognitionCoordinator(
+            target_manager=vehicle_target_manager,
+            gallery=vehicle_gallery,
+            reid_extractor=vehicle_reid_extractor,
+            reid_config=config.vehicle_reid,
+            recognition_config=config.vehicle_gallery_recognition,
+            recovery_config=config.vehicle_recovery,
+            quality_config=config.vehicle_reid_quality,
+            vehicle_class_ids=vehicle_class_ids,
+            embedding_cache=vehicle_cache,
+        )
     except Exception:
         if ascend_runtime is not None:
             ascend_runtime.close()
@@ -197,14 +200,18 @@ def run(config: AppConfig) -> int:
         config.reid.weight if is_torch_pc else config.ascend.reid_model,
         reid_extractor.device,
     )
-    if is_torch_pc:
-        LOGGER.info(
-            "VEHICLE_REID_MODEL_LOADED name=%s checkpoint=%s device=%s classes=%s",
-            config.vehicle_reid.model_name,
-            config.vehicle_reid.weight,
-            vehicle_reid_extractor.device,
-            vehicle_class_ids,
-        )
+    LOGGER.info(
+        "VEHICLE_REID_MODEL_LOADED backend=%s name=%s model=%s device=%s classes=%s",
+        config.inference.backend,
+        config.vehicle_reid.model_name,
+        config.vehicle_reid.weight if is_torch_pc else config.ascend.vehicle_reid_model,
+        getattr(
+            vehicle_reid_extractor,
+            "device",
+            f"ascend:{config.ascend.device_id}" if not is_torch_pc else "unknown",
+        ),
+        vehicle_class_ids,
+    )
 
     person_recovery = TargetRecoveryCoordinator(
         target_manager=person_target_manager,
@@ -254,33 +261,21 @@ def run(config: AppConfig) -> int:
 
     def render_frames(render_frame: Any, _frozen_tracks: tuple[Any, ...] | None = None) -> Any:
         person_labels = _person_gallery_labels(person_target_manager, person_gallery)
-        if is_torch_pc:
-            return draw_multiclass_tracks(
-                render_frame,
-                person_tracks,
-                vehicle_tracks,
-                person_target_manager,
-                vehicle_target_manager,
-                class_name=tracking_pipeline.class_name,
-                show_class_name=config.ui.show_class_name,
-                show_track_id=config.tracking.show_track_id,
-                show_confidence=config.ui.show_confidence,
-                show_unselected_tracks=config.ui.show_unselected_tracks,
-                person_gallery_labels_by_track=person_labels,
-                vehicle_gallery_labels_by_target=_vehicle_gallery_labels(
-                    vehicle_target_manager, vehicle_gallery, vehicle_format_id
-                ),
-            )
-        return draw_tracks(
+        return draw_multiclass_tracks(
             render_frame,
             person_tracks,
+            vehicle_tracks,
+            person_target_manager,
+            vehicle_target_manager,
             class_name=tracking_pipeline.class_name,
             show_class_name=config.ui.show_class_name,
             show_track_id=config.tracking.show_track_id,
             show_confidence=config.ui.show_confidence,
-            selected_track_ids=person_target_manager.selected_track_ids,
             show_unselected_tracks=config.ui.show_unselected_tracks,
-            gallery_labels_by_track=person_labels,
+            person_gallery_labels_by_track=person_labels,
+            vehicle_gallery_labels_by_target=_vehicle_gallery_labels(
+                vehicle_target_manager, vehicle_gallery, vehicle_format_id
+            ),
         )
 
     def handle_roi(roi, frozen_tracks, mode):
@@ -290,7 +285,7 @@ def run(config: AppConfig) -> int:
             return
 
         is_person = track.class_id == config.model.person_class_id
-        is_vehicle = is_torch_pc and track.class_id in vehicle_class_ids
+        is_vehicle = track.class_id in vehicle_class_ids
         if not is_person and not is_vehicle:
             return
         manager = person_target_manager if is_person else vehicle_target_manager
@@ -373,15 +368,10 @@ def run(config: AppConfig) -> int:
                 break
             current_frame_index = frame_index
             tracking_started = perf_counter()
-            if is_torch_pc:
-                tracking_result = tracking_pipeline.process(frame)
-                person_tracks = tracking_result.person_tracks
-                vehicle_tracks = tracking_result.vehicle_tracks
-                tracks = person_tracks
-            else:
-                tracks = tracking_pipeline.process(frame)
-                person_tracks = tracks
-                vehicle_tracks = []
+            tracking_result = tracking_pipeline.process(frame)
+            person_tracks = tracking_result.person_tracks
+            vehicle_tracks = tracking_result.vehicle_tracks
+            tracks = person_tracks
             tracking_seconds = perf_counter() - tracking_started
             diagnostics.observe_tracks(person_tracks, current_frame_index)
 
@@ -393,18 +383,14 @@ def run(config: AppConfig) -> int:
             person_recovery_batches += person_recovery_stats.reid_batch_count
             person_recovery_processed += person_recovery_stats.sweep_processed_this_frame
 
-            if is_torch_pc:
-                vehicle_recovery_started = perf_counter()
-                vehicle_recovery.process_frame(frame, vehicle_tracks, current_frame_index)
-                vehicle_recovery_seconds = perf_counter() - vehicle_recovery_started
-                vehicle_recovery_stats = vehicle_recovery.last_frame_recovery_stats
-                vehicle_recovery_reid_ms += vehicle_recovery_stats.reid_ms
-                vehicle_recovery_batches += vehicle_recovery_stats.reid_batch_count
-                vehicle_recovery_processed += vehicle_recovery_stats.sweep_processed_this_frame
-                last_vehicle_recovered_track_ids = vehicle_recovery.last_recovered_track_ids
-            else:
-                vehicle_recovery_stats = None
-                vehicle_recovery_seconds = 0.0
+            vehicle_recovery_started = perf_counter()
+            vehicle_recovery.process_frame(frame, vehicle_tracks, current_frame_index)
+            vehicle_recovery_seconds = perf_counter() - vehicle_recovery_started
+            vehicle_recovery_stats = vehicle_recovery.last_frame_recovery_stats
+            vehicle_recovery_reid_ms += vehicle_recovery_stats.reid_ms
+            vehicle_recovery_batches += vehicle_recovery_stats.reid_batch_count
+            vehicle_recovery_processed += vehicle_recovery_stats.sweep_processed_this_frame
+            last_vehicle_recovered_track_ids = vehicle_recovery.last_recovered_track_ids
 
             gallery_started = perf_counter()
             person_gallery_service.update_runtime_state(
@@ -413,13 +399,12 @@ def run(config: AppConfig) -> int:
             person_gallery_service.enrich_reference_updates(
                 person_recovery.drain_reference_updates()
             )
-            if is_torch_pc:
-                vehicle_gallery_service.update_runtime_state(
-                    vehicle_target_manager.targets.values(), current_frame_index
-                )
-                vehicle_gallery_service.enrich_reference_updates(
-                    vehicle_recovery.drain_reference_updates()
-                )
+            vehicle_gallery_service.update_runtime_state(
+                vehicle_target_manager.targets.values(), current_frame_index
+            )
+            vehicle_gallery_service.enrich_reference_updates(
+                vehicle_recovery.drain_reference_updates()
+            )
 
             person_gallery_recognition.process_frame(
                 frame,
@@ -433,26 +418,23 @@ def run(config: AppConfig) -> int:
             person_recognition_processed += person_recognition_stats.sweep_processed_this_frame
             person_retry_skipped += person_recognition_stats.skipped_retry_cooldown
 
-            if is_torch_pc:
-                recognized_vehicles = vehicle_gallery_recognition.process_frame(
-                    frame,
-                    vehicle_tracks,
-                    current_frame_index,
-                    protected_track_ids=last_vehicle_recovered_track_ids,
+            recognized_vehicles = vehicle_gallery_recognition.process_frame(
+                frame,
+                vehicle_tracks,
+                current_frame_index,
+                protected_track_ids=last_vehicle_recovered_track_ids,
+            )
+            for match in recognized_vehicles:
+                target = vehicle_target_manager.target_for_track(
+                    match.candidate.track.track_id
                 )
-                for match in recognized_vehicles:
-                    target = vehicle_target_manager.target_for_track(
-                        match.candidate.track.track_id
-                    )
-                    if target is not None:
-                        vehicle_gallery_service.mark_auto_recognized(target.target_id)
-                vehicle_recognition_stats = vehicle_gallery_recognition.last_frame_recognition_stats
-                vehicle_recognition_reid_ms += vehicle_recognition_stats.reid_ms
-                vehicle_recognition_batches += vehicle_recognition_stats.reid_batch_count
-                vehicle_recognition_processed += vehicle_recognition_stats.sweep_processed_this_frame
-                vehicle_retry_skipped += vehicle_recognition_stats.skipped_retry_cooldown
-            else:
-                vehicle_recognition_stats = None
+                if target is not None:
+                    vehicle_gallery_service.mark_auto_recognized(target.target_id)
+            vehicle_recognition_stats = vehicle_gallery_recognition.last_frame_recognition_stats
+            vehicle_recognition_reid_ms += vehicle_recognition_stats.reid_ms
+            vehicle_recognition_batches += vehicle_recognition_stats.reid_batch_count
+            vehicle_recognition_processed += vehicle_recognition_stats.sweep_processed_this_frame
+            vehicle_retry_skipped += vehicle_recognition_stats.skipped_retry_cooldown
             gallery_seconds = perf_counter() - gallery_started
 
             frame_index += 1
@@ -503,13 +485,11 @@ def run(config: AppConfig) -> int:
                 person_gallery.detach_all_session_targets(person_ids)
                 person_target_manager.clear()
                 person_gallery_recognition.notify_gallery_changed()
-                vehicle_count = 0
-                if is_torch_pc:
-                    vehicle_ids = tuple(vehicle_target_manager.targets)
-                    vehicle_gallery_service.detach_all_session_targets(vehicle_ids)
-                    vehicle_target_manager.clear()
-                    vehicle_gallery_recognition.notify_gallery_changed()
-                    vehicle_count = len(vehicle_ids)
+                vehicle_ids = tuple(vehicle_target_manager.targets)
+                vehicle_gallery_service.detach_all_session_targets(vehicle_ids)
+                vehicle_target_manager.clear()
+                vehicle_gallery_recognition.notify_gallery_changed()
+                vehicle_count = len(vehicle_ids)
                 LOGGER.info("TARGETS_CLEARED persons=%d vehicles=%d", len(person_ids), vehicle_count)
                 continue
 
@@ -521,10 +501,7 @@ def run(config: AppConfig) -> int:
                         if (
                             person_target_manager.target_for_track(track.track_id) is not None
                             if track.class_id == config.model.person_class_id
-                            else (
-                                is_torch_pc
-                                and vehicle_target_manager.target_for_track(track.track_id) is not None
-                            )
+                            else vehicle_target_manager.target_for_track(track.track_id) is not None
                         )
                     )
                 else:
@@ -556,44 +533,44 @@ def run(config: AppConfig) -> int:
             quality_rejected=(person_recovery.quality_rejected_count + person_gallery_recognition.quality_rejected_count),
             gallery_recognized=person_gallery_recognition.recognized_count,
         )
-        if is_torch_pc:
-            stats = tracking_pipeline.stats()
-            LOGGER.info(
-                "PC7_STATS frames=%d average_fps=%.2f yolo_inference_count=%d "
-                "unique_person_tracks=%d unique_vehicle_tracks=%d yolo_ms=%.2f "
-                "person_tracker_ms=%.2f vehicle_tracker_ms=%.2f "
-                "person_recovery_reid_ms=%.2f person_recovery_batches=%d "
-                "person_recovery_processed=%d person_recognition_reid_ms=%.2f "
-                "person_recognition_batches=%d person_recognition_processed=%d "
-                "person_retry_skipped=%d vehicle_recovery_reid_ms=%.2f "
-                "vehicle_recovery_batches=%d vehicle_recovery_processed=%d "
-                "vehicle_recognition_reid_ms=%.2f vehicle_recognition_batches=%d "
-                "vehicle_recognition_processed=%d vehicle_retry_skipped=%d",
-                stats.frames,
-                stats.frames / pc7_elapsed_seconds
-                if pc7_elapsed_seconds > 0.0
-                else 0.0,
-                stats.yolo_inference_count,
-                stats.unique_person_tracks,
-                stats.unique_vehicle_tracks,
-                stats.yolo_ms_total / max(1, stats.frames),
-                stats.person_tracker_ms_total / max(1, stats.frames),
-                stats.vehicle_tracker_ms_total / max(1, stats.frames),
-                person_recovery_reid_ms,
-                person_recovery_batches,
-                person_recovery_processed,
-                person_recognition_reid_ms,
-                person_recognition_batches,
-                person_recognition_processed,
-                person_retry_skipped,
-                vehicle_recovery_reid_ms,
-                vehicle_recovery_batches,
-                vehicle_recovery_processed,
-                vehicle_recognition_reid_ms,
-                vehicle_recognition_batches,
-                vehicle_recognition_processed,
-                vehicle_retry_skipped,
-            )
+        stats = tracking_pipeline.stats()
+        LOGGER.info(
+            "%s_STATS frames=%d average_fps=%.2f yolo_inference_count=%d "
+            "unique_person_tracks=%d unique_vehicle_tracks=%d yolo_ms=%.2f "
+            "person_tracker_ms=%.2f vehicle_tracker_ms=%.2f "
+            "person_recovery_reid_ms=%.2f person_recovery_batches=%d "
+            "person_recovery_processed=%d person_recognition_reid_ms=%.2f "
+            "person_recognition_batches=%d person_recognition_processed=%d "
+            "person_retry_skipped=%d vehicle_recovery_reid_ms=%.2f "
+            "vehicle_recovery_batches=%d vehicle_recovery_processed=%d "
+            "vehicle_recognition_reid_ms=%.2f vehicle_recognition_batches=%d "
+            "vehicle_recognition_processed=%d vehicle_retry_skipped=%d",
+            "PC7" if is_torch_pc else "ATLAS2B",
+            stats.frames,
+            stats.frames / pc7_elapsed_seconds
+            if pc7_elapsed_seconds > 0.0
+            else 0.0,
+            stats.yolo_inference_count,
+            stats.unique_person_tracks,
+            stats.unique_vehicle_tracks,
+            stats.yolo_ms_total / max(1, stats.frames),
+            stats.person_tracker_ms_total / max(1, stats.frames),
+            stats.vehicle_tracker_ms_total / max(1, stats.frames),
+            person_recovery_reid_ms,
+            person_recovery_batches,
+            person_recovery_processed,
+            person_recognition_reid_ms,
+            person_recognition_batches,
+            person_recognition_processed,
+            person_retry_skipped,
+            vehicle_recovery_reid_ms,
+            vehicle_recovery_batches,
+            vehicle_recovery_processed,
+            vehicle_recognition_reid_ms,
+            vehicle_recognition_batches,
+            vehicle_recognition_processed,
+            vehicle_retry_skipped,
+        )
         LOGGER.info("APP_STOP")
         if ascend_runtime is not None:
             ascend_runtime.close()

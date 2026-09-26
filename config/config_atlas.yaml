@@ -34,6 +34,10 @@ tracking:
   persist: true
   show_track_id: true
 
+multiclass_tracking:
+  # COCO: car=2, bus=5, truck=7. Motorcycle=3 remains disabled.
+  vehicle_class_ids: [2, 5, 7]
+
 selection:
   min_iou: 0.20
 
@@ -74,6 +78,41 @@ reid_quality:
   max_person_overlap_ratio: 0.60
   min_frame_edge_margin_ratio: 0.01
 
+vehicle_reid:
+  # Atlas uses the OM below; this checkpoint path remains schema-compatible
+  # and is not loaded by the Ascend backend.
+  enabled: true
+  model_name: "sbs_R50-ibn"
+  weight: "weights/vehicle_reid/veri_sbs_R50-ibn.pth"
+  config: "config/vehicle_reid/sbs_R50-ibn.yml"
+  device: "cpu"
+  image_height: 256
+  image_width: 256
+
+vehicle_recovery:
+  # Engineering starting values; recalibrate for the deployment site.
+  lost_grace_frames: 5
+  reference_update_interval_frames: 15
+  recovery_interval_frames: 5
+  max_reference_embeddings: 8
+  recovery_threshold: 0.60
+  recovery_margin: 0.08
+  reference_update_threshold: 0.55
+  recovery_reference_support_threshold: 0.55
+  recovery_reference_support_top_k: 3
+  recovery_min_track_age_frames: 3
+  recovery_confirmation_hits: 2
+  recovery_pending_max_age_frames: 60
+  recovery_candidates_per_frame: 1
+
+vehicle_reid_quality:
+  min_track_confidence: 0.35
+  max_edge_truncation_ratio: 0.30
+  max_vehicle_overlap_ratio: 0.60
+  min_frame_edge_margin_ratio: 0.01
+  min_crop_width: 40
+  min_crop_height: 40
+
 gallery_recognition:
   enabled: true
   recognition_interval_frames: 10
@@ -84,15 +123,40 @@ gallery_recognition:
   recognition_candidates_per_frame: 3
   unmatched_retry_interval_frames: 15
 
+vehicle_gallery_recognition:
+  # Engineering starting values; recalibrate for the deployment site.
+  enabled: true
+  recognition_interval_frames: 5
+  min_track_age_frames: 3
+  recognition_threshold: 0.60
+  recognition_margin: 0.08
+  confirmation_hits: 2
+  recognition_candidates_per_frame: 1
+  unmatched_retry_interval_frames: 15
+
 database:
   path: "database/person_reid.db"
 
+vehicle_database:
+  path: "database/vehicle_reid.db"
+
+gallery_enrichment:
+  post_recovery_stable_frames: 30
+  max_reference_embeddings: 8
+  duplicate_similarity_threshold: 0.95
+
+vehicle_gallery_enrichment:
+  post_recovery_stable_frames: 30
+  max_reference_embeddings: 8
+  duplicate_similarity_threshold: 0.95
+
 ui:
-  window_name: "Person Tracking - Atlas 310B"
+  window_name: "Person + Vehicle Tracking - Atlas 310B"
   wait_key_ms: 1
+  max_display_width: 1280
   show_class_name: true
   show_confidence: true
-  show_unselected_tracks: false
+  show_unselected_tracks: true
 
 diagnostics:
   enabled: true

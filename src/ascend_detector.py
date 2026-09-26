@@ -79,7 +79,7 @@ def nms_xyxy(
     scores: np.ndarray,
     iou_threshold: float,
 ) -> np.ndarray:
-    """Return indices kept by class-wise (person-only) NumPy NMS."""
+    """Return indices kept by NumPy NMS for one already-selected class."""
 
     if not 0.0 <= iou_threshold <= 1.0:
         raise ValueError("iou_threshold must be in [0, 1]")
@@ -133,6 +133,14 @@ def _prediction_matrix(output: np.ndarray) -> np.ndarray:
             f"unsupported YOLO output shape {array.shape}; expected [1,C,N] or [1,N,C]"
         )
     rows, columns = array.shape
+    if columns < 5 and rows >= 5:
+        return array.T
+    if rows < 5 and columns >= 5:
+        return array
+    if rows in {6, 84, 85} and columns not in {6, 84, 85}:
+        return array.T
+    if columns in {6, 84, 85} and rows not in {6, 84, 85}:
+        return array
     if rows <= 256 < columns:
         return array.T
     if columns <= 256 < rows:
@@ -157,34 +165,85 @@ def decode_yolo_output(
 ) -> list[Detection]:
     """Decode YOLOv8/YOLO11 raw output and return person-only detections."""
 
+    return decode_yolo_multiclass_output(
+        output,
+        transform,
+        frame_shape,
+        confidence_threshold=confidence_threshold,
+        iou_threshold=iou_threshold,
+        class_ids=(person_class_id,),
+        target_class_id=person_class_id,
+    )
+
+
+def decode_yolo_multiclass_output(
+    output: np.ndarray,
+    transform: LetterboxTransform,
+    frame_shape: Sequence[int],
+    *,
+    confidence_threshold: float,
+    iou_threshold: float,
+    class_ids: Sequence[int],
+    has_objectness: bool | None = None,
+    target_class_id: int | None = None,
+) -> list[Detection]:
+    """Decode raw YOLO output for several classes with class-aware NMS.
+
+    The project exports use the YOLOv8-style ``4 + class_scores`` layout.  The
+    optional objectness argument keeps compatibility with older YOLO exports
+    using ``4 + objectness + class_scores``.  When omitted, the historical
+    project heuristic is retained for the common one-class/COCO-80 layouts.
+    """
+
     if not 0.0 <= confidence_threshold <= 1.0:
         raise ValueError("confidence_threshold must be in [0, 1]")
-    if person_class_id < 0:
-        raise ValueError("person_class_id must be non-negative")
+    allowed_class_ids = tuple(sorted({int(class_id) for class_id in class_ids}))
+    if not allowed_class_ids or any(class_id < 0 for class_id in allowed_class_ids):
+        raise ValueError("class_ids must contain at least one non-negative class ID")
     predictions = _prediction_matrix(output)
     channels = predictions.shape[1]
     if channels < 5:
         raise ValueError(f"YOLO output has too few channels: {channels}")
 
-    # Ultralytics detect exports use 4 box channels plus class scores.  Older
-    # exports can include one objectness channel, which is handled explicitly.
-    has_objectness = channels in {6, 85}
+    if has_objectness is None:
+        # Preserve support for the legacy single-class and COCO-80 layouts.
+        has_objectness = channels in {6, 85}
     class_start = 5 if has_objectness else 4
     class_count = channels - class_start
-    if person_class_id >= class_count:
+    if max(allowed_class_ids) >= class_count:
         return []
     boxes_xywh = predictions[:, :4]
-    class_scores = predictions[:, class_start + person_class_id]
     if has_objectness:
-        scores = predictions[:, 4] * class_scores
+        class_scores = predictions[:, class_start:]
+        effective_scores = predictions[:, 4:5] * class_scores
     else:
-        scores = class_scores
-    valid = np.isfinite(predictions).all(axis=1) & (scores >= confidence_threshold)
+        effective_scores = predictions[:, class_start:]
+    if target_class_id is not None:
+        if target_class_id not in allowed_class_ids:
+            raise ValueError("target_class_id must be included in class_ids")
+        if target_class_id >= effective_scores.shape[1]:
+            return []
+        best_classes = np.full(
+            (len(predictions),), target_class_id, dtype=np.int64
+        )
+        best_scores = effective_scores[:, target_class_id]
+    else:
+        best_indices = np.argmax(effective_scores, axis=1)
+        best_scores = effective_scores[np.arange(len(predictions)), best_indices]
+        best_classes = best_indices.astype(np.int64, copy=False)
+    allowed = np.isin(best_classes, np.asarray(allowed_class_ids, dtype=np.int64))
+    valid = (
+        np.isfinite(predictions).all(axis=1)
+        & np.isfinite(best_scores)
+        & allowed
+        & (best_scores >= confidence_threshold)
+    )
     if not np.any(valid):
         return []
 
     boxes_xywh = boxes_xywh[valid]
-    scores = scores[valid].astype(np.float32, copy=False)
+    scores = best_scores[valid].astype(np.float32, copy=False)
+    detected_classes = best_classes[valid]
     boxes = np.empty_like(boxes_xywh, dtype=np.float32)
     boxes[:, 0] = boxes_xywh[:, 0] - boxes_xywh[:, 2] / 2.0
     boxes[:, 1] = boxes_xywh[:, 1] - boxes_xywh[:, 3] / 2.0
@@ -201,15 +260,70 @@ def decode_yolo_output(
         return []
     boxes = boxes[valid_area]
     scores = scores[valid_area]
-    kept = nms_xyxy(boxes, scores, iou_threshold)
-    return [
-        Detection(
-            bbox=tuple(float(value) for value in boxes[index]),
-            confidence=float(scores[index]),
-            class_id=person_class_id,
+    detected_classes = detected_classes[valid_area]
+    detections: list[Detection] = []
+    for class_id in allowed_class_ids:
+        class_indices = np.flatnonzero(detected_classes == class_id)
+        if class_indices.size == 0:
+            continue
+        kept = nms_xyxy(boxes[class_indices], scores[class_indices], iou_threshold)
+        detections.extend(
+            Detection(
+                bbox=tuple(float(value) for value in boxes[class_indices[index]]),
+                confidence=float(scores[class_indices[index]]),
+                class_id=class_id,
+            )
+            for index in kept
         )
-        for index in kept
-    ]
+    return detections
+
+
+class AscendMultiClassDetector:
+    """Run one YOLO OM inference and decode the configured class set."""
+
+    def __init__(
+        self,
+        model_path: str | Path,
+        runtime: AscendRuntime,
+        *,
+        image_size: int,
+        confidence_threshold: float,
+        iou_threshold: float,
+        class_ids: Sequence[int],
+        model: AscendModel | Any | None = None,
+    ) -> None:
+        self.model_path = Path(model_path)
+        self.runtime = runtime
+        self.image_size = image_size
+        self.confidence_threshold = confidence_threshold
+        self.iou_threshold = iou_threshold
+        self.class_ids = tuple(sorted({int(class_id) for class_id in class_ids}))
+        if not self.class_ids or any(class_id < 0 for class_id in self.class_ids):
+            raise ValueError("class_ids must contain at least one non-negative class ID")
+        self.model = model if model is not None else runtime.load_model(self.model_path)
+        self.inference_count = 0
+
+    def detect(self, frame: np.ndarray) -> list[Detection]:
+        tensor, transform = letterbox_bgr(frame, self.image_size)
+        outputs = self.runtime.execute(self.model, [tensor])
+        self.inference_count += 1
+        if not outputs:
+            raise ValueError("YOLO OM returned no outputs")
+        output = outputs[0]
+        output_shape = getattr(self.model, "output_shapes", ())
+        if np.asarray(output).ndim == 1 and output_shape:
+            shape = output_shape[0]
+            if shape is not None and all(value > 0 for value in shape):
+                if int(np.prod(shape)) == np.asarray(output).size:
+                    output = np.asarray(output).reshape(shape)
+        return decode_yolo_multiclass_output(
+            output,
+            transform,
+            frame.shape,
+            confidence_threshold=self.confidence_threshold,
+            iou_threshold=self.iou_threshold,
+            class_ids=self.class_ids,
+        )
 
 
 class AscendPersonDetector:

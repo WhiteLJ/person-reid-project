@@ -1,9 +1,11 @@
-# Person ReID Project - MVP-8.3-PC7
+# Person ReID Project - MVP-8.3-Atlas2B
 
-The current PC runtime is a formal Person + Vehicle OpenCV pipeline. Person and
-Vehicle identities remain separate while sharing one YOLO inference per frame.
+The current PC runtime is a formal Person + Vehicle OpenCV pipeline. Atlas now
+uses the same two-domain application path with OM inference and CPU BoT-SORT;
+Person and Vehicle identities remain separate while sharing one YOLO inference
+per frame.
 
-## Current MVP-8.3-PC7 behavior
+## Current MVP-8.3 behavior
 
 The runtime pipeline is:
 
@@ -22,9 +24,9 @@ The three identity layers remain separate:
 - `GalleryPerson.person_id`: persistent logical identity displayed as `P001`, `P002`, ... .
 - `GalleryVehicle.vehicle_id`: persistent logical identity displayed as `V001`, `V002`, ... .
 
-The PC Torch path supports Person plus Vehicle classes `car` (COCO 2), `bus`
-(COCO 5), and `truck` (COCO 7). Atlas currently remains Person-only; Vehicle
-Atlas work is presently limited to ONNX export and board-side ATC preparation.
+Both PC Torch and Atlas paths support Person plus Vehicle classes `car` (COCO
+2), `bus` (COCO 5), and `truck` (COCO 7). Person IDs are `P001`, `P002`, ...;
+Vehicle IDs are `V001`, `V002`, ... .
 
 The MVP-8.1 foundation supports:
 
@@ -110,12 +112,11 @@ The ReID checkpoint is the official OSNet x0.25 MSMT17 combineall checkpoint. Th
 application fails clearly when it is missing and never silently falls back to
 ImageNet-only or random weights.
 
-## Atlas 310B Person inference backend
+## Atlas 310B Person + Vehicle inference backend
 
-The deployment-only Atlas path currently runs the Person chain: YOLO and OSNet
-from locally converted OM models through pyACL/AscendCL, with CPU BoT-SORT. It
-does not load the Vehicle checkpoint or Vehicle OM, and the project does not use
-`torch_npu`.
+The Atlas path runs YOLO, Person OSNet, and Vehicle SBS(R50-IBN) from locally
+converted OM models through one shared pyACL/AscendCL runtime, with independent
+CPU BoT-SORT trackers. It does not use `torch_npu`.
 
 The PC default remains `inference.backend: torch`. The Atlas workflow is fully
 documented in [`deploy/atlas/README.md`](deploy/atlas/README.md): export both
@@ -174,9 +175,16 @@ bash deploy/atlas/convert_vehicle_reid_om.sh \
 ### Atlas2A Vehicle OM validation
 
 Atlas2A validates the resulting Vehicle OM through the shared pyACL
-`AscendRuntime`, including dynamic batches and PC/Atlas embedding parity. The
-formal Atlas application remains Person-only until the later Atlas2B integration
-stage.
+`AscendRuntime`, including dynamic batches and PC/Atlas embedding parity.
+
+### Atlas2B formal integration
+
+The formal Atlas application now runs one YOLO OM inference per frame, splits
+Person (`0`) and Vehicle (`2`, `5`, `7`) detections, and updates two independent
+BoT-SORT instances. Person and Vehicle ReID, Recovery, Gallery recognition, and
+SQLite persistence remain separate business domains. Vehicle OM runtime
+validation must still be performed on the real Atlas 310B board; PC tests do not
+claim hardware success.
 
 ## Configuration
 

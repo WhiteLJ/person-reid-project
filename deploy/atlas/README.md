@@ -1,13 +1,15 @@
 # Huawei Atlas 310B deployment
 
 This directory contains the deployment adaptation for Huawei Atlas 310B. It is
-an inference-backend variant of the existing MVP-8.2 application, not a new
+an inference-backend variant of the existing MVP-8.3 application, not a new
 identity/business MVP. The CPU business logic remains unchanged:
 
 ```text
-Ascend YOLO OM -> CPU BoT-SORT -> Track[] -> existing SessionTarget/Recovery/
-                 Gallery/SQLite/recognition/enrichment logic
-Track crop -> Ascend OSNet OM -> normalized 512-D embedding
+Ascend YOLO OM -> two CPU BoT-SORT states -> Person/Vehicle Track[] -> existing
+                 SessionTarget/Recovery/Gallery/SQLite/recognition/enrichment
+                 logic
+Person crop -> Ascend OSNet OM -> normalized 512-D embedding
+Vehicle crop -> Ascend SBS(R50-IBN) OM -> normalized 2048-D embedding
 ```
 
 The Atlas path does not use `torch_npu`, `YOLO.predict()`, `YOLO.track()`, or a
@@ -131,9 +133,14 @@ ascend:
   yolo_model: weights/atlas/yolov8n.om
   reid_model: weights/atlas/osnet_x0_25.om
   reid_dynamic_batches: [1, 2, 4, 8]
+  vehicle_reid_model: weights/atlas/vehicle_sbs_r50_ibn.om
+  vehicle_reid_dynamic_batches: [1, 2, 4, 8]
+
+multiclass_tracking:
+  vehicle_class_ids: [2, 5, 7]
 
 tracking:
-  tracker: config/trackers/botsort_baseline.yaml
+  tracker: config/trackers/botsort_fixed_camera.yaml
 ```
 
 The corresponding command is:
@@ -143,12 +150,20 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 python app.py --config config/config_atlas.yaml --source data/your_video.mp4
 ```
 
-The application creates one shared ACL runtime, loads YOLO and OSNet once, and
-reuses them. Each frame runs Ascend YOLO once, CPU BoT-SORT once, and the
-existing scheduled ReID business logic. The same-frame `ReIDFrameCache` still
-prevents duplicate OSNet inference between Recovery and Gallery recognition.
+The application creates one shared ACL runtime and loads YOLO, OSNet, and
+Vehicle SBS(R50-IBN) once. Each frame runs Ascend YOLO once, two independent
+CPU BoT-SORT updates, and the existing scheduled Person/Vehicle ReID business
+logic. The same-frame Person and Vehicle `ReIDFrameCache` instances still
+prevent duplicate inference between Recovery and Gallery recognition.
 
-## 5. Smoke test
+The formal Atlas entry point is:
+
+```bash
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+python app.py --config config/config_atlas.yaml --source data/your_video.mp4
+```
+
+## 5. Atlas2A Vehicle OM smoke test
 
 Run this on the actual board after the OM files are present:
 
@@ -160,6 +175,18 @@ python -m tools.atlas_smoke_test \
   --config config/config_atlas.yaml \
   --image data/person.jpg
 ```
+
+Vehicle multi-class detection/tracking can be checked independently before
+running the full application:
+
+```bash
+python -m tools.atlas_multiclass_tracking_smoke_test \
+  --config config/config_atlas.yaml \
+  --source data/your_video.mp4
+```
+
+The tool must report `yolo_inference_count == frames` and ends with
+`ATLAS_MULTICLASS_TRACKING_SMOKE_OK`.
 
 If YOLO finds no person, supply an image-space crop explicitly:
 
