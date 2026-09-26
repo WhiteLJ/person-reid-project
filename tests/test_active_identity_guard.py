@@ -120,6 +120,52 @@ class ActiveIdentityGuardTests(unittest.TestCase):
         self.assertEqual(result.blocked_reference_update_target_ids, {self.target.target_id})
         self.assertEqual(extractor.batch_calls, 0)
 
+    def test_ambiguity_candidates_require_trigger_overlap(self) -> None:
+        extractor = _SequenceExtractor([])
+        guard = _make_guard(extractor, self.manager)
+
+        guard.process_frame(self.frame, [self.track_a], 0)
+        expanded = Track(11, (50, 50, 180, 250), 0.9, 0)
+        meaningful_partner = Track(12, (154, 50, 284, 250), 0.9, 0)
+        weak_partner = Track(13, (167, 50, 297, 250), 0.9, 0)
+        result = guard.process_frame(
+            self.frame,
+            [expanded, meaningful_partner, weak_partner],
+            1,
+        )
+
+        self.assertEqual(
+            result.blocked_reference_update_target_ids,
+            {self.target.target_id},
+        )
+        self.assertEqual(
+            guard._states[self.target.target_id].overlap_track_ids,
+            (11, 12),
+        )
+
+    def test_max_candidates_keeps_current_and_highest_meaningful_partners(self) -> None:
+        guard = _make_guard(_SequenceExtractor([]), self.manager)
+
+        candidates = guard._select_overlap_candidates(
+            11,
+            [(12, 0.50), (13, 0.35), (14, 0.20), (15, 0.17), (16, 0.14)],
+        )
+
+        self.assertEqual(candidates, (11, 12, 13))
+
+    def test_geometry_anomaly_without_trigger_overlap_stays_unambiguous(self) -> None:
+        extractor = _SequenceExtractor([])
+        guard = _make_guard(extractor, self.manager)
+
+        guard.process_frame(self.frame, [self.track_a], 0)
+        expanded = Track(11, (50, 50, 180, 250), 0.9, 0)
+        weak_partner = Track(13, (167, 50, 297, 250), 0.9, 0)
+        result = guard.process_frame(self.frame, [expanded, weak_partner], 1)
+
+        self.assertEqual(result.blocked_reference_update_target_ids, set())
+        self.assertEqual(guard._states[self.target.target_id].overlap_track_ids, ())
+        self.assertEqual(extractor.batch_calls, 0)
+
     def test_arm_like_bbox_growth_without_overlap_does_not_run_reid(self) -> None:
         extractor = _SequenceExtractor([])
         guard = _make_guard(extractor, self.manager)

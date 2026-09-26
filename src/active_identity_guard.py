@@ -484,7 +484,12 @@ class ActiveIdentityGuard:
             if other.track_id != track.track_id
             and other.class_id == self.person_class_id
         ]
-        return sorted(partners, key=lambda item: (-item[1], item[0]))
+        meaningful_partners = [
+            item
+            for item in partners
+            if item[1] >= self.guard_config.overlap_trigger_ratio
+        ]
+        return sorted(meaningful_partners, key=lambda item: (-item[1], item[0]))
 
     def _select_overlap_candidates(
         self,
@@ -492,9 +497,17 @@ class ActiveIdentityGuard:
         partners: Sequence[tuple[int, float]],
     ) -> tuple[int, ...]:
         limit = max(1, self.guard_config.max_candidates)
+        meaningful_partners = [
+            (track_id, ratio)
+            for track_id, ratio in partners
+            if ratio >= self.guard_config.overlap_trigger_ratio
+        ]
         return tuple(
             [current_track_id]
-            + [track_id for track_id, _ratio in partners[: max(0, limit - 1)]]
+            + [
+                track_id
+                for track_id, _ratio in meaningful_partners[: max(0, limit - 1)]
+            ]
         )
 
     def _verification_candidates(
