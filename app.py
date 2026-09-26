@@ -10,6 +10,7 @@ from time import perf_counter
 from typing import Any, Sequence
 
 from src.ascend_runtime import AscendRuntime
+from src.active_identity_guard import ActiveIdentityGuard
 from src.config import AppConfig, load_config, parse_source
 from src.database import GalleryRepository
 from src.diagnostics import RuntimeDiagnostics
@@ -233,6 +234,16 @@ def run(config: AppConfig) -> int:
         embedding_cache=person_cache,
         quality_config=config.reid_quality,
     )
+    person_identity_guard = ActiveIdentityGuard(
+        target_manager=person_target_manager,
+        reid_extractor=reid_extractor,
+        reid_config=config.reid,
+        recovery_config=config.reid_recovery,
+        quality_config=config.reid_quality,
+        guard_config=config.active_identity_guard,
+        embedding_cache=person_cache,
+        person_class_id=config.model.person_class_id,
+    )
     diagnostics = RuntimeDiagnostics(
         enabled=config.diagnostics.enabled,
         log_interval_frames=config.diagnostics.log_interval_frames,
@@ -256,6 +267,13 @@ def run(config: AppConfig) -> int:
     vehicle_recovery_batches = vehicle_recognition_batches = 0
     vehicle_recovery_processed = vehicle_recognition_processed = 0
     vehicle_retry_skipped = 0
+    person_recovery_candidate_reid_total = 0.0
+    person_reference_update_reid_total = 0.0
+    person_guard_reid_total = 0.0
+    vehicle_recovery_candidate_reid_total = 0.0
+    vehicle_reference_update_reid_total = 0.0
+    person_recognition_reid_total = 0.0
+    vehicle_recognition_reid_total = 0.0
     last_vehicle_recovered_track_ids: frozenset[int] = frozenset()
     pc7_elapsed_seconds = 0.0
 
@@ -368,18 +386,54 @@ def run(config: AppConfig) -> int:
                 break
             current_frame_index = frame_index
             tracking_started = perf_counter()
+            tracking_stats_before = tracking_pipeline.stats()
             tracking_result = tracking_pipeline.process(frame)
+            tracking_stats_after = tracking_pipeline.stats()
             person_tracks = tracking_result.person_tracks
             vehicle_tracks = tracking_result.vehicle_tracks
             tracks = person_tracks
             tracking_seconds = perf_counter() - tracking_started
+            yolo_frame_ms = (
+                tracking_stats_after.yolo_ms_total
+                - tracking_stats_before.yolo_ms_total
+            )
+            person_tracker_frame_ms = (
+                tracking_stats_after.person_tracker_ms_total
+                - tracking_stats_before.person_tracker_ms_total
+            )
+            vehicle_tracker_frame_ms = (
+                tracking_stats_after.vehicle_tracker_ms_total
+                - tracking_stats_before.vehicle_tracker_ms_total
+            )
             diagnostics.observe_tracks(person_tracks, current_frame_index)
 
+            identity_guard_started = perf_counter()
+            identity_guard_result = person_identity_guard.process_frame(
+                frame,
+                person_tracks,
+                current_frame_index,
+            )
+            identity_guard_seconds = perf_counter() - identity_guard_started
+            person_guard_reid_total += identity_guard_result.reid_ms
+
             person_recovery_started = perf_counter()
-            person_recovery.process_frame(frame, person_tracks, current_frame_index)
+            person_recovery.process_frame(
+                frame,
+                person_tracks,
+                current_frame_index,
+                reference_update_blocked_target_ids=(
+                    identity_guard_result.blocked_reference_update_target_ids
+                ),
+            )
             person_recovery_seconds = perf_counter() - person_recovery_started
             person_recovery_stats = person_recovery.last_frame_recovery_stats
             person_recovery_reid_ms += person_recovery_stats.reid_ms
+            person_recovery_candidate_reid_total += (
+                person_recovery_stats.candidate_reid_ms
+            )
+            person_reference_update_reid_total += (
+                person_recovery_stats.reference_update_reid_ms
+            )
             person_recovery_batches += person_recovery_stats.reid_batch_count
             person_recovery_processed += person_recovery_stats.sweep_processed_this_frame
 
@@ -388,6 +442,12 @@ def run(config: AppConfig) -> int:
             vehicle_recovery_seconds = perf_counter() - vehicle_recovery_started
             vehicle_recovery_stats = vehicle_recovery.last_frame_recovery_stats
             vehicle_recovery_reid_ms += vehicle_recovery_stats.reid_ms
+            vehicle_recovery_candidate_reid_total += (
+                vehicle_recovery_stats.candidate_reid_ms
+            )
+            vehicle_reference_update_reid_total += (
+                vehicle_recovery_stats.reference_update_reid_ms
+            )
             vehicle_recovery_batches += vehicle_recovery_stats.reid_batch_count
             vehicle_recovery_processed += vehicle_recovery_stats.sweep_processed_this_frame
             last_vehicle_recovered_track_ids = vehicle_recovery.last_recovered_track_ids
@@ -414,6 +474,7 @@ def run(config: AppConfig) -> int:
             )
             person_recognition_stats = person_gallery_recognition.last_frame_recognition_stats
             person_recognition_reid_ms += person_recognition_stats.reid_ms
+            person_recognition_reid_total += person_recognition_stats.reid_ms
             person_recognition_batches += person_recognition_stats.reid_batch_count
             person_recognition_processed += person_recognition_stats.sweep_processed_this_frame
             person_retry_skipped += person_recognition_stats.skipped_retry_cooldown
@@ -432,6 +493,7 @@ def run(config: AppConfig) -> int:
                     vehicle_gallery_service.mark_auto_recognized(target.target_id)
             vehicle_recognition_stats = vehicle_gallery_recognition.last_frame_recognition_stats
             vehicle_recognition_reid_ms += vehicle_recognition_stats.reid_ms
+            vehicle_recognition_reid_total += vehicle_recognition_stats.reid_ms
             vehicle_recognition_batches += vehicle_recognition_stats.reid_batch_count
             vehicle_recognition_processed += vehicle_recognition_stats.sweep_processed_this_frame
             vehicle_retry_skipped += vehicle_recognition_stats.skipped_retry_cooldown
@@ -453,6 +515,7 @@ def run(config: AppConfig) -> int:
                 tracking_seconds=tracking_seconds,
                 recovery_seconds=person_recovery_seconds + vehicle_recovery_seconds,
                 gallery_seconds=gallery_seconds,
+                identity_guard_seconds=identity_guard_seconds,
                 render_seconds=render_seconds,
                 ui_seconds=ui_seconds,
                 recovery_due=person_recovery_stats.recovery_due,
@@ -460,6 +523,19 @@ def run(config: AppConfig) -> int:
                 recovery_quality_valid_count=person_recovery_stats.quality_valid_count,
                 recovery_reid_batch_count=person_recovery_stats.reid_batch_count,
                 recovery_reid_seconds=person_recovery_stats.reid_ms / 1000.0,
+                person_recovery_candidate_reid_ms=person_recovery_stats.candidate_reid_ms,
+                person_reference_update_reid_ms=(
+                    person_recovery_stats.reference_update_reid_ms
+                ),
+                person_guard_reid_ms=identity_guard_result.reid_ms,
+                person_recognition_reid_ms=person_recognition_stats.reid_ms,
+                vehicle_recovery_candidate_reid_ms=(
+                    vehicle_recovery_stats.candidate_reid_ms
+                ),
+                vehicle_reference_update_reid_ms=(
+                    vehicle_recovery_stats.reference_update_reid_ms
+                ),
+                vehicle_recognition_reid_ms=vehicle_recognition_stats.reid_ms,
                 recovery_sweep_started=person_recovery_stats.sweep_started,
                 recovery_sweep_completed=person_recovery_stats.sweep_completed,
                 recovery_sweep_candidate_total=person_recovery_stats.sweep_candidate_total,
@@ -476,6 +552,31 @@ def run(config: AppConfig) -> int:
                 recognition_sweep_reid_ms=person_recognition_stats.sweep_reid_ms,
                 recognition_retry_skipped=person_recognition_stats.skipped_retry_cooldown,
             )
+
+            if frame_seconds > 0.100:
+                LOGGER.warning(
+                    "SLOW_FRAME frame=%d total_ms=%.2f yolo_ms=%.2f "
+                    "person_tracker_ms=%.2f vehicle_tracker_ms=%.2f "
+                    "person_recovery_ms=%.2f "
+                    "person_recovery_candidate_ms=%.2f "
+                    "person_reference_update_ms=%.2f person_guard_ms=%.2f "
+                    "person_recognition_ms=%.2f vehicle_recovery_ms=%.2f "
+                    "vehicle_recognition_ms=%.2f render_ms=%.2f ui_ms=%.2f",
+                    current_frame_index,
+                    frame_seconds * 1000.0,
+                    yolo_frame_ms,
+                    person_tracker_frame_ms,
+                    vehicle_tracker_frame_ms,
+                    person_recovery_stats.reid_ms,
+                    person_recovery_stats.candidate_reid_ms,
+                    person_recovery_stats.reference_update_reid_ms,
+                    identity_guard_result.reid_ms,
+                    person_recognition_stats.reid_ms,
+                    vehicle_recovery_stats.reid_ms,
+                    vehicle_recognition_stats.reid_ms,
+                    render_seconds * 1000.0,
+                    ui_seconds * 1000.0,
+                )
 
             if action == UIAction.QUIT:
                 LOGGER.info("USER_QUIT key=q")
@@ -539,9 +640,13 @@ def run(config: AppConfig) -> int:
             "unique_person_tracks=%d unique_vehicle_tracks=%d yolo_ms=%.2f "
             "person_tracker_ms=%.2f vehicle_tracker_ms=%.2f "
             "person_recovery_reid_ms=%.2f person_recovery_batches=%d "
+            "person_recovery_candidate_reid_ms=%.2f "
+            "person_reference_update_reid_ms=%.2f person_guard_reid_ms=%.2f "
             "person_recovery_processed=%d person_recognition_reid_ms=%.2f "
             "person_recognition_batches=%d person_recognition_processed=%d "
             "person_retry_skipped=%d vehicle_recovery_reid_ms=%.2f "
+            "vehicle_recovery_candidate_reid_ms=%.2f "
+            "vehicle_reference_update_reid_ms=%.2f "
             "vehicle_recovery_batches=%d vehicle_recovery_processed=%d "
             "vehicle_recognition_reid_ms=%.2f vehicle_recognition_batches=%d "
             "vehicle_recognition_processed=%d vehicle_retry_skipped=%d",
@@ -558,15 +663,20 @@ def run(config: AppConfig) -> int:
             stats.vehicle_tracker_ms_total / max(1, stats.frames),
             person_recovery_reid_ms,
             person_recovery_batches,
+            person_recovery_candidate_reid_total,
+            person_reference_update_reid_total,
+            person_guard_reid_total,
             person_recovery_processed,
-            person_recognition_reid_ms,
+            person_recognition_reid_total,
             person_recognition_batches,
             person_recognition_processed,
             person_retry_skipped,
             vehicle_recovery_reid_ms,
+            vehicle_recovery_candidate_reid_total,
+            vehicle_reference_update_reid_total,
             vehicle_recovery_batches,
             vehicle_recovery_processed,
-            vehicle_recognition_reid_ms,
+            vehicle_recognition_reid_total,
             vehicle_recognition_batches,
             vehicle_recognition_processed,
             vehicle_retry_skipped,

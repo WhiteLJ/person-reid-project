@@ -35,6 +35,7 @@ class RuntimeDiagnostics:
         self._tracking_seconds = 0.0
         self._recovery_seconds = 0.0
         self._gallery_seconds = 0.0
+        self._identity_guard_seconds = 0.0
         self._render_seconds = 0.0
         self._ui_seconds = 0.0
         self._normal_frame_count = 0
@@ -61,6 +62,7 @@ class RuntimeDiagnostics:
         self._recognition_reid_batch_count = 0
         self._recognition_reid_seconds = 0.0
         self._recognition_retry_skipped_count = 0
+        self._source_timing_totals: dict[str, float] = {}
 
     def observe_tracks(self, tracks: Sequence[Track], frame_index: int) -> None:
         """Record Track IDs entering/leaving the current result set."""
@@ -88,6 +90,7 @@ class RuntimeDiagnostics:
         tracking_seconds: float = 0.0,
         recovery_seconds: float = 0.0,
         gallery_seconds: float = 0.0,
+        identity_guard_seconds: float = 0.0,
         render_seconds: float = 0.0,
         ui_seconds: float = 0.0,
         recovery_due: bool = False,
@@ -110,6 +113,13 @@ class RuntimeDiagnostics:
         recognition_sweep_frames: int = 0,
         recognition_sweep_reid_ms: float = 0.0,
         recognition_retry_skipped: int = 0,
+        person_recovery_candidate_reid_ms: float = 0.0,
+        person_reference_update_reid_ms: float = 0.0,
+        person_guard_reid_ms: float = 0.0,
+        person_recognition_reid_ms: float = 0.0,
+        vehicle_recovery_candidate_reid_ms: float = 0.0,
+        vehicle_reference_update_reid_ms: float = 0.0,
+        vehicle_recognition_reid_ms: float = 0.0,
     ) -> None:
         if not self.enabled:
             return
@@ -118,6 +128,7 @@ class RuntimeDiagnostics:
         tracking_seconds = max(0.0, tracking_seconds)
         recovery_seconds = max(0.0, recovery_seconds)
         gallery_seconds = max(0.0, gallery_seconds)
+        identity_guard_seconds = max(0.0, identity_guard_seconds)
         render_seconds = max(0.0, render_seconds)
         ui_seconds = max(0.0, ui_seconds)
         recovery_reid_seconds = max(0.0, recovery_reid_seconds)
@@ -129,6 +140,19 @@ class RuntimeDiagnostics:
         self._tracking_seconds += tracking_seconds
         self._recovery_seconds += recovery_seconds
         self._gallery_seconds += gallery_seconds
+        self._identity_guard_seconds += identity_guard_seconds
+        for name, value in {
+            "person_recovery_candidate_reid_ms": person_recovery_candidate_reid_ms,
+            "person_reference_update_reid_ms": person_reference_update_reid_ms,
+            "person_guard_reid_ms": person_guard_reid_ms,
+            "person_recognition_reid_ms": person_recognition_reid_ms,
+            "vehicle_recovery_candidate_reid_ms": vehicle_recovery_candidate_reid_ms,
+            "vehicle_reference_update_reid_ms": vehicle_reference_update_reid_ms,
+            "vehicle_recognition_reid_ms": vehicle_recognition_reid_ms,
+        }.items():
+            self._source_timing_totals[name] = (
+                self._source_timing_totals.get(name, 0.0) + max(0.0, value)
+            )
         self._render_seconds += render_seconds
         self._ui_seconds += ui_seconds
         if recovery_due:
@@ -200,6 +224,7 @@ class RuntimeDiagnostics:
             "tracking_ms": f"{self._mean_ms(self._tracking_seconds, self.processed_frames):.2f}",
             "recovery_ms": f"{self._mean_ms(self._recovery_seconds, self.processed_frames):.2f}",
             "gallery_ms": f"{self._mean_ms(self._gallery_seconds, self.processed_frames):.2f}",
+            "identity_guard_ms": f"{self._mean_ms(self._identity_guard_seconds, self.processed_frames):.2f}",
             "render_ms": f"{self._mean_ms(self._render_seconds, self.processed_frames):.2f}",
             "ui_ms": f"{self._mean_ms(self._ui_seconds, self.processed_frames):.2f}",
             "normal_frame_ms": f"{self._mean_ms(self._normal_frame_seconds, self._normal_frame_count):.2f}",
@@ -225,6 +250,8 @@ class RuntimeDiagnostics:
             "recognition_sweep_reid_ms": f"{self._recognition_sweep_reid_seconds * 1000.0:.2f}",
             "recognition_retry_skipped": self._recognition_retry_skipped_count,
         }
+        for name, total_ms in self._source_timing_totals.items():
+            values[name] = f"{total_ms / self.processed_frames:.2f}" if self.processed_frames else "0.00"
         values.update(counters)
         return " ".join(f"{key}={value}" for key, value in values.items())
 

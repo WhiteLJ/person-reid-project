@@ -150,6 +150,33 @@ class ReIDQualityTests(unittest.TestCase):
         self.assertTrue(result.accepted)
         self.assertAlmostEqual(result.max_person_overlap_ratio, 0.125)
 
+    def test_person_overlap_ratio_below_new_configured_gate_is_accepted(self) -> None:
+        target = Track(1, (10, 5, 50, 110), 0.9, 0)
+        other = Track(2, (34.4, 5, 50, 110), 0.9, 0)
+        result = assess_reid_quality(
+            self.frame,
+            target,
+            [target, other],
+            self.config,
+            ReIDQualityConfig(max_person_overlap_ratio=0.40),
+        )
+        self.assertTrue(result.accepted)
+        self.assertAlmostEqual(result.max_person_overlap_ratio, 0.39)
+
+    def test_person_overlap_ratio_above_new_configured_gate_is_rejected(self) -> None:
+        target = Track(1, (10, 5, 50, 110), 0.9, 0)
+        other = Track(2, (33.6, 5, 50, 110), 0.9, 0)
+        result = assess_reid_quality(
+            self.frame,
+            target,
+            [target, other],
+            self.config,
+            ReIDQualityConfig(max_person_overlap_ratio=0.40),
+        )
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.reason, "person_overlap")
+        self.assertAlmostEqual(result.max_person_overlap_ratio, 0.41)
+
 
 if __name__ == "__main__":
     unittest.main()

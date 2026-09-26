@@ -102,7 +102,10 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertAlmostEqual(config.reid_quality.min_track_confidence, 0.35)
         self.assertAlmostEqual(config.reid_quality.max_edge_truncation_ratio, 0.30)
-        self.assertAlmostEqual(config.reid_quality.max_person_overlap_ratio, 0.60)
+        self.assertAlmostEqual(config.reid_quality.max_person_overlap_ratio, 0.40)
+        self.assertTrue(config.active_identity_guard.enabled)
+        self.assertEqual(config.active_identity_guard.bbox_history_frames, 5)
+        self.assertEqual(config.active_identity_guard.confirmation_hits, 2)
         self.assertAlmostEqual(config.reid_quality.min_frame_edge_margin_ratio, 0.01)
         self.assertTrue(config.gallery_recognition.enabled)
         self.assertEqual(config.gallery_recognition.recognition_interval_frames, 10)
@@ -147,7 +150,7 @@ class ConfigTests(unittest.TestCase):
             config.vehicle_database.path,
             Path("database/vehicle_reid.db").resolve(),
         )
-        self.assertTrue(config.ui.show_unselected_tracks)
+        self.assertFalse(config.ui.show_unselected_tracks)
         self.assertEqual(config.ui.max_display_width, 1280)
         self.assertTrue(config.diagnostics.enabled)
         self.assertEqual(config.diagnostics.log_interval_frames, 300)
@@ -186,6 +189,8 @@ class ConfigTests(unittest.TestCase):
         self.assertAlmostEqual(
             config.reid_quality.min_frame_edge_margin_ratio, 0.01
         )
+        self.assertAlmostEqual(config.reid_quality.max_person_overlap_ratio, 0.40)
+        self.assertFalse(config.ui.show_unselected_tracks)
         self.assertAlmostEqual(
             config.gallery_enrichment.duplicate_similarity_threshold, 0.95
         )

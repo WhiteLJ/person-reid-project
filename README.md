@@ -81,12 +81,12 @@ Automatic recognition reads the in-memory Gallery loaded at startup. Recognition
 itself does not write SQLite, update persistent Gallery features, or create a new
 `GalleryPerson` during recognition.
 
-Ordinary unselected Tracks remain tracked in the background. The current project
-default draws them for debugging:
+Ordinary unselected Tracks remain tracked in the background but are hidden by the
+current project default. Only selected or persistent-identity targets are drawn:
 
 ```yaml
 ui:
-  show_unselected_tracks: true
+  show_unselected_tracks: false
 ```
 
 Selected or automatically recognized active targets are drawn in red, for example
@@ -116,7 +116,18 @@ ImageNet-only or random weights.
 
 The Atlas path runs YOLO, Person OSNet, and Vehicle SBS(R50-IBN) from locally
 converted OM models through one shared pyACL/AscendCL runtime, with independent
-CPU BoT-SORT trackers. It does not use `torch_npu`.
+CPU BoT-SORT trackers. Both PC and Atlas use the fixed-camera BoT-SORT profile
+(`gmc_method: none`, `with_reid: false`). It does not use `torch_npu`.
+
+Active Person Identity Guard is enabled only when a selected Person's bbox has a
+geometry anomaly and substantial overlap with another Person. It freezes
+reference updates during the ambiguity and uses the existing Person recovery
+evidence after the overlap clears; it does not run extra ReID on normal frames.
+
+For PC/Atlas detection geometry parity, create JSONL dumps with
+`tools/tracking_dump.py` and compare them with
+`tools/compare_tracking_dumps.py`. The latter reports
+`BBOX_GEOMETRY_DIVERGENCE` without changing tracking results.
 
 The PC default remains `inference.backend: torch`. The Atlas workflow is fully
 documented in [`deploy/atlas/README.md`](deploy/atlas/README.md): export both
@@ -221,8 +232,19 @@ gallery_enrichment:
 reid_quality:
   min_track_confidence: 0.35
   max_edge_truncation_ratio: 0.30
-  max_person_overlap_ratio: 0.60
+  max_person_overlap_ratio: 0.40
   min_frame_edge_margin_ratio: 0.01
+
+active_identity_guard:
+  enabled: true
+  bbox_history_frames: 5
+  max_width_growth_ratio: 1.45
+  max_area_growth_ratio: 1.70
+  max_center_shift_ratio: 0.35
+  overlap_trigger_ratio: 0.20
+  clear_overlap_ratio: 0.10
+  confirmation_hits: 2
+  max_candidates: 3
 
 diagnostics:
   enabled: true
@@ -462,7 +484,7 @@ Controls:
 
 `C` removes all current Person and Vehicle SessionTarget special boxes without
 deleting either persistent Gallery database. With the current default
-`show_unselected_tracks: true`, ordinary tracks remain visible for debugging.
+`show_unselected_tracks: false`, ordinary tracks remain tracked but hidden.
 
 ## Offline Gallery administration
 

@@ -138,6 +138,75 @@ class TargetManager:
 
         return self.remove_by_track_id(track.track_id)
 
+    def correct_active_binding(
+        self,
+        target_id: int,
+        old_track_id: int,
+        new_track: Track,
+        *,
+        expected_class_id: int = 0,
+    ) -> SessionTarget:
+        """Correct an ACTIVE binding after a local physical-identity check.
+
+        This is deliberately separate from ``recover``: the target never
+        entered LOST, its reference bank is preserved, and no recovery
+        counters are changed.
+        """
+
+        target = self.targets.get(target_id)
+        if target is None:
+            raise KeyError(f"unknown session target: {target_id}")
+        if target.state is not TargetState.ACTIVE:
+            raise ValueError(f"target {target_id} is not ACTIVE")
+        if target.current_track_id != old_track_id:
+            raise ValueError(
+                f"target {target_id} is not bound to track {old_track_id}"
+            )
+        if new_track.class_id != expected_class_id:
+            raise ValueError(
+                f"track {new_track.track_id} is not class {expected_class_id}"
+            )
+        occupied = self.target_for_track(new_track.track_id)
+        if occupied is not None and occupied.target_id != target_id:
+            raise ValueError(
+                f"track {new_track.track_id} is already active for another target"
+            )
+
+        target.current_track_id = new_track.track_id
+        target.last_track_id = new_track.track_id
+        target.missing_frames = 0
+        return target
+
+    def invalidate_active_binding(
+        self,
+        target_id: int,
+        *,
+        expected_track_id: int | None = None,
+    ) -> SessionTarget:
+        """Move an ACTIVE target to LOST without changing its identity data."""
+
+        target = self.targets.get(target_id)
+        if target is None:
+            raise KeyError(f"unknown session target: {target_id}")
+        if target.state is not TargetState.ACTIVE:
+            raise ValueError(f"target {target_id} is not ACTIVE")
+        if (
+            expected_track_id is not None
+            and target.current_track_id != expected_track_id
+        ):
+            raise ValueError(
+                f"target {target_id} is not bound to track {expected_track_id}"
+            )
+
+        old_track_id = target.current_track_id
+        target.last_track_id = old_track_id
+        target.current_track_id = None
+        target.state = TargetState.LOST
+        target.missing_frames = 0
+        target.last_recovery_frame = None
+        self.target_lost_count += 1
+        return target
+
     def remove_by_track_id(self, track_id: int) -> bool:
         """Remove a visible target binding and its complete reference bank."""
 

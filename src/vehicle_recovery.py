@@ -70,6 +70,8 @@ class VehicleRecoveryCoordinator(TargetRecoveryCoordinator):
         frame: np.ndarray,
         tracks: Sequence[Track],
         frame_index: int,
+        *,
+        reference_update_blocked_target_ids: Collection[int] = (),
     ) -> list[RecoveryMatch]:
         """Run the shared recovery core and emit Vehicle-specific state logs."""
 
@@ -82,7 +84,12 @@ class VehicleRecoveryCoordinator(TargetRecoveryCoordinator):
             for target in self.target_manager.targets.values()
         }
         pending_before = self.pending
-        matches = super().process_frame(frame, tracks, frame_index)
+        matches = super().process_frame(
+            frame,
+            tracks,
+            frame_index,
+            reference_update_blocked_target_ids=reference_update_blocked_target_ids,
+        )
 
         for target in self.target_manager.targets.values():
             previous = before_states.get(target.target_id)

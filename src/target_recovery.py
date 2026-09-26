@@ -54,6 +54,11 @@ class RecoveryFrameStats:
     quality_valid_count: int = 0
     reid_batch_count: int = 0
     reid_ms: float = 0.0
+    candidate_reid_ms: float = 0.0
+    reference_update_reid_ms: float = 0.0
+    candidate_reid_batch_count: int = 0
+    reference_update_reid_batch_count: int = 0
+    cache_hits: int = 0
     sweep_started: bool = False
     sweep_completed: bool = False
     sweep_candidate_total: int = 0
@@ -415,6 +420,8 @@ class TargetRecoveryCoordinator:
         frame: np.ndarray,
         tracks: Sequence[Track],
         frame_index: int,
+        *,
+        reference_update_blocked_target_ids: Collection[int] = (),
     ) -> list[RecoveryMatch]:
         """Update visibility and execute Recovery as bounded frame-spread sweeps.
 
@@ -438,12 +445,19 @@ class TargetRecoveryCoordinator:
             frame_index=frame_index,
         )
 
-        embedding_jobs: list[tuple[str, int, Track, np.ndarray]] = []
+        reference_jobs: list[tuple[str, int, Track, np.ndarray]] = []
         visible_ids = {track.track_id for track in tracks}
+        blocked_reference_updates = set(reference_update_blocked_target_ids)
 
         # ACTIVE reference updates retain their existing cadence and are not
         # counted against the incremental Recovery candidate budget.
         for target in self.target_manager.active_targets():
+            if target.target_id in blocked_reference_updates:
+                LOGGER.debug(
+                    "REFERENCE_UPDATE_DEFERRED target=%d reason=identity_ambiguous",
+                    target.target_id,
+                )
+                continue
             if target.current_track_id not in visible_ids:
                 continue
             if not self.target_manager.reference_update_due(
@@ -468,7 +482,7 @@ class TargetRecoveryCoordinator:
                     quality.reason or "unknown",
                 )
                 continue
-            embedding_jobs.append(("reference", target.target_id, track, quality.crop))
+            reference_jobs.append(("reference", target.target_id, track, quality.crop))
 
         sweep_started = False
         sweep = self._recovery_sweep
@@ -515,6 +529,7 @@ class TargetRecoveryCoordinator:
         recovery_due = sweep is not None
         processed_track_ids: tuple[int, ...] = ()
         valid_candidate_ids: set[int] = set()
+        candidate_jobs: list[tuple[str, int, Track, np.ndarray]] = []
         if sweep is not None:
             sweep.frames += 1
             processed_track_ids = sweep.next_track_ids(
@@ -537,11 +552,20 @@ class TargetRecoveryCoordinator:
                     )
                     continue
                 valid_candidate_ids.add(track.track_id)
-                embedding_jobs.append(("candidate", track.track_id, track, quality.crop))
+                candidate_jobs.append(("candidate", track.track_id, track, quality.crop))
 
-        candidate_reid_started = perf_counter() if valid_candidate_ids else None
         batch_count_before = self.reid_batch_count
-        resolved_jobs = self._ensure_embeddings(embedding_jobs, frame_index)
+        reference_missing = self._missing_job_count(reference_jobs, frame_index)
+        candidate_missing = self._missing_job_count(candidate_jobs, frame_index)
+        reference_reid_started = perf_counter() if reference_missing else None
+        resolved_reference_jobs = self._ensure_embeddings(reference_jobs, frame_index)
+        reference_update_reid_ms = (
+            (perf_counter() - reference_reid_started) * 1000.0
+            if reference_reid_started is not None
+            else 0.0
+        )
+        candidate_reid_started = perf_counter() if candidate_missing else None
+        resolved_candidate_jobs = self._ensure_embeddings(candidate_jobs, frame_index)
         candidate_reid_ms = (
             (perf_counter() - candidate_reid_started) * 1000.0
             if candidate_reid_started is not None
@@ -550,7 +574,7 @@ class TargetRecoveryCoordinator:
         if sweep is not None:
             sweep.reid_ms += candidate_reid_ms
 
-        for job, embedding in resolved_jobs:
+        for job, embedding in (*resolved_reference_jobs, *resolved_candidate_jobs):
             kind, owner_id, track, _crop = job
             if kind == "reference":
                 accepted = self.target_manager.add_reference(
@@ -587,7 +611,16 @@ class TargetRecoveryCoordinator:
             candidate_count=(len(sweep.candidate_track_ids) if sweep else 0),
             quality_valid_count=len(valid_candidate_ids),
             reid_batch_count=self.reid_batch_count - batch_count_before,
-            reid_ms=candidate_reid_ms,
+            reid_ms=reference_update_reid_ms + candidate_reid_ms,
+            candidate_reid_ms=candidate_reid_ms,
+            reference_update_reid_ms=reference_update_reid_ms,
+            candidate_reid_batch_count=1 if candidate_missing else 0,
+            reference_update_reid_batch_count=1 if reference_missing else 0,
+            cache_hits=(
+                len(reference_jobs) + len(candidate_jobs)
+                - reference_missing
+                - candidate_missing
+            ),
             sweep_started=sweep_started,
             sweep_candidate_total=(len(sweep.candidate_track_ids) if sweep else 0),
             sweep_processed_this_frame=len(processed_track_ids),
@@ -855,6 +888,18 @@ class TargetRecoveryCoordinator:
                 resolved[index] = (jobs[index], embedding_copy)
 
         return [item for item in resolved if item is not None]
+
+    def _missing_job_count(
+        self,
+        jobs: Sequence[tuple[str, int, Track, np.ndarray]],
+        frame_index: int,
+    ) -> int:
+        if self.embedding_cache is None:
+            return len(jobs)
+        return sum(
+            self.embedding_cache.get(track.track_id, frame_index) is None
+            for _kind, _owner_id, track, _crop in jobs
+        )
 
     def _quality(
         self,

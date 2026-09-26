@@ -75,8 +75,19 @@ gallery_enrichment:
 reid_quality:
   min_track_confidence: 0.35
   max_edge_truncation_ratio: 0.30
-  max_person_overlap_ratio: 0.60
+  max_person_overlap_ratio: 0.40
   min_frame_edge_margin_ratio: 0.01
+
+active_identity_guard:
+  enabled: true
+  bbox_history_frames: 5
+  max_width_growth_ratio: 1.45
+  max_area_growth_ratio: 1.70
+  max_center_shift_ratio: 0.35
+  overlap_trigger_ratio: 0.20
+  clear_overlap_ratio: 0.10
+  confirmation_hits: 2
+  max_candidates: 3
 
 vehicle_reid:
   # Atlas uses the OM below; this checkpoint path remains schema-compatible
@@ -156,7 +167,7 @@ ui:
   max_display_width: 1280
   show_class_name: true
   show_confidence: true
-  show_unselected_tracks: true
+  show_unselected_tracks: false
 
 diagnostics:
   enabled: true

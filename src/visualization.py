@@ -128,7 +128,7 @@ def draw_vehicle_tracks(
     show_class_name: bool = True,
     show_track_id: bool = True,
     show_confidence: bool = True,
-    show_unselected_tracks: bool = True,
+    show_unselected_tracks: bool = False,
     gallery_labels_by_target: Mapping[int, str] | None = None,
 ) -> np.ndarray:
     """Draw Vehicle tracks using the project's Vehicle color semantics.
@@ -198,7 +198,7 @@ def draw_multiclass_tracks(
     show_class_name: bool = True,
     show_track_id: bool = True,
     show_confidence: bool = True,
-    show_unselected_tracks: bool = True,
+    show_unselected_tracks: bool = False,
     person_gallery_labels_by_track: Mapping[int, str] | None = None,
     vehicle_gallery_labels_by_target: Mapping[int, str] | None = None,
 ) -> np.ndarray:

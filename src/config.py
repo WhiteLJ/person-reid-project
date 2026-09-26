@@ -150,8 +150,23 @@ class ReIDQualityConfig:
 
     min_track_confidence: float = 0.35
     max_edge_truncation_ratio: float = 0.30
-    max_person_overlap_ratio: float = 0.50
+    max_person_overlap_ratio: float = 0.40
     min_frame_edge_margin_ratio: float = 0.01
+
+
+@dataclass(frozen=True)
+class ActiveIdentityGuardConfig:
+    """Geometry and confirmation policy for selected Person identity drift."""
+
+    enabled: bool = True
+    bbox_history_frames: int = 5
+    max_width_growth_ratio: float = 1.45
+    max_area_growth_ratio: float = 1.70
+    max_center_shift_ratio: float = 0.35
+    overlap_trigger_ratio: float = 0.20
+    clear_overlap_ratio: float = 0.10
+    confirmation_hits: int = 2
+    max_candidates: int = 3
 
 
 @dataclass(frozen=True)
@@ -254,6 +269,7 @@ class AppConfig:
     reid_recovery: ReIDRecoveryConfig
     gallery_enrichment: GalleryEnrichmentConfig
     reid_quality: ReIDQualityConfig
+    active_identity_guard: ActiveIdentityGuardConfig
     vehicle_reid_quality: VehicleReIDQualityConfig
     gallery_recognition: GalleryRecognitionConfig
     vehicle_gallery_recognition: VehicleGalleryRecognitionConfig
@@ -337,6 +353,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     reid_recovery = _section(raw, "reid_recovery")
     gallery_enrichment = _section(raw, "gallery_enrichment")
     reid_quality = _section(raw, "reid_quality")
+    active_identity_guard = _section(raw, "active_identity_guard")
     vehicle_reid_quality = _section(raw, "vehicle_reid_quality")
     gallery_recognition = _section(raw, "gallery_recognition")
     vehicle_gallery_recognition = _section(raw, "vehicle_gallery_recognition")
@@ -620,7 +637,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         reid_quality.get("max_edge_truncation_ratio", 0.30)
     )
     max_person_overlap_ratio = float(
-        reid_quality.get("max_person_overlap_ratio", 0.50)
+        reid_quality.get("max_person_overlap_ratio", 0.40)
     )
     min_frame_edge_margin_ratio = float(
         reid_quality.get("min_frame_edge_margin_ratio", 0.01)
@@ -636,6 +653,64 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     if not 0.0 <= min_frame_edge_margin_ratio < 0.5:
         raise ValueError(
             "reid_quality.min_frame_edge_margin_ratio must be in [0, 0.5)"
+        )
+
+    active_identity_guard_values = {
+        "enabled": bool(active_identity_guard.get("enabled", True)),
+        "bbox_history_frames": int(
+            active_identity_guard.get("bbox_history_frames", 5)
+        ),
+        "max_width_growth_ratio": float(
+            active_identity_guard.get("max_width_growth_ratio", 1.45)
+        ),
+        "max_area_growth_ratio": float(
+            active_identity_guard.get("max_area_growth_ratio", 1.70)
+        ),
+        "max_center_shift_ratio": float(
+            active_identity_guard.get("max_center_shift_ratio", 0.35)
+        ),
+        "overlap_trigger_ratio": float(
+            active_identity_guard.get("overlap_trigger_ratio", 0.20)
+        ),
+        "clear_overlap_ratio": float(
+            active_identity_guard.get("clear_overlap_ratio", 0.10)
+        ),
+        "confirmation_hits": int(
+            active_identity_guard.get("confirmation_hits", 2)
+        ),
+        "max_candidates": int(
+            active_identity_guard.get("max_candidates", 3)
+        ),
+    }
+    if active_identity_guard_values["bbox_history_frames"] < 1:
+        raise ValueError(
+            "active_identity_guard.bbox_history_frames must be positive"
+        )
+    if active_identity_guard_values["confirmation_hits"] < 1:
+        raise ValueError(
+            "active_identity_guard.confirmation_hits must be positive"
+        )
+    if active_identity_guard_values["max_candidates"] < 1:
+        raise ValueError("active_identity_guard.max_candidates must be positive")
+    for name in (
+        "max_width_growth_ratio",
+        "max_area_growth_ratio",
+        "max_center_shift_ratio",
+    ):
+        if active_identity_guard_values[name] <= 0.0:
+            raise ValueError(f"active_identity_guard.{name} must be positive")
+    for name in ("overlap_trigger_ratio", "clear_overlap_ratio"):
+        if not 0.0 <= active_identity_guard_values[name] <= 1.0:
+            raise ValueError(
+                f"active_identity_guard.{name} must be in [0, 1]"
+            )
+    if (
+        active_identity_guard_values["clear_overlap_ratio"]
+        >= active_identity_guard_values["overlap_trigger_ratio"]
+    ):
+        raise ValueError(
+            "active_identity_guard.clear_overlap_ratio must be below "
+            "overlap_trigger_ratio"
         )
 
     vehicle_min_track_confidence = float(
@@ -918,6 +993,9 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             max_edge_truncation_ratio=max_edge_truncation_ratio,
             max_person_overlap_ratio=max_person_overlap_ratio,
             min_frame_edge_margin_ratio=min_frame_edge_margin_ratio,
+        ),
+        active_identity_guard=ActiveIdentityGuardConfig(
+            **active_identity_guard_values
         ),
         vehicle_reid_quality=VehicleReIDQualityConfig(
             min_track_confidence=vehicle_min_track_confidence,

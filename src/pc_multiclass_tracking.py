@@ -287,6 +287,7 @@ class MultiClassTrackingPipeline:
         self.yolo_inference_count = 0
         self._person_track_ids: set[int] = set()
         self._vehicle_track_ids: set[int] = set()
+        self.last_detections: list[Detection] = []
         self.yolo_ms_total = 0.0
         self.person_tracker_ms_total = 0.0
         self.vehicle_tracker_ms_total = 0.0
@@ -314,6 +315,7 @@ class MultiClassTrackingPipeline:
             if result is not None
             else []
         )
+        self.last_detections = list(detections)
         person_detections = [
             detection
             for detection in detections

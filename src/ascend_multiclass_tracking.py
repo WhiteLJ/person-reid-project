@@ -80,6 +80,7 @@ class AscendMultiClassTrackingPipeline:
         self.yolo_inference_count = 0
         self._person_track_ids: set[int] = set()
         self._vehicle_track_ids: set[int] = set()
+        self.last_detections: list[Detection] = []
         self.yolo_ms_total = 0.0
         self.person_tracker_ms_total = 0.0
         self.vehicle_tracker_ms_total = 0.0
@@ -87,6 +88,7 @@ class AscendMultiClassTrackingPipeline:
     def process(self, frame: np.ndarray) -> MultiClassTrackingResult:
         yolo_started = perf_counter()
         detections = self.detector.detect(frame)
+        self.last_detections = list(detections)
         self.yolo_ms_total += (perf_counter() - yolo_started) * 1000.0
         self.frame_count += 1
         self.yolo_inference_count += 1
@@ -130,4 +132,3 @@ class AscendMultiClassTrackingPipeline:
 
     def class_name(self, class_id: int) -> str:
         return str(self.names.get(class_id, class_id))
-

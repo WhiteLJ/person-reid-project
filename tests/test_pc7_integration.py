@@ -82,7 +82,7 @@ class PC7IntegrationTests(unittest.TestCase):
         self.assertEqual(config.inference.backend, "ascend")
         self.assertEqual(config.multiclass_tracking.vehicle_class_ids, (2, 5, 7))
         self.assertEqual(config.ascend.vehicle_reid_dynamic_batches, (1, 2, 4, 8))
-        self.assertTrue(config.ui.show_unselected_tracks)
+        self.assertFalse(config.ui.show_unselected_tracks)
 
 
 if __name__ == "__main__":
