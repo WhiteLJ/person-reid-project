@@ -105,6 +105,7 @@ class ConfigTests(unittest.TestCase):
         self.assertAlmostEqual(config.reid_quality.max_person_overlap_ratio, 0.40)
         self.assertTrue(config.active_identity_guard.enabled)
         self.assertEqual(config.active_identity_guard.bbox_history_frames, 5)
+        self.assertAlmostEqual(config.active_identity_guard.overlap_trigger_ratio, 0.15)
         self.assertEqual(config.active_identity_guard.confirmation_hits, 2)
         self.assertAlmostEqual(config.reid_quality.min_frame_edge_margin_ratio, 0.01)
         self.assertTrue(config.gallery_recognition.enabled)

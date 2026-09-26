@@ -73,7 +73,7 @@ def _guard_config(**overrides: object) -> ActiveIdentityGuardConfig:
         "max_width_growth_ratio": 1.45,
         "max_area_growth_ratio": 1.70,
         "max_center_shift_ratio": 0.35,
-        "overlap_trigger_ratio": 0.20,
+        "overlap_trigger_ratio": 0.15,
         "clear_overlap_ratio": 0.10,
         "confirmation_hits": 2,
         "max_candidates": 3,

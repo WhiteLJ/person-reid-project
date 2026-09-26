@@ -163,7 +163,7 @@ class ActiveIdentityGuardConfig:
     max_width_growth_ratio: float = 1.45
     max_area_growth_ratio: float = 1.70
     max_center_shift_ratio: float = 0.35
-    overlap_trigger_ratio: float = 0.20
+    overlap_trigger_ratio: float = 0.15
     clear_overlap_ratio: float = 0.10
     confirmation_hits: int = 2
     max_candidates: int = 3
@@ -670,7 +670,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             active_identity_guard.get("max_center_shift_ratio", 0.35)
         ),
         "overlap_trigger_ratio": float(
-            active_identity_guard.get("overlap_trigger_ratio", 0.20)
+            active_identity_guard.get("overlap_trigger_ratio", 0.15)
         ),
         "clear_overlap_ratio": float(
             active_identity_guard.get("clear_overlap_ratio", 0.10)
