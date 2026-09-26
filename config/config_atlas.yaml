@@ -21,6 +21,9 @@ ascend:
   yolo_model: "weights/atlas/yolov8n.om"
   reid_model: "weights/atlas/osnet_x0_25.om"
   reid_dynamic_batches: [1, 2, 4, 8]
+  # Contract only; Atlas1 does not load Vehicle OM at runtime.
+  vehicle_reid_model: "weights/atlas/vehicle_sbs_r50_ibn.om"
+  vehicle_reid_dynamic_batches: [1, 2, 4, 8]
 
 runtime:
   num_workers: 0

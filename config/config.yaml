@@ -19,6 +19,9 @@ ascend:
   yolo_model: "weights/atlas/yolov8n.om"
   reid_model: "weights/atlas/osnet_x0_25.om"
   reid_dynamic_batches: [1, 2, 4, 8]
+  # Prepared for Atlas Vehicle runtime integration; not loaded by PC7/Atlas1.
+  vehicle_reid_model: "weights/atlas/vehicle_sbs_r50_ibn.om"
+  vehicle_reid_dynamic_batches: [1, 2, 4, 8]
 
 runtime:
   num_workers: 0
@@ -46,7 +49,7 @@ reid:
   min_crop_height: 100
 
 vehicle_reid:
-  # MVP-8.3-PC1 only; not connected to the person runtime pipeline yet.
+  # PC7 formal Torch path; Atlas Vehicle runtime remains a later stage.
   enabled: true
   model_name: "sbs_R50-ibn"
   weight: "weights/vehicle_reid/veri_sbs_R50-ibn.pth"
@@ -151,7 +154,7 @@ ui:
   max_display_width: 1280
   show_class_name: true
   show_confidence: true
-  show_unselected_tracks: false
+  show_unselected_tracks: true
 
 diagnostics:
   enabled: true

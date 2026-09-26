@@ -19,6 +19,11 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.inference.backend, "torch")
         self.assertEqual(config.ascend.device_id, 0)
         self.assertEqual(
+            config.ascend.vehicle_reid_model,
+            Path("weights/atlas/vehicle_sbs_r50_ibn.om").resolve(),
+        )
+        self.assertEqual(config.ascend.vehicle_reid_dynamic_batches, (1, 2, 4, 8))
+        self.assertEqual(
             config.ascend.yolo_model,
             Path("weights/atlas/yolov8n.om").resolve(),
         )
@@ -142,7 +147,7 @@ class ConfigTests(unittest.TestCase):
             config.vehicle_database.path,
             Path("database/vehicle_reid.db").resolve(),
         )
-        self.assertIsInstance(config.ui.show_unselected_tracks, bool)
+        self.assertTrue(config.ui.show_unselected_tracks)
         self.assertEqual(config.ui.max_display_width, 1280)
         self.assertTrue(config.diagnostics.enabled)
         self.assertEqual(config.diagnostics.log_interval_frames, 300)
@@ -155,6 +160,11 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.inference.backend, "ascend")
         self.assertEqual(config.model.device, "cpu")
+        self.assertEqual(
+            config.ascend.vehicle_reid_model,
+            Path("weights/atlas/vehicle_sbs_r50_ibn.om").resolve(),
+        )
+        self.assertEqual(config.ascend.vehicle_reid_dynamic_batches, (1, 2, 4, 8))
         self.assertEqual(
             config.ascend.yolo_model,
             Path("weights/atlas/yolov8n.om").resolve(),

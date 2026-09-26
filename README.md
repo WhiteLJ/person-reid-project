@@ -1,17 +1,17 @@
-# Person ReID Project - MVP-8.2
+# Person ReID Project - MVP-8.3-PC7
 
-This project is an OpenCV prototype for person detection, temporary tracking,
-session target recovery, persistent Gallery enrollment, and automatic recognition
-of persisted Gallery people.
+The current PC runtime is a formal Person + Vehicle OpenCV pipeline. Person and
+Vehicle identities remain separate while sharing one YOLO inference per frame.
 
-## Current MVP-8.2 behavior
+## Current MVP-8.3-PC7 behavior
 
 The runtime pipeline is:
 
 ```text
-VideoSource -> YOLOv8n person detection -> Ultralytics BoT-SORT
-           -> Track[] -> MVP-5 LOST/recovery -> accepted reference events
-           -> MVP-8.2 safe Gallery enrichment -> MVP-8 Gallery recognition
+VideoSource -> one YOLO inference
+           -> Person BoT-SORT + Vehicle BoT-SORT
+           -> Person/Vehicle ReID -> LOST/recovery
+           -> separate Person/Vehicle Gallery recognition and enrichment
            -> OpenCV display
 ```
 
@@ -20,6 +20,11 @@ The three identity layers remain separate:
 - `Track ID`: temporary BoT-SORT trajectory identity;
 - `SessionTarget.target_id`: current-process target identity used by LOST/recovery;
 - `GalleryPerson.person_id`: persistent logical identity displayed as `P001`, `P002`, ... .
+- `GalleryVehicle.vehicle_id`: persistent logical identity displayed as `V001`, `V002`, ... .
+
+The PC Torch path supports Person plus Vehicle classes `car` (COCO 2), `bus`
+(COCO 5), and `truck` (COCO 7). Atlas currently remains Person-only; Vehicle
+Atlas work is presently limited to ONNX export and board-side ATC preparation.
 
 The MVP-8.1 foundation supports:
 
@@ -74,12 +79,12 @@ Automatic recognition reads the in-memory Gallery loaded at startup. Recognition
 itself does not write SQLite, update persistent Gallery features, or create a new
 `GalleryPerson` during recognition.
 
-Ordinary unselected Tracks remain tracked in the background. By default they are
-not drawn. Set this option to `true` for green debugging boxes:
+Ordinary unselected Tracks remain tracked in the background. The current project
+default draws them for debugging:
 
 ```yaml
 ui:
-  show_unselected_tracks: false
+  show_unselected_tracks: true
 ```
 
 Selected or automatically recognized active targets are drawn in red, for example
@@ -105,13 +110,12 @@ The ReID checkpoint is the official OSNet x0.25 MSMT17 combineall checkpoint. Th
 application fails clearly when it is missing and never silently falls back to
 ImageNet-only or random weights.
 
-## Atlas 310B inference backend
+## Atlas 310B Person inference backend
 
-The project also contains a deployment-only Atlas adaptation. It does not change
-the MVP-8.2 identity or persistence behavior. Set `inference.backend: ascend` in
-`config/config_atlas.yaml` to run YOLO and OSNet from locally converted OM models
-through pyACL/AscendCL. BoT-SORT remains the installed Ultralytics CPU
-implementation, and the project does not use `torch_npu`.
+The deployment-only Atlas path currently runs the Person chain: YOLO and OSNet
+from locally converted OM models through pyACL/AscendCL, with CPU BoT-SORT. It
+does not load the Vehicle checkpoint or Vehicle OM, and the project does not use
+`torch_npu`.
 
 The PC default remains `inference.backend: torch`. The Atlas workflow is fully
 documented in [`deploy/atlas/README.md`](deploy/atlas/README.md): export both
@@ -131,9 +135,45 @@ variant. Atlas-specific ONNX/OM tools are deployment tooling, not additional
 runtime business dependencies; `requirements.txt` remains the formal PC
 dependency entry point.
 
+### Atlas1 Vehicle ONNX preparation
+
+Vehicle ONNX export is explicit and does not change the existing YOLO/OSNet
+export commands:
+
+```bash
+python -m tools.export_atlas_models \
+  --config config/config.yaml \
+  --skip-yolo \
+  --skip-reid \
+  --include-vehicle-reid \
+  --vehicle-reid-output deploy/atlas/onnx/vehicle_sbs_r50_ibn.onnx \
+  --onnx-runtime
+```
+
+The Vehicle graph accepts dynamic `N x 3 x 256 x 256` preprocessed tensors and
+returns raw `N x 2048` features. Python keeps BGR/RGB conversion, resize,
+normalization, and final L2 normalization outside ONNX. Compare the PC model and
+ONNX Runtime export with:
+
+```bash
+python -m tools.vehicle_reid_onnx_parity \
+  --config config/config.yaml \
+  --onnx deploy/atlas/onnx/vehicle_sbs_r50_ibn.onnx \
+  --batches 1 2 4
+```
+
+ATC is intentionally not run on the PC. On Atlas, after sourcing CANN:
+
+```bash
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+bash deploy/atlas/convert_vehicle_reid_om.sh \
+  deploy/atlas/onnx/vehicle_sbs_r50_ibn.onnx \
+  weights/atlas
+```
+
 ## Configuration
 
-The default configuration is in `config/config.yaml`. Important MVP-8.2 settings are:
+The default configuration is in `config/config.yaml`. Important current settings are:
 
 ```yaml
 gallery_recognition:
@@ -405,13 +445,13 @@ Controls:
 - `Enter`/`Space`: finish an edit session;
 - `Q`: exit the entire application, including from an edit session.
 
-`C` removes all TARGET special boxes. With the default
-`show_unselected_tracks: false`, ordinary green Track boxes still remain hidden;
-set that option to `true` to show them.
+`C` removes all current Person and Vehicle SessionTarget special boxes without
+deleting either persistent Gallery database. With the current default
+`show_unselected_tracks: true`, ordinary tracks remain visible for debugging.
 
 ## Offline Gallery administration
 
-The lightweight MVP-7/MVP-8.2 development tool supports listing and deleting
+The lightweight offline Gallery administration tool supports listing and deleting
 persistent Gallery people:
 
 ```bash
@@ -445,12 +485,11 @@ not require a camera, GUI, GPU inference, or network downloads:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-## Not implemented yet
+## Deliberately not included in this stage
 
-MVP-8.2 does not include PySide/Qt UI, RTSP, face recognition, training/fine-tuning,
-BoxMOT, unrestricted automatic/adaptive Gallery feature updates, or complex Gallery
-editing. Automatically recognized targets remain excluded from persistent enrichment
-until explicit G enrollment in the current run.
+This stage does not include RTSP reconnect work, final Qt UI, Vehicle Atlas runtime
+integration, plate/OCR or brand recognition, motorcycle support, training/fine-tuning,
+or BoxMOT. Person and Vehicle PC Gallery/Recovery behavior is already implemented.
 False recovery counts require manual review against the fixed regression video; the
 program reports attempts, pending proposals, accepted recoveries, and Track
 created/ended events only. The next stage may address live-stream robustness and

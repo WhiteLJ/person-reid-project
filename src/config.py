@@ -40,6 +40,9 @@ class AscendConfig:
     yolo_model: Path = Path("weights/atlas/yolov8n.om")
     reid_model: Path = Path("weights/atlas/osnet_x0_25.om")
     reid_dynamic_batches: tuple[int, ...] = (1, 2, 4, 8)
+    # Prepared for a later Atlas Vehicle runtime stage; not loaded by PC7.
+    vehicle_reid_model: Path = Path("weights/atlas/vehicle_sbs_r50_ibn.om")
+    vehicle_reid_dynamic_batches: tuple[int, ...] = (1, 2, 4, 8)
 
 
 @dataclass(frozen=True)
@@ -362,6 +365,10 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     ascend_reid_model = resolve_project_path(
         ascend.get("reid_model"), "weights/atlas/osnet_x0_25.om"
     )
+    ascend_vehicle_reid_model = resolve_project_path(
+        ascend.get("vehicle_reid_model"),
+        "weights/atlas/vehicle_sbs_r50_ibn.om",
+    )
     dynamic_batch_values = ascend.get("reid_dynamic_batches", [1, 2, 4, 8])
     if not isinstance(dynamic_batch_values, (list, tuple)):
         raise ValueError("ascend.reid_dynamic_batches must be a list")
@@ -370,6 +377,21 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         raise ValueError("ascend.reid_dynamic_batches must include batch size 1")
     if any(value < 1 for value in reid_dynamic_batches):
         raise ValueError("ascend.reid_dynamic_batches must be positive")
+
+    vehicle_dynamic_batch_values = ascend.get(
+        "vehicle_reid_dynamic_batches", [1, 2, 4, 8]
+    )
+    if not isinstance(vehicle_dynamic_batch_values, (list, tuple)):
+        raise ValueError("ascend.vehicle_reid_dynamic_batches must be a list")
+    vehicle_reid_dynamic_batches = tuple(
+        sorted({int(value) for value in vehicle_dynamic_batch_values})
+    )
+    if not vehicle_reid_dynamic_batches or vehicle_reid_dynamic_batches[0] != 1:
+        raise ValueError(
+            "ascend.vehicle_reid_dynamic_batches must include batch size 1"
+        )
+    if any(value < 1 for value in vehicle_reid_dynamic_batches):
+        raise ValueError("ascend.vehicle_reid_dynamic_batches must be positive")
 
     weight_value = model.get("yolo_weight", "weights/yolo/yolov8n.pt")
     weight_path = Path(weight_value)
@@ -837,6 +859,8 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             yolo_model=ascend_yolo_model,
             reid_model=ascend_reid_model,
             reid_dynamic_batches=reid_dynamic_batches,
+            vehicle_reid_model=ascend_vehicle_reid_model,
+            vehicle_reid_dynamic_batches=vehicle_reid_dynamic_batches,
         ),
         runtime=RuntimeConfig(
             num_workers=requested_workers,

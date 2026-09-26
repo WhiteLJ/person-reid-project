@@ -32,6 +32,7 @@ def validate_onnx(
     expected_input_shape: tuple[int | None, ...],
     expected_output_width: int | None,
     dynamic_batch: bool,
+    expected_output_name: str | None = None,
 ) -> tuple[tuple[int | None, ...], tuple[tuple[int | None, ...], ...]]:
     try:
         import onnx
@@ -65,6 +66,13 @@ def validate_onnx(
 
     if not model.graph.output:
         raise RuntimeError(f"{path} has no outputs")
+    if expected_output_name is not None:
+        output_names = [value.name for value in model.graph.output]
+        if len(output_names) != 1 or output_names[0] != expected_output_name:
+            raise RuntimeError(
+                f"{path} must have one output named '{expected_output_name}', "
+                f"found {output_names}"
+            )
     output_shapes = tuple(
         _shape_from_value(output.type.tensor_type.shape.dim)
         for output in model.graph.output
@@ -177,6 +185,74 @@ def export_reid(config: Any, destination: Path) -> Path:
     return destination
 
 
+def export_vehicle_reid(config: Any, destination: Path) -> Path:
+    """Export the raw 2048-D Vehicle SBS(R50-IBN) feature model.
+
+    Vehicle preprocessing and final L2 normalization intentionally remain in
+    Python/NumPy, matching ``VehicleReIDExtractor``.  The ONNX graph contains
+    only the neural network and accepts already-preprocessed NCHW tensors.
+    """
+
+    try:
+        import torch
+    except ImportError as exc:
+        raise RuntimeError("Vehicle ONNX export requires PyTorch") from exc
+
+    from src.vehicle_reid import VehicleReIDExtractor
+
+    if (config.vehicle_reid.image_height, config.vehicle_reid.image_width) != (
+        256,
+        256,
+    ):
+        raise ValueError(
+            "Vehicle SBS(R50-IBN) Atlas export requires image size 256x256"
+        )
+    extractor = VehicleReIDExtractor(config.vehicle_reid, device="cpu")
+    feature_model = extractor.model
+
+    class FeatureOnly(torch.nn.Module):
+        def __init__(self, model: torch.nn.Module) -> None:
+            super().__init__()
+            self.model = model
+
+        def forward(self, images: torch.Tensor) -> torch.Tensor:
+            output = self.model(images)
+            if isinstance(output, (tuple, list)):
+                output = output[0]
+            if output.ndim != 2 or output.shape[1] != 2048:
+                raise RuntimeError(
+                    "Vehicle model output is not (N,2048): "
+                    f"{tuple(output.shape)}"
+                )
+            return output
+
+    wrapped = FeatureOnly(feature_model).eval()
+    dummy = torch.zeros((1, 3, 256, 256), dtype=torch.float32)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    torch.onnx.export(
+        wrapped,
+        dummy,
+        str(destination),
+        opset_version=11,
+        input_names=["images"],
+        output_names=["embedding"],
+        dynamic_axes={"images": {0: "batch"}, "embedding": {0: "batch"}},
+        do_constant_folding=True,
+    )
+    input_shape, output_shapes = validate_onnx(
+        destination,
+        expected_input_shape=(None, 3, 256, 256),
+        expected_output_width=2048,
+        dynamic_batch=True,
+        expected_output_name="embedding",
+    )
+    print(
+        f"Vehicle ReID ONNX: {destination} "
+        f"input={input_shape} outputs={output_shapes}"
+    )
+    return destination
+
+
 def onnx_runtime_sanity(path: Path, shape: tuple[int, ...]) -> None:
     try:
         import onnxruntime as ort
@@ -197,6 +273,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reid-output", type=Path, default=Path("deploy/atlas/onnx/osnet_x0_25.onnx"))
     parser.add_argument("--skip-yolo", action="store_true")
     parser.add_argument("--skip-reid", action="store_true")
+    parser.add_argument(
+        "--include-vehicle-reid",
+        action="store_true",
+        help="opt in to exporting the Vehicle SBS(R50-IBN) model",
+    )
+    parser.add_argument(
+        "--vehicle-reid-output",
+        type=Path,
+        default=Path("deploy/atlas/onnx/vehicle_sbs_r50_ibn.onnx"),
+    )
     parser.add_argument("--onnx-runtime", action="store_true", help="run optional ONNX Runtime CPU sanity checks")
     return parser
 
@@ -221,6 +307,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 exported,
                 (1, 3, config.reid.image_height, config.reid.image_width),
             )
+    if args.include_vehicle_reid:
+        exported = export_vehicle_reid(config, args.vehicle_reid_output)
+        if args.onnx_runtime:
+            onnx_runtime_sanity(exported, (1, 3, 256, 256))
     return 0
 
 
