@@ -13,6 +13,7 @@ from .config import (
     VehicleRecoveryConfig,
 )
 from .reid_frame_cache import ReIDFrameCache
+from .reid_frame_budget import ReIDFrameBudget
 from .models import TargetState, Track
 from .target_manager import TargetManager
 from .target_recovery import RecoveryMatch, TargetRecoveryCoordinator
@@ -41,6 +42,7 @@ class VehicleRecoveryCoordinator(TargetRecoveryCoordinator):
         *,
         vehicle_class_ids: Collection[int] = (2,),
         embedding_cache: ReIDFrameCache | None = None,
+        reid_budget: ReIDFrameBudget | None = None,
     ) -> None:
         classes = tuple(sorted({int(class_id) for class_id in vehicle_class_ids}))
         if not classes:
@@ -63,6 +65,7 @@ class VehicleRecoveryCoordinator(TargetRecoveryCoordinator):
             embedding_cache=embedding_cache,
             track_class_ids=classes,
             quality_assessor=quality_assessor,
+            reid_budget=reid_budget,
         )
 
     def process_frame(

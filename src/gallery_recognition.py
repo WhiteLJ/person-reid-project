@@ -20,6 +20,7 @@ from .gallery import TargetGallery
 from .models import Track
 from .reid import ReIDExtractor, cosine_similarity
 from .reid_frame_cache import ReIDFrameCache
+from .reid_frame_budget import ReIDFrameBudget
 from .reid_quality import assess_reid_quality
 from .target_manager import TargetManager
 
@@ -83,6 +84,12 @@ class _PendingRecognition:
 
 
 @dataclass(frozen=True)
+class _PendingRecognitionRevalidation:
+    match: GalleryRecognitionMatch
+    snapshot_frame: int
+
+
+@dataclass(frozen=True)
 class GalleryRecognitionFrameStats:
     """Per-frame recognition workload metrics for diagnostics."""
 
@@ -98,6 +105,15 @@ class GalleryRecognitionFrameStats:
     sweep_frames: int = 0
     sweep_reid_ms: float = 0.0
     skipped_retry_cooldown: int = 0
+    candidate_reid_ms: float = 0.0
+    revalidation_reid_ms: float = 0.0
+    cache_hits: int = 0
+    deferred_by_budget: int = 0
+    candidate_new_embeddings: int = 0
+    revalidation_new_embeddings: int = 0
+    total_reid_ms: float = 0.0
+    total_new_embeddings: int = 0
+    max_new_embeddings_per_frame: int = 0
 
 
 @dataclass
@@ -112,15 +128,19 @@ class _RecognitionSweep:
     reid_ms: float = 0.0
     quality_valid_count: int = 0
     embeddings: dict[int, np.ndarray] = field(default_factory=dict)
+    embedding_frame_by_track: dict[int, int] = field(default_factory=dict)
     protected_track_ids: set[int] = field(default_factory=set)
 
-    def next_track_ids(self, budget: int) -> tuple[int, ...]:
+    def peek_track_ids(self, budget: int) -> tuple[int, ...]:
         if budget < 1:
             raise ValueError("Gallery recognition sweep budget must be positive")
         end = min(self.cursor + budget, len(self.candidate_track_ids))
-        selected = self.candidate_track_ids[self.cursor:end]
-        self.cursor = end
-        return selected
+        return self.candidate_track_ids[self.cursor:end]
+
+    def advance(self, count: int) -> None:
+        if count < 0 or self.cursor + count > len(self.candidate_track_ids):
+            raise ValueError("invalid Gallery recognition sweep cursor advance")
+        self.cursor += count
 
     @property
     def complete(self) -> bool:
@@ -269,6 +289,7 @@ class GalleryRecognitionCoordinator:
         track_class_id: int | None = None,
         track_class_ids: Collection[int] | None = None,
         gallery_adapter: GalleryRecognitionAdapter | None = None,
+        reid_budget: ReIDFrameBudget | None = None,
     ) -> None:
         self.target_manager = target_manager
         self.gallery = gallery
@@ -303,11 +324,17 @@ class GalleryRecognitionCoordinator:
         self.quality_config = quality_config or ReIDQualityConfig()
         self.quality_assessor = quality_assessor
         self.gallery_adapter = gallery_adapter or person_gallery_adapter(gallery)
+        # AppConfig injects the finite domain-wide budget.  A large fallback
+        # keeps legacy standalone coordinator construction compatible.
+        self.reid_budget = reid_budget or ReIDFrameBudget(1_000_000)
         self._track_ages: dict[int, int] = {}
         self._last_seen_frame: dict[int, int] = {}
         self._pending: dict[tuple[int, int], _PendingRecognition] = {}
         self._retry_until_frame: dict[int, int] = {}
         self._recognition_sweep: _RecognitionSweep | None = None
+        self._pending_revalidations: dict[
+            tuple[int, int], _PendingRecognitionRevalidation
+        ] = {}
         self._last_recognition_frame: int | None = None
         self.recognized_count = 0
         self.quality_rejected_count = 0
@@ -354,6 +381,12 @@ class GalleryRecognitionCoordinator:
                 or key[0] in attached
             ):
                 del self._pending[key]
+        for key in list(self._pending_revalidations):
+            if (
+                self.gallery_adapter.get_identity(key[0]) is None
+                or key[0] in attached
+            ):
+                del self._pending_revalidations[key]
 
     def _recognition_budget(self, candidate_count: int) -> int:
         configured = int(
@@ -391,6 +424,7 @@ class GalleryRecognitionCoordinator:
         candidates remain eligible and can reuse this frame's cached feature.
         """
 
+        self.reid_budget.begin_frame(frame_index)
         self._update_track_ages(tracks, frame_index)
         if self.embedding_cache is not None:
             self.embedding_cache.begin_frame(frame_index)
@@ -399,117 +433,172 @@ class GalleryRecognitionCoordinator:
         self._retry_skipped_this_frame = 0
         protected_ids = set(protected_track_ids)
         sweep_started = False
+        candidate_reid_ms = 0.0
+        revalidation_reid_ms = 0.0
+        candidate_new = revalidation_new = 0
+        cache_hits = 0
+        deferred = 0
+        processed_count = 0
+        batch_count_before = self.reid_batch_count
 
         if not self.recognition_config.enabled:
             return []
+        recognized, revalidation_metrics = self._process_pending_revalidations(
+            frame, tracks, frame_index, protected_ids
+        )
+        revalidation_reid_ms += revalidation_metrics[0]
+        revalidation_new += revalidation_metrics[1]
+        cache_hits += revalidation_metrics[2]
+        deferred += revalidation_metrics[3]
+
         sweep = self._recognition_sweep
-        if sweep is None and self._recognition_due(frame_index):
+        if (
+            sweep is None
+            and not self._pending_revalidations
+            and self._recognition_due(frame_index)
+        ):
             sweep = self._start_sweep(tracks, frame_index, protected_ids)
             if sweep is not None:
                 self._recognition_sweep = sweep
                 sweep_started = True
 
-        if sweep is None:
-            if self._retry_skipped_this_frame:
-                self.last_frame_recognition_stats = GalleryRecognitionFrameStats(
-                    recognition_due=True,
-                    skipped_retry_cooldown=self._retry_skipped_this_frame,
+        if sweep is not None:
+            sweep.protected_track_ids.update(protected_ids)
+            sweep.frames += 1
+            tracks_by_id = {track.track_id: track for track in tracks}
+            selected = sweep.peek_track_ids(
+                self._recognition_budget(len(sweep.candidate_track_ids))
+            )
+            jobs: list[tuple[Track, np.ndarray]] = []
+            consumed_without_inference = 0
+            for track_id in selected:
+                track = tracks_by_id.get(track_id)
+                if (
+                    track is None
+                    or track.class_id not in self.track_class_ids
+                    or track_id in sweep.protected_track_ids
+                ):
+                    sweep.advance(1)
+                    consumed_without_inference += 1
+                    continue
+                active_target = self.target_manager.target_for_track(track_id)
+                if (
+                    active_target is not None
+                    and self.gallery_adapter.identity_for_session_target(
+                        active_target.target_id
+                    )
+                    is not None
+                ):
+                    sweep.advance(1)
+                    consumed_without_inference += 1
+                    continue
+                quality = self._assess_quality(frame, track, tracks)
+                if not quality.accepted or quality.crop is None:
+                    self.quality_rejected_count += 1
+                    sweep.advance(1)
+                    consumed_without_inference += 1
+                    LOGGER.debug(
+                        "REID_QUALITY_REJECTED kind=gallery track=%d reason=%s",
+                        track_id,
+                        quality.reason or "unknown",
+                    )
+                    continue
+                sweep.quality_valid_count += 1
+                cached = (
+                    self.embedding_cache.get(track_id, frame_index)
+                    if self.embedding_cache is not None
+                    else None
                 )
-            return []
+                if cached is not None:
+                    sweep.embeddings[track_id] = cached.copy()
+                    sweep.embedding_frame_by_track[track_id] = frame_index
+                    sweep.advance(1)
+                    consumed_without_inference += 1
+                    cache_hits += 1
+                    continue
+                if not self.reid_budget.can_consume(len(jobs) + 1):
+                    deferred += 1
+                    break
+                jobs.append((track, quality.crop))
 
-        sweep.protected_track_ids.update(protected_ids)
-        sweep.frames += 1
-        selected_ids = sweep.next_track_ids(
-            self._recognition_budget(len(sweep.candidate_track_ids))
-        )
-        tracks_by_id = {track.track_id: track for track in tracks}
-        jobs: list[tuple[Track, np.ndarray]] = []
-        for track_id in selected_ids:
-            track = tracks_by_id.get(track_id)
-            if track is None or track.class_id not in self.track_class_ids:
-                continue
-            if track_id in sweep.protected_track_ids:
-                continue
-            active_target = self.target_manager.target_for_track(track_id)
-            if (
-                active_target is not None
-                and self.gallery_adapter.identity_for_session_target(
-                    active_target.target_id
+            if jobs:
+                self.reid_budget.consume(len(jobs))
+                started = perf_counter()
+                embeddings = np.asarray(
+                    self.reid_extractor.extract_batch([job[1] for job in jobs]),
+                    dtype=np.float32,
                 )
-                is not None
-            ):
-                continue
-            quality = self._assess_quality(frame, track, tracks)
-            if not quality.accepted or quality.crop is None:
-                self.quality_rejected_count += 1
+                candidate_reid_ms += (perf_counter() - started) * 1000.0
+                self.reid_batch_count += 1
+                if embeddings.ndim != 2 or embeddings.shape[0] != len(jobs):
+                    raise ValueError("ReID batch output does not match recognition candidates")
+                for (track, _crop), embedding in zip(jobs, embeddings):
+                    value = np.asarray(embedding, dtype=np.float32).copy()
+                    if self.embedding_cache is not None:
+                        self.embedding_cache.put(track.track_id, value, frame_index)
+                    sweep.embeddings[track.track_id] = value
+                    sweep.embedding_frame_by_track[track.track_id] = frame_index
+                sweep.advance(len(jobs))
+                processed_count += len(jobs)
+                candidate_new += len(jobs)
+                sweep.reid_ms += candidate_reid_ms
+            processed_count += consumed_without_inference
+
+            LOGGER.debug(
+                "GALLERY_RECOGNITION_SWEEP_PROGRESS frame=%d candidate_total=%d "
+                "processed_this_frame=%d frames=%d reid_ms=%.2f",
+                frame_index,
+                len(sweep.candidate_track_ids),
+                processed_count,
+                sweep.frames,
+                sweep.reid_ms,
+            )
+
+            if sweep.complete:
+                current_sweep = sweep
+                self._recognition_sweep = None
+                self._complete_sweep(current_sweep, tracks, frame_index)
                 LOGGER.debug(
-                    "REID_QUALITY_REJECTED kind=gallery track=%d reason=%s",
-                    track_id,
-                    quality.reason or "unknown",
+                    "GALLERY_RECOGNITION_SWEEP_COMPLETED start_frame=%d frame=%d candidates=%d frames=%d reid_ms=%.2f",
+                    current_sweep.start_frame,
+                    frame_index,
+                    len(current_sweep.candidate_track_ids),
+                    current_sweep.frames,
+                    current_sweep.reid_ms,
                 )
-                continue
-            sweep.quality_valid_count += 1
-            jobs.append((track, quality.crop))
+                more, revalidation_metrics = self._process_pending_revalidations(
+                    frame, tracks, frame_index, protected_ids
+                )
+                recognized.extend(more)
+                revalidation_reid_ms += revalidation_metrics[0]
+                revalidation_new += revalidation_metrics[1]
+                cache_hits += revalidation_metrics[2]
+                deferred += revalidation_metrics[3]
 
-        reid_started = perf_counter() if jobs else None
-        batch_count_before = self.reid_batch_count
-        resolved = self._ensure_embeddings(jobs, frame_index)
-        reid_ms = (
-            (perf_counter() - reid_started) * 1000.0
-            if reid_started is not None
-            else 0.0
-        )
-        sweep.reid_ms += reid_ms
-        for candidate in resolved:
-            sweep.embeddings[candidate.track.track_id] = candidate.embedding.copy()
-
+        total_reid_ms = candidate_reid_ms + revalidation_reid_ms
+        total_new = candidate_new + revalidation_new
         self.last_frame_recognition_stats = GalleryRecognitionFrameStats(
-            recognition_due=True,
-            candidate_count=len(sweep.candidate_track_ids),
-            quality_valid_count=sweep.quality_valid_count,
+            recognition_due=(sweep is not None),
+            candidate_count=(len(sweep.candidate_track_ids) if sweep else 0),
+            quality_valid_count=(sweep.quality_valid_count if sweep else 0),
             reid_batch_count=self.reid_batch_count - batch_count_before,
-            reid_ms=reid_ms,
+            reid_ms=total_reid_ms,
             sweep_started=sweep_started,
-            sweep_candidate_total=len(sweep.candidate_track_ids),
-            sweep_processed_this_frame=len(selected_ids),
-            sweep_frames=sweep.frames,
-            sweep_reid_ms=sweep.reid_ms,
+            sweep_completed=(sweep is not None and sweep.complete),
+            sweep_candidate_total=(len(sweep.candidate_track_ids) if sweep else 0),
+            sweep_processed_this_frame=processed_count,
+            sweep_frames=(sweep.frames if sweep else 0),
+            sweep_reid_ms=(sweep.reid_ms if sweep else 0.0),
             skipped_retry_cooldown=self._retry_skipped_this_frame,
-        )
-        LOGGER.debug(
-            "GALLERY_RECOGNITION_SWEEP_PROGRESS frame=%d candidate_total=%d "
-            "processed_this_frame=%d frames=%d reid_ms=%.2f",
-            frame_index,
-            len(sweep.candidate_track_ids),
-            len(selected_ids),
-            sweep.frames,
-            sweep.reid_ms,
-        )
-
-        if not sweep.complete:
-            return []
-
-        current_sweep = sweep
-        self._recognition_sweep = None
-        recognized = self._complete_sweep(
-            current_sweep,
-            tracks,
-            frame_index,
-        )
-        self.last_frame_recognition_stats = replace(
-            self.last_frame_recognition_stats,
-            sweep_completed=True,
-            sweep_frames=current_sweep.frames,
-            sweep_reid_ms=current_sweep.reid_ms,
-        )
-        LOGGER.debug(
-            "GALLERY_RECOGNITION_SWEEP_COMPLETED start_frame=%d frame=%d "
-            "candidates=%d frames=%d reid_ms=%.2f",
-            current_sweep.start_frame,
-            frame_index,
-            len(current_sweep.candidate_track_ids),
-            current_sweep.frames,
-            current_sweep.reid_ms,
+            candidate_reid_ms=candidate_reid_ms,
+            revalidation_reid_ms=revalidation_reid_ms,
+            cache_hits=cache_hits,
+            deferred_by_budget=deferred,
+            candidate_new_embeddings=candidate_new,
+            revalidation_new_embeddings=revalidation_new,
+            total_reid_ms=total_reid_ms,
+            total_new_embeddings=total_new,
+            max_new_embeddings_per_frame=self.reid_budget.capacity,
         )
         return recognized
 
@@ -659,29 +748,174 @@ class GalleryRecognitionCoordinator:
                 frame_index + self._retry_interval()
             )
 
-        recognized: list[GalleryRecognitionMatch] = []
         for match in matches:
             key = (match.person_id, match.candidate.track.track_id)
-            pending = self._pending.get(key)
-            hits = 1 if pending is None else pending.hits + 1
+            snapshot_frame = sweep.embedding_frame_by_track.get(
+                match.candidate.track.track_id,
+                sweep.start_frame,
+            )
+            self._pending_revalidations[key] = _PendingRecognitionRevalidation(
+                match=match,
+                snapshot_frame=snapshot_frame,
+            )
+            LOGGER.debug(
+                "RECOGNITION_PROVISIONAL frame=%d identity_id=%s track_id=%d "
+                "snapshot_embedding_frame=%d snapshot_embedding_age=%d "
+                "snapshot_similarity=%.4f",
+                frame_index,
+                self.gallery_adapter.identity_label(match.person_id),
+                match.candidate.track.track_id,
+                snapshot_frame,
+                frame_index - snapshot_frame,
+                match.similarity,
+            )
+
+        return []
+
+    def _process_pending_revalidations(
+        self,
+        frame: np.ndarray,
+        tracks: Sequence[Track],
+        frame_index: int,
+        protected_track_ids: set[int],
+    ) -> tuple[list[GalleryRecognitionMatch], tuple[float, int, int, int]]:
+        """Freshly verify provisional Gallery pairs before confirmation."""
+
+        recognized: list[GalleryRecognitionMatch] = []
+        reid_ms = 0.0
+        new_embeddings = 0
+        cache_hits = 0
+        deferred = 0
+        tracks_by_id = {track.track_id: track for track in tracks}
+        for key, proposal in list(self._pending_revalidations.items()):
+            identity_id, track_id = key
+            identity = self.gallery_adapter.get_identity(identity_id)
+            track = tracks_by_id.get(track_id)
+            reason: str | None = None
+            if identity is None:
+                reason = "identity_missing"
+            elif track is None:
+                reason = "track_missing"
+            elif track.class_id not in self.track_class_ids:
+                reason = "class_changed"
+            elif track_id in protected_track_ids:
+                reason = "recovery_claimed"
+            else:
+                active_target = self.target_manager.target_for_track(track_id)
+                if (
+                    active_target is not None
+                    and self.gallery_adapter.identity_for_session_target(
+                        active_target.target_id
+                    )
+                    is not None
+                ):
+                    reason = "track_bound"
+            if reason is not None:
+                self._pending_revalidations.pop(key, None)
+                self._pending.pop(key, None)
+                LOGGER.debug(
+                    "RECOGNITION_REVALIDATION_REJECTED frame=%d identity_id=%s "
+                    "track_id=%d reason=%s",
+                    frame_index,
+                    self.gallery_adapter.identity_label(identity_id),
+                    track_id,
+                    reason,
+                )
+                continue
+
+            quality = self._assess_quality(frame, track, tracks)
+            if not quality.accepted or quality.crop is None:
+                self.quality_rejected_count += 1
+                self._pending_revalidations.pop(key, None)
+                self._pending.pop(key, None)
+                LOGGER.debug(
+                    "RECOGNITION_REVALIDATION_REJECTED frame=%d identity_id=%s "
+                    "track_id=%d reason=quality",
+                    frame_index,
+                    self.gallery_adapter.identity_label(identity_id),
+                    track_id,
+                )
+                continue
+
+            embedding = None
+            if proposal.snapshot_frame == frame_index:
+                embedding = proposal.match.candidate.embedding.copy()
+            elif self.embedding_cache is not None:
+                embedding = self.embedding_cache.get(track_id, frame_index)
+            if embedding is not None:
+                cache_hits += 1
+            else:
+                if not self.reid_budget.can_consume(1):
+                    deferred += 1
+                    continue
+                self.reid_budget.consume(1)
+                started = perf_counter()
+                values = np.asarray(
+                    self.reid_extractor.extract_batch([quality.crop]),
+                    dtype=np.float32,
+                )
+                reid_ms += (perf_counter() - started) * 1000.0
+                self.reid_batch_count += 1
+                if values.ndim != 2 or values.shape[0] != 1:
+                    raise ValueError("ReID batch output does not match revalidation")
+                embedding = values[0].copy()
+                new_embeddings += 1
+                if self.embedding_cache is not None:
+                    self.embedding_cache.put(track_id, embedding, frame_index)
+
+            try:
+                fresh_similarity = gallery_recognition_score(identity, embedding)
+            except ValueError:
+                fresh_similarity = 0.0
+            if fresh_similarity < self.recognition_config.recognition_threshold:
+                self._pending_revalidations.pop(key, None)
+                self._pending.pop(key, None)
+                self._retry_until_frame[track_id] = frame_index + self._retry_interval()
+                LOGGER.debug(
+                    "RECOGNITION_REVALIDATION_REJECTED frame=%d identity_id=%s "
+                    "track_id=%d snapshot_similarity=%.4f fresh_similarity=%.4f reason=threshold",
+                    frame_index,
+                    self.gallery_adapter.identity_label(identity_id),
+                    track_id,
+                    proposal.match.similarity,
+                    fresh_similarity,
+                )
+                continue
+
+            age = frame_index - proposal.snapshot_frame
+            LOGGER.debug(
+                "RECOGNITION_REVALIDATED frame=%d identity_id=%s track_id=%d "
+                "snapshot_embedding_age=%d snapshot_similarity=%.4f fresh_similarity=%.4f",
+                frame_index,
+                self.gallery_adapter.identity_label(identity_id),
+                track_id,
+                age,
+                proposal.match.similarity,
+                fresh_similarity,
+            )
+            self._pending_revalidations.pop(key, None)
+            hits = self._pending.get(key, _PendingRecognition(0)).hits + 1
+            fresh_match = replace(
+                proposal.match,
+                candidate=GalleryRecognitionCandidate(track, np.asarray(embedding).copy()),
+                similarity=fresh_similarity,
+            )
             if hits < self.recognition_config.confirmation_hits:
                 self._pending[key] = _PendingRecognition(hits=hits)
                 LOGGER.debug(
                     "GALLERY_RECOGNITION_PENDING identity=%s track=%d hits=%d/%d similarity=%.4f",
-                    self.gallery_adapter.identity_label(match.person_id),
-                    match.candidate.track.track_id,
+                    self.gallery_adapter.identity_label(identity_id),
+                    track_id,
                     hits,
                     self.recognition_config.confirmation_hits,
-                    match.similarity,
+                    fresh_similarity,
                 )
                 continue
-
-            if self._bind_match(match, frame_index):
-                recognized.append(match)
+            if self._bind_match(fresh_match, frame_index):
+                recognized.append(fresh_match)
                 self.recognized_count += 1
             self._pending.pop(key, None)
-
-        return recognized
+        return recognized, (reid_ms, new_embeddings, cache_hits, deferred)
 
     def _update_track_ages(
         self,

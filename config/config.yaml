@@ -93,6 +93,11 @@ reid_recovery:
   recovery_pending_max_age_frames: 60
   recovery_candidates_per_frame: 3
 
+reid_scheduling:
+  # Domain-wide cap for newly computed embeddings in one video frame.
+  person_max_new_embeddings_per_frame: 3
+  vehicle_max_new_embeddings_per_frame: 1
+
 gallery_enrichment:
   # Conservative engineering starting value; not a universal optimum.
   post_recovery_stable_frames: 30

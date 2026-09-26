@@ -14,6 +14,7 @@ from src.config import (
 )
 from src.models import SessionTarget, TargetState, Track
 from src.reid_frame_cache import ReIDFrameCache
+from src.reid_frame_budget import ReIDFrameBudget
 from src.target_manager import TargetManager
 from src.vehicle_database import VehicleGalleryRepository
 from src.vehicle_gallery import GalleryVehicle, VehicleTargetGallery
@@ -150,13 +151,14 @@ class VehicleGalleryRecognitionTests(unittest.TestCase):
     def test_incremental_vehicle_recognition_budget_is_one(self) -> None:
         high = _unit(0)
         low = _unit(1)
-        extractor = _FakeVehicleReID([high, low, low, low])
+        extractor = _FakeVehicleReID([high, low, low, low, high])
         coordinator = _coordinator(
             TargetManager(),
             _gallery(_vehicle(1, 0)),
             extractor,
             recognition_candidates_per_frame=1,
         )
+        coordinator.reid_budget = ReIDFrameBudget(1)
         tracks = [
             _track(27, 10),
             _track(28, 70),
@@ -178,13 +180,15 @@ class VehicleGalleryRecognitionTests(unittest.TestCase):
             coordinator.last_frame_recognition_stats.sweep_processed_this_frame
         )
         matches = coordinator.process_frame(self.frame, tracks, 3)
+        self.assertEqual(matches, [])
+        matches = coordinator.process_frame(self.frame, tracks, 4)
         observed_processed.append(
             coordinator.last_frame_recognition_stats.sweep_processed_this_frame
         )
 
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0].candidate.track.track_id, 27)
-        self.assertEqual(extractor.batch_sizes, [1, 1, 1, 1])
+        self.assertEqual(extractor.batch_sizes, [1, 1, 1, 1, 1])
         self.assertTrue(all(value <= 1 for value in observed_processed))
 
     def test_car_bus_truck_share_vehicle_recognition_path(self) -> None:

@@ -19,6 +19,7 @@ from src.gallery_service import GalleryPersistenceService
 from src.logging_utils import configure_logging
 from src.reid import ReIDExtractor
 from src.reid_frame_cache import ReIDFrameCache
+from src.reid_frame_budget import ReIDFrameBudget
 from src.roi_selector import find_track_by_roi
 from src.target_manager import TargetManager
 from src.target_recovery import TargetRecoveryCoordinator
@@ -94,6 +95,9 @@ def run(config: AppConfig) -> int:
 
     person_target_manager = TargetManager()
     person_cache = ReIDFrameCache()
+    person_reid_budget = ReIDFrameBudget(
+        config.reid_scheduling.person_max_new_embeddings_per_frame
+    )
     vehicle_target_manager = None
     vehicle_cache = None
     vehicle_gallery = None
@@ -103,6 +107,9 @@ def run(config: AppConfig) -> int:
     vehicle_reid_extractor = None
     vehicle_class_ids: tuple[int, ...] = ()
     vehicle_format_id = None
+    vehicle_reid_budget = ReIDFrameBudget(
+        config.reid_scheduling.vehicle_max_new_embeddings_per_frame
+    )
 
     try:
         if is_torch_pc:
@@ -169,6 +176,7 @@ def run(config: AppConfig) -> int:
             quality_config=config.vehicle_reid_quality,
             vehicle_class_ids=vehicle_class_ids,
             embedding_cache=vehicle_cache,
+            reid_budget=vehicle_reid_budget,
         )
         vehicle_gallery_recognition = VehicleGalleryRecognitionCoordinator(
             target_manager=vehicle_target_manager,
@@ -180,6 +188,7 @@ def run(config: AppConfig) -> int:
             quality_config=config.vehicle_reid_quality,
             vehicle_class_ids=vehicle_class_ids,
             embedding_cache=vehicle_cache,
+            reid_budget=vehicle_reid_budget,
         )
     except Exception:
         if ascend_runtime is not None:
@@ -221,6 +230,7 @@ def run(config: AppConfig) -> int:
         embedding_cache=person_cache,
         quality_config=config.reid_quality,
         person_class_id=config.model.person_class_id,
+        reid_budget=person_reid_budget,
     )
     person_gallery_recognition = GalleryRecognitionCoordinator(
         target_manager=person_target_manager,
@@ -232,6 +242,7 @@ def run(config: AppConfig) -> int:
         person_class_id=config.model.person_class_id,
         embedding_cache=person_cache,
         quality_config=config.reid_quality,
+        reid_budget=person_reid_budget,
     )
     diagnostics = RuntimeDiagnostics(
         enabled=config.diagnostics.enabled,
@@ -251,11 +262,17 @@ def run(config: AppConfig) -> int:
     person_recovery_batches = person_recognition_batches = 0
     person_recovery_processed = person_recognition_processed = 0
     person_retry_skipped = 0
+    person_new_embeddings_total = 0
+    person_new_embeddings_max = 0
+    person_budget_deferred = 0
     vehicle_recovery_reid_ms = 0.0
     vehicle_recognition_reid_ms = 0.0
     vehicle_recovery_batches = vehicle_recognition_batches = 0
     vehicle_recovery_processed = vehicle_recognition_processed = 0
     vehicle_retry_skipped = 0
+    vehicle_new_embeddings_total = 0
+    vehicle_new_embeddings_max = 0
+    vehicle_budget_deferred = 0
     last_vehicle_recovered_track_ids: frozenset[int] = frozenset()
     pc7_elapsed_seconds = 0.0
 
@@ -368,7 +385,9 @@ def run(config: AppConfig) -> int:
                 break
             current_frame_index = frame_index
             tracking_started = perf_counter()
+            tracking_stats_before = tracking_pipeline.stats()
             tracking_result = tracking_pipeline.process(frame)
+            tracking_stats_after = tracking_pipeline.stats()
             person_tracks = tracking_result.person_tracks
             vehicle_tracks = tracking_result.vehicle_tracks
             tracks = person_tracks
@@ -417,6 +436,19 @@ def run(config: AppConfig) -> int:
             person_recognition_batches += person_recognition_stats.reid_batch_count
             person_recognition_processed += person_recognition_stats.sweep_processed_this_frame
             person_retry_skipped += person_recognition_stats.skipped_retry_cooldown
+            person_new_embeddings_total += (
+                person_recovery_stats.total_new_embeddings
+                + person_recognition_stats.total_new_embeddings
+            )
+            person_new_embeddings_max = max(
+                person_new_embeddings_max,
+                person_recovery_stats.total_new_embeddings
+                + person_recognition_stats.total_new_embeddings,
+            )
+            person_budget_deferred += (
+                person_recovery_stats.deferred_by_budget
+                + person_recognition_stats.deferred_by_budget
+            )
 
             recognized_vehicles = vehicle_gallery_recognition.process_frame(
                 frame,
@@ -435,6 +467,19 @@ def run(config: AppConfig) -> int:
             vehicle_recognition_batches += vehicle_recognition_stats.reid_batch_count
             vehicle_recognition_processed += vehicle_recognition_stats.sweep_processed_this_frame
             vehicle_retry_skipped += vehicle_recognition_stats.skipped_retry_cooldown
+            vehicle_new_embeddings_total += (
+                vehicle_recovery_stats.total_new_embeddings
+                + vehicle_recognition_stats.total_new_embeddings
+            )
+            vehicle_new_embeddings_max = max(
+                vehicle_new_embeddings_max,
+                vehicle_recovery_stats.total_new_embeddings
+                + vehicle_recognition_stats.total_new_embeddings,
+            )
+            vehicle_budget_deferred += (
+                vehicle_recovery_stats.deferred_by_budget
+                + vehicle_recognition_stats.deferred_by_budget
+            )
             gallery_seconds = perf_counter() - gallery_started
 
             frame_index += 1
@@ -475,6 +520,52 @@ def run(config: AppConfig) -> int:
                 recognition_sweep_frames=person_recognition_stats.sweep_frames,
                 recognition_sweep_reid_ms=person_recognition_stats.sweep_reid_ms,
                 recognition_retry_skipped=person_recognition_stats.skipped_retry_cooldown,
+                reid_breakdown={
+                    "yolo_ms": tracking_stats_after.yolo_ms_total
+                    - tracking_stats_before.yolo_ms_total,
+                    "person_tracker_ms": tracking_stats_after.person_tracker_ms_total
+                    - tracking_stats_before.person_tracker_ms_total,
+                    "vehicle_tracker_ms": tracking_stats_after.vehicle_tracker_ms_total
+                    - tracking_stats_before.vehicle_tracker_ms_total,
+                    "person_recovery_candidate_ms": person_recovery_stats.candidate_reid_ms,
+                    "person_recovery_revalidation_ms": person_recovery_stats.revalidation_reid_ms,
+                    "person_reference_update_ms": person_recovery_stats.reference_update_reid_ms,
+                    "person_recognition_candidate_ms": person_recognition_stats.candidate_reid_ms,
+                    "person_recognition_revalidation_ms": person_recognition_stats.revalidation_reid_ms,
+                    "vehicle_recovery_candidate_ms": vehicle_recovery_stats.candidate_reid_ms,
+                    "vehicle_recovery_revalidation_ms": vehicle_recovery_stats.revalidation_reid_ms,
+                    "vehicle_reference_update_ms": vehicle_recovery_stats.reference_update_reid_ms,
+                    "vehicle_recognition_candidate_ms": vehicle_recognition_stats.candidate_reid_ms,
+                    "vehicle_recognition_revalidation_ms": vehicle_recognition_stats.revalidation_reid_ms,
+                    "person_recovery_candidate_new_embeddings": person_recovery_stats.candidate_new_embeddings,
+                    "person_recovery_revalidation_new_embeddings": person_recovery_stats.revalidation_new_embeddings,
+                    "person_reference_update_new_embeddings": person_recovery_stats.reference_update_new_embeddings,
+                    "person_recognition_candidate_new_embeddings": person_recognition_stats.candidate_new_embeddings,
+                    "person_recognition_revalidation_new_embeddings": person_recognition_stats.revalidation_new_embeddings,
+                    "vehicle_recovery_candidate_new_embeddings": vehicle_recovery_stats.candidate_new_embeddings,
+                    "vehicle_recovery_revalidation_new_embeddings": vehicle_recovery_stats.revalidation_new_embeddings,
+                    "vehicle_reference_update_new_embeddings": vehicle_recovery_stats.reference_update_new_embeddings,
+                    "vehicle_recognition_candidate_new_embeddings": vehicle_recognition_stats.candidate_new_embeddings,
+                    "vehicle_recognition_revalidation_new_embeddings": vehicle_recognition_stats.revalidation_new_embeddings,
+                    "person_reid_cache_hits": person_recovery_stats.cache_hits
+                    + person_recognition_stats.cache_hits,
+                    "vehicle_reid_cache_hits": vehicle_recovery_stats.cache_hits
+                    + vehicle_recognition_stats.cache_hits,
+                    "person_recovery_deferred_by_budget": person_recovery_stats.deferred_by_budget,
+                    "person_recognition_deferred_by_budget": person_recognition_stats.deferred_by_budget,
+                    "vehicle_recovery_deferred_by_budget": vehicle_recovery_stats.deferred_by_budget,
+                    "vehicle_recognition_deferred_by_budget": vehicle_recognition_stats.deferred_by_budget,
+                    "render_ms": render_seconds * 1000.0,
+                    "ui_ms": ui_seconds * 1000.0,
+                    "person_new_embeddings": person_recovery_stats.total_new_embeddings
+                    + person_recognition_stats.total_new_embeddings,
+                    "vehicle_new_embeddings": vehicle_recovery_stats.total_new_embeddings
+                    + vehicle_recognition_stats.total_new_embeddings,
+                    "person_budget_deferred": person_recovery_stats.deferred_by_budget
+                    + person_recognition_stats.deferred_by_budget,
+                    "vehicle_budget_deferred": vehicle_recovery_stats.deferred_by_budget
+                    + vehicle_recognition_stats.deferred_by_budget,
+                },
             )
 
             if action == UIAction.QUIT:
@@ -544,7 +635,7 @@ def run(config: AppConfig) -> int:
             "person_retry_skipped=%d vehicle_recovery_reid_ms=%.2f "
             "vehicle_recovery_batches=%d vehicle_recovery_processed=%d "
             "vehicle_recognition_reid_ms=%.2f vehicle_recognition_batches=%d "
-            "vehicle_recognition_processed=%d vehicle_retry_skipped=%d",
+                "vehicle_recognition_processed=%d vehicle_retry_skipped=%d",
             "PC7" if is_torch_pc else "ATLAS2B",
             stats.frames,
             stats.frames / pc7_elapsed_seconds
@@ -570,6 +661,17 @@ def run(config: AppConfig) -> int:
             vehicle_recognition_batches,
             vehicle_recognition_processed,
             vehicle_retry_skipped,
+        )
+        LOGGER.info(
+            "REID_DOMAIN_STATS person_new_embeddings=%d person_max_new_embeddings=%d "
+            "person_budget_deferred=%d vehicle_new_embeddings=%d "
+            "vehicle_max_new_embeddings=%d vehicle_budget_deferred=%d",
+            person_new_embeddings_total,
+            person_new_embeddings_max,
+            person_budget_deferred,
+            vehicle_new_embeddings_total,
+            vehicle_new_embeddings_max,
+            vehicle_budget_deferred,
         )
         LOGGER.info("APP_STOP")
         if ascend_runtime is not None:
