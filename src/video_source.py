@@ -17,6 +17,15 @@ class VideoSource:
         self.source = parse_source(str(source) if isinstance(source, Path) else source)
         self._capture: cv2.VideoCapture | None = None
 
+    @property
+    def source_label(self) -> str:
+        """Return a compact label suitable for the Dashboard sidebar."""
+
+        if isinstance(self.source, int):
+            return f"Camera {self.source}"
+        name = Path(self.source).name
+        return name or str(self.source)
+
     def open(self) -> None:
         if self._capture is not None:
             return

@@ -153,6 +153,8 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertFalse(config.ui.show_unselected_tracks)
         self.assertEqual(config.ui.max_display_width, 1280)
+        self.assertEqual(config.ui.sidebar_width, 320)
+        self.assertTrue(config.ui.dashboard_enabled)
         self.assertTrue(config.diagnostics.enabled)
         self.assertEqual(config.diagnostics.log_interval_frames, 300)
 
@@ -192,6 +194,8 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertAlmostEqual(config.reid_quality.max_person_overlap_ratio, 0.40)
         self.assertFalse(config.ui.show_unselected_tracks)
+        self.assertEqual(config.ui.sidebar_width, 320)
+        self.assertTrue(config.ui.dashboard_enabled)
         self.assertAlmostEqual(
             config.gallery_enrichment.duplicate_similarity_threshold, 0.95
         )

@@ -1,4 +1,4 @@
-# Person ReID Project - MVP-8.3-Atlas2B
+# Person ReID Project - MVP-10A
 
 The current PC runtime is a formal Person + Vehicle OpenCV pipeline. Atlas now
 uses the same two-domain application path with OM inference and CPU BoT-SORT;
@@ -196,6 +196,19 @@ BoT-SORT instances. Person and Vehicle ReID, Recovery, Gallery recognition, and
 SQLite persistence remain separate business domains. Vehicle OM runtime
 validation must still be performed on the real Atlas 310B board; PC tests do not
 claim hardware success.
+
+### MVP-10A OpenCV Dashboard
+
+The formal PC and Atlas entry point now uses one OpenCV HighGUI Dashboard with a
+video area, status sidebar, clickable controls, and the existing keyboard/ROI
+interactions. `S`, `R`, `G`, `C`, `P`, and `Q` map to Select, Remove, Enroll,
+Clear, Pause/Resume, and Quit. The Dashboard keeps `show_unselected_tracks:
+false`; ordinary tracks remain tracked internally but are hidden by default.
+
+The `Camera / RTSP` sidebar control is reserved and disabled. `src/frame_source.py`
+defines the input contract and the local `VideoSource` is provided through
+`src/source_factory.py`; network camera and Hikvision SDK connections are
+deferred to MVP-9 until hardware is available.
 
 ## Configuration
 
@@ -479,8 +492,13 @@ Controls:
   for an automatically recognized target this grants enrichment for the current
   session and keeps the existing person ID;
 - `C`: clear all current SessionTargets and their runtime associations;
+- `P`: pause or resume frame reading and inference without reopening the source;
 - `Enter`/`Space`: finish an edit session;
 - `Q`: exit the entire application, including from an edit session.
+
+The same actions are available through the Dashboard sidebar buttons. While
+paused, the current frame remains frozen, the UI still accepts Resume, Select,
+Remove, Enroll, Clear, and Quit, and Resume continues from the next source frame.
 
 `C` removes all current Person and Vehicle SessionTarget special boxes without
 deleting either persistent Gallery database. With the current default
@@ -523,6 +541,9 @@ python -m unittest discover -s tests -p "test_*.py"
 ```
 
 ## Deliberately not included in this stage
+
+- MVP-9 RTSP / network camera / Hikvision input: deferred until physical camera
+  hardware is available.
 
 This stage does not include RTSP reconnect work, final Qt UI, Vehicle Atlas runtime
 integration, plate/OCR or brand recognition, motorcycle support, training/fine-tuning,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections import deque
 from dataclasses import replace
 from pathlib import Path
 from time import perf_counter
@@ -14,6 +15,7 @@ from src.active_identity_guard import ActiveIdentityGuard
 from src.config import AppConfig, load_config, parse_source
 from src.database import GalleryRepository
 from src.diagnostics import RuntimeDiagnostics
+from src.frame_source import FrameSource
 from src.gallery import TargetGallery, format_person_id
 from src.gallery_recognition import GalleryRecognitionCoordinator
 from src.gallery_service import GalleryPersistenceService
@@ -21,10 +23,11 @@ from src.logging_utils import configure_logging
 from src.reid import ReIDExtractor
 from src.reid_frame_cache import ReIDFrameCache
 from src.roi_selector import find_track_by_roi
+from src.source_factory import create_frame_source
 from src.target_manager import TargetManager
 from src.target_recovery import TargetRecoveryCoordinator
-from src.video_source import VideoSource
 from src.visualization import draw_multiclass_tracks
+from ui.dashboard_models import DashboardState
 from ui.opencv_ui import EditMode, OpenCVUI, UIAction
 
 
@@ -248,7 +251,7 @@ def run(config: AppConfig) -> int:
         enabled=config.diagnostics.enabled,
         log_interval_frames=config.diagnostics.log_interval_frames,
     )
-    source = VideoSource(config.video.source)
+    source: FrameSource = create_frame_source(config.video.source)
     ui = OpenCVUI(config.ui)
     frame_index = 0
     current_frame_index = -1
@@ -276,6 +279,11 @@ def run(config: AppConfig) -> int:
     vehicle_recognition_reid_total = 0.0
     last_vehicle_recovered_track_ids: frozenset[int] = frozenset()
     pc7_elapsed_seconds = 0.0
+    fps_window: deque[float] = deque(maxlen=30)
+    paused = False
+    last_status_message = "Running"
+    current_frame = None
+    annotated = None
 
     def render_frames(render_frame: Any, _frozen_tracks: tuple[Any, ...] | None = None) -> Any:
         person_labels = _person_gallery_labels(person_target_manager, person_gallery)
@@ -294,6 +302,37 @@ def run(config: AppConfig) -> int:
             vehicle_gallery_labels_by_target=_vehicle_gallery_labels(
                 vehicle_target_manager, vehicle_gallery, vehicle_format_id
             ),
+        )
+
+    def make_dashboard_state() -> DashboardState:
+        return DashboardState(
+            backend=config.inference.backend.upper(),
+            source_label=source.source_label,
+            fps=0.0 if paused else (
+                sum(fps_window) / len(fps_window) if fps_window else 0.0
+            ),
+            paused=paused,
+            mode="PAUSED" if paused else "RUNNING",
+            person_active_count=len(person_target_manager.active_targets()),
+            person_lost_count=len(person_target_manager.lost_targets()),
+            vehicle_active_count=(
+                len(vehicle_target_manager.active_targets())
+                if vehicle_target_manager is not None
+                else 0
+            ),
+            vehicle_lost_count=(
+                len(vehicle_target_manager.lost_targets())
+                if vehicle_target_manager is not None
+                else 0
+            ),
+            person_gallery_count=len(person_gallery.all_people()),
+            vehicle_gallery_count=(
+                len(vehicle_gallery.all_vehicles())
+                if vehicle_gallery is not None
+                else 0
+            ),
+            frame_index=current_frame_index,
+            status_message=last_status_message,
         )
 
     def handle_roi(roi, frozen_tracks, mode):
@@ -318,7 +357,14 @@ def run(config: AppConfig) -> int:
         domain_tracks = person_tracks if is_person else vehicle_tracks
 
         if mode == EditMode.ADD_TARGETS:
-            recovery.select_from_track(frame, track, current_frame_index, tracks=domain_tracks)
+            if current_frame is None:
+                return
+            recovery.select_from_track(
+                current_frame,
+                track,
+                current_frame_index,
+                tracks=domain_tracks,
+            )
             return
 
         target = manager.target_for_track(track.track_id)
@@ -375,15 +421,101 @@ def run(config: AppConfig) -> int:
             )
             recognition.notify_gallery_changed()
 
+    def handle_ui_action(action: UIAction) -> bool:
+        """Apply one UI action while keeping the Dashboard free of business logic."""
+
+        nonlocal annotated, last_status_message, paused
+        if action == UIAction.QUIT:
+            LOGGER.info("USER_QUIT")
+            return True
+        if action == UIAction.PAUSE_TOGGLE:
+            paused = not paused
+            last_status_message = "Paused" if paused else "Running"
+            LOGGER.info("UI_PAUSE state=%s", "PAUSED" if paused else "RUNNING")
+            return False
+        if action == UIAction.CLEAR_TARGETS:
+            person_ids = tuple(person_target_manager.targets)
+            person_gallery.detach_all_session_targets(person_ids)
+            person_target_manager.clear()
+            person_gallery_recognition.notify_gallery_changed()
+            vehicle_ids = tuple(vehicle_target_manager.targets)
+            vehicle_gallery_service.detach_all_session_targets(vehicle_ids)
+            vehicle_target_manager.clear()
+            vehicle_gallery_recognition.notify_gallery_changed()
+            LOGGER.info(
+                "TARGETS_CLEARED persons=%d vehicles=%d",
+                len(person_ids),
+                len(vehicle_ids),
+            )
+            last_status_message = "Session targets cleared"
+            if current_frame is not None:
+                annotated = render_frames(current_frame)
+            return False
+
+        if action not in (
+            UIAction.SELECT_TARGET,
+            UIAction.REMOVE_TARGET,
+            UIAction.ENROLL_GALLERY,
+        ):
+            return False
+        if current_frame is None:
+            return False
+
+        if action == UIAction.REMOVE_TARGET:
+            edit_tracks = tuple(
+                track
+                for track in (*person_tracks, *vehicle_tracks)
+                if (
+                    person_target_manager.target_for_track(track.track_id) is not None
+                    if track.class_id == config.model.person_class_id
+                    else vehicle_target_manager.target_for_track(track.track_id) is not None
+                )
+            )
+        else:
+            edit_tracks = tuple((*person_tracks, *vehicle_tracks))
+        edit_mode = {
+            UIAction.SELECT_TARGET: EditMode.ADD_TARGETS,
+            UIAction.REMOVE_TARGET: EditMode.REMOVE_TARGETS,
+            UIAction.ENROLL_GALLERY: EditMode.ENROLL_GALLERY,
+        }[action]
+        edit_action = ui.run_edit_session(
+            frame=current_frame,
+            tracks=edit_tracks,
+            mode=edit_mode,
+            on_roi=handle_roi,
+            render_frame=lambda frozen_frame, frozen: render_frames(
+                frozen_frame, frozen
+            ),
+        )
+        if edit_action == UIAction.QUIT:
+            LOGGER.info("USER_QUIT edit_mode=%s", edit_mode.name)
+            return True
+        last_status_message = {
+            UIAction.SELECT_TARGET: "Target selection complete",
+            UIAction.REMOVE_TARGET: "Target removal complete",
+            UIAction.ENROLL_GALLERY: "Gallery enrollment complete",
+        }[action]
+        annotated = render_frames(current_frame)
+        return False
+
     try:
         source.open()
         LOGGER.info("SOURCE_OPENED source=%s", config.video.source)
         while True:
+            if paused:
+                if current_frame is None or annotated is None:
+                    break
+                action = ui.show(annotated, make_dashboard_state())
+                if handle_ui_action(action):
+                    break
+                continue
+
             frame_started = perf_counter()
             frame = source.read()
             if frame is None:
                 LOGGER.info("SOURCE_END source=%s", config.video.source)
                 break
+            current_frame = frame
             current_frame_index = frame_index
             tracking_started = perf_counter()
             tracking_stats_before = tracking_pipeline.stats()
@@ -504,7 +636,7 @@ def run(config: AppConfig) -> int:
             annotated = render_frames(frame)
             render_seconds = perf_counter() - render_started
             ui_started = perf_counter()
-            action = ui.show(annotated)
+            action = ui.show(annotated, make_dashboard_state())
             ui_seconds = perf_counter() - ui_started
 
             frame_seconds = perf_counter() - frame_started
@@ -578,50 +710,8 @@ def run(config: AppConfig) -> int:
                     ui_seconds * 1000.0,
                 )
 
-            if action == UIAction.QUIT:
-                LOGGER.info("USER_QUIT key=q")
+            if handle_ui_action(action):
                 break
-            if action == UIAction.CLEAR_TARGETS:
-                person_ids = tuple(person_target_manager.targets)
-                person_gallery.detach_all_session_targets(person_ids)
-                person_target_manager.clear()
-                person_gallery_recognition.notify_gallery_changed()
-                vehicle_ids = tuple(vehicle_target_manager.targets)
-                vehicle_gallery_service.detach_all_session_targets(vehicle_ids)
-                vehicle_target_manager.clear()
-                vehicle_gallery_recognition.notify_gallery_changed()
-                vehicle_count = len(vehicle_ids)
-                LOGGER.info("TARGETS_CLEARED persons=%d vehicles=%d", len(person_ids), vehicle_count)
-                continue
-
-            if action in (UIAction.SELECT_TARGET, UIAction.REMOVE_TARGET, UIAction.ENROLL_GALLERY):
-                if action == UIAction.REMOVE_TARGET:
-                    edit_tracks = tuple(
-                        track
-                        for track in (*person_tracks, *vehicle_tracks)
-                        if (
-                            person_target_manager.target_for_track(track.track_id) is not None
-                            if track.class_id == config.model.person_class_id
-                            else vehicle_target_manager.target_for_track(track.track_id) is not None
-                        )
-                    )
-                else:
-                    edit_tracks = tuple((*person_tracks, *vehicle_tracks))
-                edit_mode = {
-                    UIAction.SELECT_TARGET: EditMode.ADD_TARGETS,
-                    UIAction.REMOVE_TARGET: EditMode.REMOVE_TARGETS,
-                    UIAction.ENROLL_GALLERY: EditMode.ENROLL_GALLERY,
-                }[action]
-                edit_action = ui.run_edit_session(
-                    frame=frame,
-                    tracks=edit_tracks,
-                    mode=edit_mode,
-                    on_roi=handle_roi,
-                    render_frame=lambda frozen_frame, frozen: render_frames(frozen_frame, frozen),
-                )
-                if edit_action == UIAction.QUIT:
-                    LOGGER.info("USER_QUIT key=q edit_mode=%s", edit_mode.name)
-                    break
     finally:
         source.release()
         ui.close()

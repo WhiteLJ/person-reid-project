@@ -20,6 +20,7 @@ MIN_ROI_SIZE = 2
 class UIAction(Enum):
     NONE = auto()
     QUIT = auto()
+    PAUSE_TOGGLE = auto()
     SELECT_TARGET = auto()
     REMOVE_TARGET = auto()
     CLEAR_TARGETS = auto()

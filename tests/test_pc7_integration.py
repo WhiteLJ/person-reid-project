@@ -63,7 +63,7 @@ class PC7IntegrationTests(unittest.TestCase):
             ui.show(source)
 
         displayed = imshow.call_args.args[1]
-        self.assertEqual(displayed.shape[:2], (720, 1280))
+        self.assertEqual(displayed.shape[:2], (720, 1600))
         self.assertEqual(source.shape[:2], (1080, 1920))
 
     def test_pc_config_keeps_vehicle_classes_and_frozen_budgets(self) -> None:
