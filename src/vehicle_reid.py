@@ -15,12 +15,16 @@ from logging import getLogger
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import torch
 from torch import nn
 
 from .config import VehicleReIDConfig, resolve_device
+from .vehicle_reid_common import (
+    normalize_vehicle_features,
+    prepare_vehicle_batch,
+    preprocess_vehicle_crop,
+)
 
 
 LOGGER = getLogger(__name__)
@@ -28,18 +32,7 @@ LOGGER = getLogger(__name__)
 
 def _normalize_features(features: np.ndarray) -> np.ndarray:
     """Validate and L2-normalize a batch of features as float32."""
-
-    array = np.asarray(features, dtype=np.float32)
-    if array.ndim == 1:
-        array = array.reshape(1, -1)
-    if array.ndim != 2 or array.shape[1] == 0:
-        raise ValueError("Vehicle ReID output must have shape (N, D)")
-    if not np.isfinite(array).all():
-        raise ValueError("Vehicle ReID output contains non-finite values")
-    norms = np.linalg.norm(array, axis=1, keepdims=True)
-    if np.any(norms <= np.finfo(np.float32).eps):
-        raise ValueError("Vehicle ReID output contains a zero vector")
-    return (array / norms).astype(np.float32, copy=False)
+    return normalize_vehicle_features(features)
 
 
 def _as_numpy(value: Any) -> np.ndarray:
@@ -338,31 +331,22 @@ class VehicleReIDExtractor:
         )
 
     def _preprocess(self, crop: np.ndarray) -> torch.Tensor:
-        if not isinstance(crop, np.ndarray) or crop.ndim != 3:
-            raise ValueError("vehicle crop must be a BGR image with shape (H, W, 3)")
-        if crop.shape[2] != 3 or crop.shape[0] == 0 or crop.shape[1] == 0:
-            raise ValueError("vehicle crop must be a non-empty 3-channel image")
-        if not np.isfinite(crop).all():
-            raise ValueError("vehicle crop contains non-finite values")
-        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-        resized = cv2.resize(
-            rgb,
-            (self.config.image_width, self.config.image_height),
-            interpolation=cv2.INTER_CUBIC,
+        return torch.from_numpy(
+            preprocess_vehicle_crop(
+                crop,
+                image_height=self.config.image_height,
+                image_width=self.config.image_width,
+            )
         )
-        chw = np.ascontiguousarray(resized.astype(np.float32).transpose(2, 0, 1))
-        return torch.from_numpy(chw)
 
     def _prepare_batch(self, crops: Sequence[np.ndarray]) -> torch.Tensor:
-        tensors = [self._preprocess(crop) for crop in crops]
-        batch = torch.stack(tensors, dim=0)
-        mean = torch.tensor(
-            [0.485 * 255.0, 0.456 * 255.0, 0.406 * 255.0], dtype=torch.float32
-        ).view(1, 3, 1, 1)
-        std = torch.tensor(
-            [0.229 * 255.0, 0.224 * 255.0, 0.225 * 255.0], dtype=torch.float32
-        ).view(1, 3, 1, 1)
-        return (batch - mean) / std
+        return torch.from_numpy(
+            prepare_vehicle_batch(
+                crops,
+                image_height=self.config.image_height,
+                image_width=self.config.image_width,
+            )
+        )
 
     def extract(self, crop: np.ndarray) -> np.ndarray:
         return self.extract_batch([crop])[0]

@@ -171,6 +171,13 @@ bash deploy/atlas/convert_vehicle_reid_om.sh \
   weights/atlas
 ```
 
+### Atlas2A Vehicle OM validation
+
+Atlas2A validates the resulting Vehicle OM through the shared pyACL
+`AscendRuntime`, including dynamic batches and PC/Atlas embedding parity. The
+formal Atlas application remains Person-only until the later Atlas2B integration
+stage.
+
 ## Configuration
 
 The default configuration is in `config/config.yaml`. Important current settings are:
