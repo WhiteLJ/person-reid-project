@@ -93,9 +93,10 @@ ui:
 
 The formal entry point is one full-screen Qt 5 Widgets window with a stacked
 Tracking page and Gallery Management page. The Tracking page has the four
-controls `框选`, `撤销`, `数据库`, and `退出`; keyboard shortcuts remain
-available (`S`, `R`, `C`, `P`, and `Q`). Selection freezes the current source
-frame, creates a SessionTarget, and offers `保存目标` or `不保存`. Saving
+controls `Select`, `Remove`, `Gallery`, and `Quit`; the formal UI is mouse-only.
+Clicking `Select` or `Remove` freezes the current source frame and enters a
+toggle edit mode. Drag one or more ROIs, use the popup to `Save Target` or `Do
+Not Save`, then click the same active toolbar button again to finish. Saving
 persists a clean JPEG crop from the Track bbox in the frozen original frame.
 
 The Gallery page keeps Person and Vehicle identities in separate model/view
@@ -499,12 +500,11 @@ python app.py --source data/demo.mp4
 Controls:
 
 - Main toolbar: `Select`, `Remove`, `Gallery`, `Quit`;
-- `S`: enter multi-target selection mode;
-- `R`: enter multi-target SessionTarget removal mode;
-- `C`: clear all current SessionTargets and their runtime associations;
-- `P`: pause/resume frame processing;
-- `Enter`/`Space`: finish an ROI edit session; `Esc` cancels the current edit;
-- `Q`: request normal application shutdown.
+- `Select`: enter multi-target selection mode; click it again to finish;
+- `Remove`: enter multi-target SessionTarget removal mode; click it again to finish;
+- `Save Target` / `Do Not Save`: decide the current selected target without leaving edit mode;
+- `Gallery`: open the Person/Vehicle Gallery management page;
+- `Quit`: request normal application shutdown.
 
 After a successful selection, `Save Target` enrolls the frozen Track crop into the
 appropriate Person or Vehicle Gallery; `Do Not Save` keeps the SessionTarget active
@@ -512,8 +512,7 @@ without creating a persistent identity. The `Gallery` page supports separate
 Person/Vehicle thumbnail tables, preview, single delete, and one-transaction
 batch deletion.
 
-`C` removes all current Person and Vehicle SessionTarget special boxes without
-deleting either persistent Gallery database. With the current default
+With the current default
 `show_unselected_tracks: false`, ordinary tracks remain tracked but hidden.
 
 ## Offline Gallery administration

@@ -23,7 +23,7 @@ from src.gallery_service import GalleryPersistenceService
 from src.models import Track
 from src.reid import ReIDExtractor
 from src.reid_frame_cache import ReIDFrameCache
-from src.roi_selector import find_track_by_roi
+from src.roi_selector import find_track_by_roi, roi_xyxy_to_xywh
 from src.source_factory import create_frame_source
 from src.target_manager import TargetManager
 from src.target_recovery import TargetRecoveryCoordinator
@@ -45,6 +45,8 @@ class RuntimeWorker(QObject):
     frame_ready = pyqtSignal(object)
     selection_ready = pyqtSignal(object)
     selection_failed = pyqtSignal(str)
+    edit_started = pyqtSignal(str)
+    edit_finished = pyqtSignal()
     gallery_rows_ready = pyqtSignal(object)
     gallery_mutation_done = pyqtSignal(str)
     status_message = pyqtSignal(str)
@@ -372,7 +374,8 @@ class RuntimeWorker(QObject):
                 is not None
             )
         self._frozen_tracks = tuple(visible)
-        self.status_message.emit("框选模式" if mode == "select" else "撤销模式")
+        self.status_message.emit("\u6846\u9009\u6a21\u5f0f" if mode == "select" else "\u64a4\u9500\u6a21\u5f0f")
+        self.edit_started.emit(mode)
 
     @pyqtSlot()
     def finish_edit(self) -> None:
@@ -381,7 +384,8 @@ class RuntimeWorker(QObject):
         self._frozen_frame = None
         self._frozen_tracks = ()
         self._pending_selection = None
-        self.status_message.emit("运行中")
+        self.status_message.emit("\u8fd0\u884c\u4e2d")
+        self.edit_finished.emit()
 
     @pyqtSlot()
     def cancel_edit(self) -> None:
@@ -391,9 +395,14 @@ class RuntimeWorker(QObject):
     def submit_roi(self, roi) -> None:
         if not self._editing or self._frozen_frame is None:
             return
-        track = find_track_by_roi(roi, self._frozen_tracks, min_iou=self.config.selection.min_iou)
+        try:
+            roi_xywh = roi_xyxy_to_xywh(roi)
+        except ValueError:
+            self.selection_failed.emit("\u672a\u5339\u914d\u5230\u76ee\u6807\uff0c\u8bf7\u91cd\u65b0\u6846\u9009")
+            return
+        track = find_track_by_roi(roi_xywh, self._frozen_tracks, min_iou=self.config.selection.min_iou)
         if track is None:
-            self.selection_failed.emit("没有匹配到目标")
+            self.selection_failed.emit("\u672a\u5339\u914d\u5230\u76ee\u6807\uff0c\u8bf7\u91cd\u65b0\u6846\u9009")
             return
         is_person = track.class_id == self.config.model.person_class_id
         is_vehicle = track.class_id in self._vehicle_class_ids
@@ -423,7 +432,7 @@ class RuntimeWorker(QObject):
             self._frozen_frame, track, self._frame_index, tracks=domain_tracks
         )
         if target is None:
-            self.selection_failed.emit("目标质量不满足选择条件")
+            self.selection_failed.emit("\u76ee\u6807\u8d28\u91cf\u4e0d\u8db3\uff0c\u8bf7\u91cd\u65b0\u6846\u9009")
             return
         domain = "person" if is_person else "vehicle"
         self._pending_selection = (domain, target, track, self._frozen_frame.copy())

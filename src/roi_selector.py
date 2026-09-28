@@ -23,6 +23,25 @@ def roi_xywh_to_xyxy(roi: Sequence[float]) -> tuple[float, float, float, float]:
     return min(x, x2), min(y, y2), max(x, x2), max(y, y2)
 
 
+def roi_xyxy_to_xywh(roi: Sequence[float]) -> tuple[float, float, float, float]:
+    """Convert ``(x1, y1, x2, y2)`` coordinates to OpenCV ``xywh`` ROI."""
+
+    if len(roi) != 4:
+        raise ValueError("ROI must contain exactly four values: x1, y1, x2, y2")
+
+    x1, y1, x2, y2 = (float(value) for value in roi)
+    if not all(isfinite(value) for value in (x1, y1, x2, y2)):
+        raise ValueError("ROI coordinates must be finite")
+
+    left, right = sorted((x1, x2))
+    top, bottom = sorted((y1, y2))
+    width = right - left
+    height = bottom - top
+    if width <= 0.0 or height <= 0.0:
+        raise ValueError("ROI must have positive width and height")
+    return left, top, width, height
+
+
 def bbox_iou(
     box_a: Sequence[float], box_b: Sequence[float]
 ) -> float:

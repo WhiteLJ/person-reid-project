@@ -3,12 +3,21 @@ from __future__ import annotations
 import unittest
 
 from src.models import Track
-from src.roi_selector import bbox_iou, find_track_by_roi, roi_xywh_to_xyxy
+from src.roi_selector import bbox_iou, find_track_by_roi, roi_xywh_to_xyxy, roi_xyxy_to_xywh
 
 
 class ROISelectorTests(unittest.TestCase):
     def test_roi_xywh_to_xyxy(self) -> None:
         self.assertEqual(roi_xywh_to_xyxy((10, 20, 30, 40)), (10.0, 20.0, 40.0, 60.0))
+
+    def test_roi_xyxy_to_xywh(self) -> None:
+        self.assertEqual(roi_xyxy_to_xywh((500, 100, 650, 500)), (500.0, 100.0, 150.0, 400.0))
+
+    def test_qt_xyxy_converts_before_track_matching(self) -> None:
+        track = Track(11, (500, 100, 650, 500), 0.9, 0)
+        roi_xyxy = (500, 100, 650, 500)
+        self.assertIs(find_track_by_roi(roi_xyxy_to_xywh(roi_xyxy), [track], min_iou=0.5), track)
+        self.assertIsNone(find_track_by_roi(roi_xyxy, [track], min_iou=0.5))
 
     def test_identical_boxes_have_iou_one(self) -> None:
         box = (10, 20, 40, 60)

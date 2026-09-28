@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PyQt5.QtCore import QAbstractTableModel, QModelIndex, Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QAbstractItemView, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QPushButton, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QAbstractItemView, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget
 
 from .models import GalleryRecordDTO
 
@@ -61,7 +61,7 @@ class GalleryTableModel(QAbstractTableModel):
             pixmap = QPixmap()
             pixmap.loadFromData(record.snapshot_jpeg, "JPG")
             return pixmap
-        if role == Qt.TextAlignmentRole and index.column() == 2:
+        if role == Qt.TextAlignmentRole and index.column() in {0, 1, 2}:
             return int(Qt.AlignCenter)
         return None
 
@@ -94,16 +94,22 @@ class GalleryPage(QWidget):
         self._domain = "person"
         self._batch_mode = False
         root = QVBoxLayout(self)
-        toolbar = QHBoxLayout()
+        toolbar = QGridLayout()
+        toolbar.setHorizontalSpacing(16)
+        toolbar.setColumnStretch(0, 1)
+        toolbar.setColumnStretch(1, 1)
+        toolbar.setColumnStretch(2, 1)
         self.people_button = QPushButton("\u4eba\u5458\u5e93")
         self.vehicle_button = QPushButton("\u8f66\u8f86\u5e93")
         self.batch_button = QPushButton("\u6279\u91cf\u7ba1\u7406")
         self.back_button = QPushButton("\u8fd4\u56de")
-        toolbar.addWidget(self.people_button)
-        toolbar.addWidget(self.vehicle_button)
-        toolbar.addWidget(self.batch_button)
-        toolbar.addStretch(1)
-        toolbar.addWidget(self.back_button)
+        domain_buttons = QHBoxLayout()
+        domain_buttons.setSpacing(10)
+        domain_buttons.addWidget(self.people_button)
+        domain_buttons.addWidget(self.vehicle_button)
+        toolbar.addLayout(domain_buttons, 0, 0, alignment=Qt.AlignLeft)
+        toolbar.addWidget(self.batch_button, 0, 1, alignment=Qt.AlignCenter)
+        toolbar.addWidget(self.back_button, 0, 2, alignment=Qt.AlignRight)
         root.addLayout(toolbar)
         self.table = QTableView()
         self.model = GalleryTableModel(self)
@@ -112,9 +118,10 @@ class GalleryPage(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setAlternatingRowColors(True)
-        self.table.setColumnWidth(0, 160)
-        self.table.setColumnWidth(1, 220)
-        self.table.setColumnWidth(2, 100)
+        header = self.table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignCenter)
+        for column in range(3):
+            header.setSectionResizeMode(column, QHeaderView.Stretch)
         self.table.verticalHeader().setDefaultSectionSize(150)
         root.addWidget(self.table, 1)
         self.people_button.clicked.connect(lambda: self.set_domain("person"))
@@ -141,7 +148,7 @@ class GalleryPage(QWidget):
 
     def _toggle_batch(self) -> None:
         self._batch_mode = not self._batch_mode
-        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection if self._batch_mode else QAbstractItemView.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.MultiSelection if self._batch_mode else QAbstractItemView.SingleSelection)
         self.batch_button.setText("\u786e\u8ba4\u6279\u91cf\u5220\u9664" if self._batch_mode else "\u6279\u91cf\u7ba1\u7406")
         if self._batch_mode:
             return

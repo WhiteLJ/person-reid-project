@@ -59,9 +59,6 @@ class VideoCanvas(QWidget):
     """Draw a source image and optionally collect continuous ROI drags."""
 
     roiSelected = pyqtSignal(tuple)
-    editFinished = pyqtSignal()
-    editCancelled = pyqtSignal()
-    quitRequested = pyqtSignal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -189,21 +186,3 @@ class VideoCanvas(QWidget):
             event.accept()
             return
         super().mouseReleaseEvent(event)
-
-    def keyPressEvent(self, event) -> None:
-        if self._editing:
-            if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
-                self.editFinished.emit()
-                event.accept()
-                return
-            if event.key() == Qt.Key_Escape:
-                self._drag_start = None
-                self._drag_current = None
-                self.editCancelled.emit()
-                event.accept()
-                return
-            if event.key() == Qt.Key_Q:
-                self.quitRequested.emit()
-                event.accept()
-                return
-        super().keyPressEvent(event)
