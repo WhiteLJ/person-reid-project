@@ -162,11 +162,9 @@ vehicle_gallery_enrichment:
   duplicate_similarity_threshold: 0.95
 
 ui:
-  window_name: "Person + Vehicle Dashboard - Atlas 310B"
+  window_name: "Person + Vehicle Tracking - Atlas 310B"
   wait_key_ms: 1
   max_display_width: 1280
-  sidebar_width: 320
-  dashboard_enabled: true
   show_class_name: true
   show_confidence: true
   show_unselected_tracks: false

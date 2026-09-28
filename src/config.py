@@ -250,8 +250,6 @@ class UIConfig:
     show_confidence: bool
     show_unselected_tracks: bool = False
     max_display_width: int | None = 1280
-    sidebar_width: int = 320
-    dashboard_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -1043,8 +1041,6 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             show_confidence=bool(ui.get("show_confidence", True)),
             show_unselected_tracks=bool(ui.get("show_unselected_tracks", False)),
             max_display_width=max_display_width,
-            sidebar_width=max(240, int(ui.get("sidebar_width", 320))),
-            dashboard_enabled=bool(ui.get("dashboard_enabled", True)),
         ),
         diagnostics=DiagnosticsConfig(
             enabled=bool(diagnostics.get("enabled", True)),
