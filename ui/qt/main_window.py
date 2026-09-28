@@ -30,6 +30,7 @@ class TargetDecisionPopup(QFrame):
 
 class QtMainWindow(QMainWindow):
     startEditRequested = pyqtSignal(str)
+    submitRoiRequested = pyqtSignal(object)
     finishEditRequested = pyqtSignal()
     cancelEditRequested = pyqtSignal()
     savePendingRequested = pyqtSignal()
@@ -73,6 +74,7 @@ class QtMainWindow(QMainWindow):
         self.worker.fatal_error.connect(self._fatal_error)
         self.worker.shutdown_complete.connect(self._worker_shutdown_complete)
         self.startEditRequested.connect(self.worker.start_edit)
+        self.submitRoiRequested.connect(self.worker.submit_roi)
         self.finishEditRequested.connect(self.worker.finish_edit)
         self.cancelEditRequested.connect(self.worker.cancel_edit)
         self.savePendingRequested.connect(self.worker.save_pending_selection)
@@ -107,7 +109,7 @@ class QtMainWindow(QMainWindow):
         self.remove_button.clicked.connect(lambda: self._begin_edit("remove"))
         self.database_button.clicked.connect(self._open_gallery)
         self.quit_button.clicked.connect(self._confirm_quit)
-        self.video_canvas.roiSelected.connect(self.worker.submit_roi)
+        self.video_canvas.roiSelected.connect(self.submitRoiRequested.emit)
         self.video_canvas.editFinished.connect(self._finish_edit)
         self.video_canvas.editCancelled.connect(self._cancel_edit)
         self.video_canvas.quitRequested.connect(self._confirm_quit)
