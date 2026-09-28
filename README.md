@@ -1,6 +1,6 @@
-# Person ReID Project - MVP-8.3-Atlas2B
+# Person ReID Project - MVP-10 Qt UI
 
-The current PC runtime is a formal Person + Vehicle OpenCV pipeline. Atlas now
+The current PC runtime is a formal Person + Vehicle Qt Widgets pipeline. Atlas now
 uses the same two-domain application path with OM inference and CPU BoT-SORT;
 Person and Vehicle identities remain separate while sharing one YOLO inference
 per frame.
@@ -14,7 +14,7 @@ VideoSource -> one YOLO inference
            -> Person BoT-SORT + Vehicle BoT-SORT
            -> Person/Vehicle ReID -> LOST/recovery
            -> separate Person/Vehicle Gallery recognition and enrichment
-           -> OpenCV display
+           -> Qt full-screen tracking page
 ```
 
 The three identity layers remain separate:
@@ -88,6 +88,31 @@ current project default. Only selected or persistent-identity targets are drawn:
 ui:
   show_unselected_tracks: false
 ```
+
+## MVP-10 Qt frontend
+
+The formal entry point is one full-screen Qt 5 Widgets window with a stacked
+Tracking page and Gallery Management page. The Tracking page has the four
+controls `框选`, `撤销`, `数据库`, and `退出`; keyboard shortcuts remain
+available (`S`, `R`, `C`, `P`, and `Q`). Selection freezes the current source
+frame, creates a SessionTarget, and offers `保存目标` or `不保存`. Saving
+persists a clean JPEG crop from the Track bbox in the frozen original frame.
+
+The Gallery page keeps Person and Vehicle identities in separate model/view
+tables with thumbnails, preview, single delete, and batch delete. A legacy
+SQLite database without snapshot rows remains valid and displays a placeholder.
+The UI dependency is optional and is listed separately in
+`requirements-ui-pc.txt`; the core `requirements.txt` is unchanged.
+On a Windows PC install it with `python -m pip install -r requirements-ui-pc.txt`.
+On the Ubuntu 22.04 ARM64 Atlas image use the system package
+`sudo apt install python3-pyqt5` when Qt is available; the application never
+installs dependencies automatically.
+
+The formal frontend does not use OpenCV HighGUI. OpenCV remains used for image
+operations, preprocessing, detection, and tracking. Camera/RTSP/Hikvision input
+is deferred: `src/frame_source.py` reserves the small FrameSource contract and
+the current local `VideoSource` implements it; no network connection is
+implemented or tested in MVP-10.
 
 Selected or automatically recognized active targets are drawn in red, for example
 `TARGET P001 | ID 17`. A target without a Gallery identity is shown as
@@ -473,14 +498,19 @@ python app.py --source data/demo.mp4
 
 Controls:
 
-- `S`: pause and add one or more current Tracks as SessionTargets;
-- `R`: pause and remove one or more current SessionTargets;
-- `G`: pause and explicitly enroll existing SessionTargets into the Gallery;
-  for an automatically recognized target this grants enrichment for the current
-  session and keeps the existing person ID;
+- Main toolbar: `Select`, `Remove`, `Gallery`, `Quit`;
+- `S`: enter multi-target selection mode;
+- `R`: enter multi-target SessionTarget removal mode;
 - `C`: clear all current SessionTargets and their runtime associations;
-- `Enter`/`Space`: finish an edit session;
-- `Q`: exit the entire application, including from an edit session.
+- `P`: pause/resume frame processing;
+- `Enter`/`Space`: finish an ROI edit session; `Esc` cancels the current edit;
+- `Q`: request normal application shutdown.
+
+After a successful selection, `Save Target` enrolls the frozen Track crop into the
+appropriate Person or Vehicle Gallery; `Do Not Save` keeps the SessionTarget active
+without creating a persistent identity. The `Gallery` page supports separate
+Person/Vehicle thumbnail tables, preview, single delete, and one-transaction
+batch deletion.
 
 `C` removes all current Person and Vehicle SessionTarget special boxes without
 deleting either persistent Gallery database. With the current default
@@ -524,9 +554,10 @@ python -m unittest discover -s tests -p "test_*.py"
 
 ## Deliberately not included in this stage
 
-This stage does not include RTSP reconnect work, final Qt UI, Vehicle Atlas runtime
-integration, plate/OCR or brand recognition, motorcycle support, training/fine-tuning,
-or BoxMOT. Person and Vehicle PC Gallery/Recovery behavior is already implemented.
+This stage does not include RTSP reconnect work, Hikvision SDK integration, Vehicle
+Atlas runtime integration, plate/OCR or brand recognition, motorcycle support,
+training/fine-tuning, or BoxMOT. Person and Vehicle PC Gallery/Recovery behavior is
+already implemented.
 False recovery counts require manual review against the fixed regression video; the
 program reports attempts, pending proposals, accepted recoveries, and Track
 created/ended events only. The next stage may address live-stream robustness and

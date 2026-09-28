@@ -17,6 +17,12 @@ class VideoSource:
         self.source = parse_source(str(source) if isinstance(source, Path) else source)
         self._capture: cv2.VideoCapture | None = None
 
+    @property
+    def source_label(self) -> str:
+        if isinstance(self.source, int):
+            return f"Camera {self.source}"
+        return Path(self.source).name or str(self.source)
+
     def open(self) -> None:
         if self._capture is not None:
             return

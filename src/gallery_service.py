@@ -14,6 +14,7 @@ from .gallery_reference_bank import (
 )
 from .models import SessionTarget, TargetState
 from .target_recovery import ReferenceUpdateEvent
+from .gallery_snapshot import encode_track_snapshot
 
 
 LOGGER = getLogger(__name__)
@@ -67,6 +68,38 @@ class GalleryPersistenceService:
         except Exception:
             # This person and its mapping were created by this call.  Removing
             # it cannot damage a prior enrollment belonging to another target.
+            self.gallery.remove(person.person_id)
+            raise
+        self._mark_explicit_enrollment(session_target.target_id)
+        return person
+
+    def enroll_with_snapshot(
+        self,
+        session_target: SessionTarget,
+        source_frame,
+        track_bbox,
+    ) -> GalleryPerson:
+        """Enroll a target and persist a clean source-frame crop."""
+
+        existing = self.gallery.person_for_session_target(session_target.target_id)
+        if existing is not None:
+            self._mark_explicit_enrollment(session_target.target_id)
+            if self.repository.load_snapshot(existing.person_id) is None:
+                self.repository.save_snapshot(
+                    existing.person_id,
+                    encode_track_snapshot(source_frame, track_bbox),
+                )
+            return existing
+        person = self.gallery.enroll(session_target)
+        snapshot = encode_track_snapshot(source_frame, track_bbox)
+        try:
+            saver = getattr(self.repository, "save_person_with_snapshot", None)
+            if saver is not None:
+                saver(person, snapshot)
+            else:
+                self.repository.save_person(person)
+                self.repository.save_snapshot(person.person_id, snapshot)
+        except Exception:
             self.gallery.remove(person.person_id)
             raise
         self._mark_explicit_enrollment(session_target.target_id)
@@ -260,6 +293,22 @@ class GalleryPersistenceService:
             return False
         self.gallery.remove(person_id)
         return True
+
+    def remove_many(self, person_ids: Iterable[int]) -> tuple[int, ...]:
+        ids = tuple(int(person_id) for person_id in person_ids)
+        target_ids = {
+            person_id: self.gallery.session_target_for_person_id(person_id)
+            for person_id in ids
+        }
+        deleted = self.repository.delete_people(ids)
+        for person_id in deleted:
+            self.gallery.remove(person_id)
+            target_id = target_ids.get(person_id)
+            if target_id is not None:
+                self._explicitly_enrolled_target_ids.discard(target_id)
+                self._post_recovery_blocked.discard(target_id)
+                self._stable_active_frames.pop(target_id, None)
+        return deleted
 
     def clear(self) -> None:
         """Clear persisted people first, then clear the in-memory Gallery."""

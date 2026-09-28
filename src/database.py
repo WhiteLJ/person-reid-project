@@ -67,6 +67,14 @@ class GalleryRepository:
                     key TEXT PRIMARY KEY,
                     value INTEGER NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS gallery_person_snapshot (
+                    person_id INTEGER PRIMARY KEY,
+                    image_jpeg BLOB NOT NULL,
+                    FOREIGN KEY (person_id)
+                        REFERENCES gallery_person(person_id)
+                        ON DELETE CASCADE
+                );
                 """
             )
             connection.execute(
@@ -356,6 +364,114 @@ class GalleryRepository:
             raise RepositoryError(
                 f"failed to delete person_id={person_id} from {self.path}"
             ) from exc
+
+    def delete_people(self, person_ids: Sequence[int]) -> tuple[int, ...]:
+        """Delete several people and snapshots in one SQLite transaction."""
+
+        ids = tuple(dict.fromkeys(self._validate_person_id(person_id) for person_id in person_ids))
+        if not ids:
+            return ()
+        self.initialize()
+        try:
+            with self._transaction() as connection:
+                deleted: list[int] = []
+                for person_id in ids:
+                    cursor = connection.execute(
+                        "DELETE FROM gallery_person WHERE person_id = ?", (person_id,)
+                    )
+                    if cursor.rowcount:
+                        deleted.append(person_id)
+                return tuple(deleted)
+        except sqlite3.Error as exc:
+            raise RepositoryError(f"failed to batch-delete people from {self.path}") from exc
+
+    def save_person_with_snapshot(self, person: GalleryPerson, image_jpeg: bytes) -> None:
+        """Persist a new identity and its optional UI snapshot atomically."""
+
+        person_id = self._validate_person_id(person.person_id)
+        label = self._validate_label(person.label, person_id)
+        centroid_blob = self._encode_embedding(person.centroid, context=f"person_id={person_id} centroid")
+        reference_blobs = [
+            self._encode_embedding(reference, context=f"person_id={person_id} embedding_index={index}")
+            for index, reference in enumerate(person.reference_embeddings)
+        ]
+        if not reference_blobs:
+            raise RepositoryError(f"person_id={person_id} must contain at least one embedding")
+        if not isinstance(image_jpeg, (bytes, bytearray, memoryview)) or not image_jpeg:
+            raise RepositoryError("person snapshot must be non-empty JPEG bytes")
+        self.initialize()
+        try:
+            with self._transaction() as connection:
+                next_person_id = self._ensure_next_person_id(connection)
+                if person_id < next_person_id:
+                    raise RepositoryError(f"person_id={person_id} would reuse an allocated historical ID")
+                connection.execute(
+                    "INSERT INTO gallery_person(person_id, label, centroid, centroid_dim, centroid_dtype) VALUES (?, ?, ?, ?, ?)",
+                    (person_id, label, centroid_blob, EMBEDDING_DIMENSION, EMBEDDING_DTYPE),
+                )
+                connection.executemany(
+                    "INSERT INTO gallery_embedding(person_id, embedding_index, embedding, embedding_dim, embedding_dtype) VALUES (?, ?, ?, ?, ?)",
+                    [(person_id, index, blob, EMBEDDING_DIMENSION, EMBEDDING_DTYPE) for index, blob in enumerate(reference_blobs)],
+                )
+                connection.execute(
+                    "INSERT INTO gallery_person_snapshot(person_id, image_jpeg) VALUES (?, ?)",
+                    (person_id, bytes(image_jpeg)),
+                )
+                connection.execute(
+                    "UPDATE gallery_meta SET value = MAX(value, ?) WHERE key = ?",
+                    (person_id + 1, _NEXT_PERSON_ID_KEY),
+                )
+        except RepositoryError:
+            raise
+        except sqlite3.IntegrityError as exc:
+            raise RepositoryError(f"failed to save person_id={person_id}: database constraint error") from exc
+        except sqlite3.Error as exc:
+            raise RepositoryError(f"failed to save person_id={person_id} in {self.path}") from exc
+
+    def save_snapshot(self, person_id: int, image_jpeg: bytes) -> None:
+        person_id = self._validate_person_id(person_id)
+        if not isinstance(image_jpeg, (bytes, bytearray, memoryview)) or not image_jpeg:
+            raise RepositoryError("person snapshot must be non-empty JPEG bytes")
+        self.initialize()
+        try:
+            with self._transaction() as connection:
+                exists = connection.execute(
+                    "SELECT 1 FROM gallery_person WHERE person_id = ?", (person_id,)
+                ).fetchone()
+                if exists is None:
+                    raise RepositoryError(f"cannot save snapshot for unknown person_id={person_id}")
+                connection.execute(
+                    "INSERT OR REPLACE INTO gallery_person_snapshot(person_id, image_jpeg) VALUES (?, ?)",
+                    (person_id, bytes(image_jpeg)),
+                )
+        except RepositoryError:
+            raise
+        except sqlite3.Error as exc:
+            raise RepositoryError(f"failed to save snapshot for person_id={person_id}") from exc
+
+    def load_snapshot(self, person_id: int) -> bytes | None:
+        person_id = self._validate_person_id(person_id)
+        self.initialize()
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT image_jpeg FROM gallery_person_snapshot WHERE person_id = ?",
+                (person_id,),
+            ).fetchone()
+            return None if row is None else bytes(row[0])
+        finally:
+            connection.close()
+
+    def load_snapshots(self) -> dict[int, bytes]:
+        self.initialize()
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT person_id, image_jpeg FROM gallery_person_snapshot"
+            ).fetchall()
+            return {int(person_id): bytes(image_jpeg) for person_id, image_jpeg in rows}
+        finally:
+            connection.close()
 
     def clear(self) -> None:
         """Delete all people and embeddings without resetting the ID sequence."""

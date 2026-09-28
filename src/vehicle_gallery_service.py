@@ -14,6 +14,7 @@ from .models import SessionTarget, TargetState
 from .target_recovery import ReferenceUpdateEvent
 from .vehicle_database import VehicleGalleryRepository, VehicleRepositoryError
 from .vehicle_gallery import GalleryVehicle, VehicleTargetGallery
+from .gallery_snapshot import encode_track_snapshot
 
 
 LOGGER = getLogger(__name__)
@@ -67,6 +68,38 @@ class VehicleGalleryPersistenceService:
         except Exception:
             # The allocator intentionally remains advanced: a failed write must
             # never make a later process-local enrollment reuse this ID.
+            self.gallery.remove(vehicle.vehicle_id)
+            raise
+        self._mark_explicit_enrollment(session_target.target_id)
+        return vehicle
+
+    def enroll_with_snapshot(
+        self,
+        session_target: SessionTarget,
+        source_frame,
+        track_bbox,
+    ) -> GalleryVehicle:
+        """Enroll a target and persist a clean source-frame crop."""
+
+        existing = self.gallery.vehicle_for_session_target(session_target.target_id)
+        if existing is not None:
+            self._mark_explicit_enrollment(session_target.target_id)
+            if self.repository.load_snapshot(existing.vehicle_id) is None:
+                self.repository.save_snapshot(
+                    existing.vehicle_id,
+                    encode_track_snapshot(source_frame, track_bbox),
+                )
+            return existing
+        vehicle = self.gallery.enroll(session_target)
+        snapshot = encode_track_snapshot(source_frame, track_bbox)
+        try:
+            saver = getattr(self.repository, "save_vehicle_with_snapshot", None)
+            if saver is not None:
+                saver(vehicle, snapshot)
+            else:
+                self.repository.save_vehicle(vehicle)
+                self.repository.save_snapshot(vehicle.vehicle_id, snapshot)
+        except Exception:
             self.gallery.remove(vehicle.vehicle_id)
             raise
         self._mark_explicit_enrollment(session_target.target_id)
@@ -232,6 +265,22 @@ class VehicleGalleryPersistenceService:
             self._post_recovery_blocked.discard(target_id)
             self._stable_active_frames.pop(target_id, None)
         return True
+
+    def remove_many(self, vehicle_ids: Iterable[int]) -> tuple[int, ...]:
+        ids = tuple(int(vehicle_id) for vehicle_id in vehicle_ids)
+        target_ids = {
+            vehicle_id: self.gallery.session_target_for_vehicle_id(vehicle_id)
+            for vehicle_id in ids
+        }
+        deleted = self.repository.delete_vehicles(ids)
+        for vehicle_id in deleted:
+            self.gallery.remove(vehicle_id)
+            target_id = target_ids.get(vehicle_id)
+            if target_id is not None:
+                self._explicitly_enrolled_target_ids.discard(target_id)
+                self._post_recovery_blocked.discard(target_id)
+                self._stable_active_frames.pop(target_id, None)
+        return deleted
 
     def clear(self) -> None:
         """Clear persisted identities first, preserving the monotonic allocator."""

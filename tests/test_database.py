@@ -287,11 +287,24 @@ class GalleryRepositoryTests(unittest.TestCase):
 
         self.assertEqual(
             tables,
-            {"gallery_person", "gallery_embedding", "gallery_meta"},
+            {
+                "gallery_person",
+                "gallery_embedding",
+                "gallery_meta",
+                "gallery_person_snapshot",
+            },
         )
         self.assertNotIn("track_id", person_columns)
         self.assertNotIn("current_track_id", person_columns)
         self.assertNotIn("session_target_id", person_columns)
+
+    def test_snapshot_round_trip_and_cascade(self) -> None:
+        self.repository.save_person(_person(1))
+        snapshot = b"jpeg-bytes"
+        self.repository.save_snapshot(1, snapshot)
+        self.assertEqual(self.repository.load_snapshot(1), snapshot)
+        self.repository.delete_person(1)
+        self.assertIsNone(self.repository.load_snapshot(1))
 
     def test_invalid_embedding_dimension_is_rejected(self) -> None:
         invalid = GalleryPerson(

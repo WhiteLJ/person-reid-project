@@ -66,6 +66,14 @@ class VehicleGalleryRepository:
                         key TEXT PRIMARY KEY,
                         value INTEGER NOT NULL
                     );
+
+                    CREATE TABLE IF NOT EXISTS gallery_vehicle_snapshot (
+                        vehicle_id INTEGER PRIMARY KEY,
+                        image_jpeg BLOB NOT NULL,
+                        FOREIGN KEY (vehicle_id)
+                            REFERENCES gallery_vehicle(vehicle_id)
+                            ON DELETE CASCADE
+                    );
                     """
                 )
                 connection.execute(
@@ -348,6 +356,118 @@ class VehicleGalleryRepository:
             raise VehicleRepositoryError(
                 f"failed to delete vehicle_id={vehicle_id} from {self.path}"
             ) from exc
+
+    def delete_vehicles(self, vehicle_ids: Sequence[int]) -> tuple[int, ...]:
+        """Delete several vehicles and snapshots in one SQLite transaction."""
+
+        ids = tuple(dict.fromkeys(_validate_vehicle_id(vehicle_id) for vehicle_id in vehicle_ids))
+        if not ids:
+            return ()
+        self.initialize()
+        try:
+            with self._transaction() as connection:
+                deleted: list[int] = []
+                for vehicle_id in ids:
+                    cursor = connection.execute(
+                        "DELETE FROM gallery_vehicle WHERE vehicle_id = ?", (vehicle_id,)
+                    )
+                    if cursor.rowcount:
+                        deleted.append(vehicle_id)
+                return tuple(deleted)
+        except sqlite3.Error as exc:
+            raise VehicleRepositoryError(
+                f"failed to batch-delete vehicles from {self.path}"
+            ) from exc
+
+    def save_vehicle_with_snapshot(self, vehicle: GalleryVehicle, image_jpeg: bytes) -> None:
+        """Persist a new Vehicle identity and its snapshot."""
+
+        vehicle_id = _validate_vehicle_id(vehicle.vehicle_id)
+        label = self._validate_label(vehicle.label, vehicle_id)
+        centroid_blob = self._encode_embedding(vehicle.centroid, context=f"vehicle_id={vehicle_id} centroid")
+        reference_blobs = [
+            self._encode_embedding(reference, context=f"vehicle_id={vehicle_id} embedding_index={index}")
+            for index, reference in enumerate(vehicle.reference_embeddings)
+        ]
+        if not reference_blobs:
+            raise VehicleRepositoryError(f"vehicle_id={vehicle_id} must contain at least one embedding")
+        if not isinstance(image_jpeg, (bytes, bytearray, memoryview)) or not image_jpeg:
+            raise VehicleRepositoryError("vehicle snapshot must be non-empty JPEG bytes")
+        self.initialize()
+        try:
+            with self._transaction() as connection:
+                next_vehicle_id = self._ensure_next_vehicle_id(connection)
+                if vehicle_id < next_vehicle_id:
+                    raise VehicleRepositoryError(f"vehicle_id={vehicle_id} would reuse an allocated historical ID")
+                connection.execute(
+                    "INSERT INTO gallery_vehicle(vehicle_id, label, centroid, centroid_dim, centroid_dtype) VALUES (?, ?, ?, ?, ?)",
+                    (vehicle_id, label, centroid_blob, VEHICLE_EMBEDDING_DIMENSION, VEHICLE_EMBEDDING_DTYPE),
+                )
+                connection.executemany(
+                    "INSERT INTO gallery_vehicle_embedding(vehicle_id, embedding_index, embedding, embedding_dim, embedding_dtype) VALUES (?, ?, ?, ?, ?)",
+                    [(vehicle_id, index, blob, VEHICLE_EMBEDDING_DIMENSION, VEHICLE_EMBEDDING_DTYPE) for index, blob in enumerate(reference_blobs)],
+                )
+                connection.execute(
+                    "INSERT INTO gallery_vehicle_snapshot(vehicle_id, image_jpeg) VALUES (?, ?)",
+                    (vehicle_id, bytes(image_jpeg)),
+                )
+                connection.execute(
+                    "UPDATE gallery_vehicle_meta SET value = MAX(value, ?) WHERE key = ?",
+                    (vehicle_id + 1, _NEXT_VEHICLE_ID_KEY),
+                )
+        except VehicleRepositoryError:
+            raise
+        except sqlite3.IntegrityError as exc:
+            raise VehicleRepositoryError(f"failed to save vehicle_id={vehicle_id}: database constraint error") from exc
+        except sqlite3.Error as exc:
+            raise VehicleRepositoryError(f"failed to save vehicle_id={vehicle_id} in {self.path}") from exc
+
+    def save_snapshot(self, vehicle_id: int, image_jpeg: bytes) -> None:
+        vehicle_id = _validate_vehicle_id(vehicle_id)
+        if not isinstance(image_jpeg, (bytes, bytearray, memoryview)) or not image_jpeg:
+            raise VehicleRepositoryError("vehicle snapshot must be non-empty JPEG bytes")
+        self.initialize()
+        try:
+            with self._transaction() as connection:
+                exists = connection.execute(
+                    "SELECT 1 FROM gallery_vehicle WHERE vehicle_id = ?", (vehicle_id,)
+                ).fetchone()
+                if exists is None:
+                    raise VehicleRepositoryError(
+                        f"cannot save snapshot for unknown vehicle_id={vehicle_id}"
+                    )
+                connection.execute(
+                    "INSERT OR REPLACE INTO gallery_vehicle_snapshot(vehicle_id, image_jpeg) VALUES (?, ?)",
+                    (vehicle_id, bytes(image_jpeg)),
+                )
+        except VehicleRepositoryError:
+            raise
+        except sqlite3.Error as exc:
+            raise VehicleRepositoryError(f"failed to save snapshot for vehicle_id={vehicle_id}") from exc
+
+    def load_snapshot(self, vehicle_id: int) -> bytes | None:
+        vehicle_id = _validate_vehicle_id(vehicle_id)
+        self.initialize()
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT image_jpeg FROM gallery_vehicle_snapshot WHERE vehicle_id = ?",
+                (vehicle_id,),
+            ).fetchone()
+            return None if row is None else bytes(row[0])
+        finally:
+            connection.close()
+
+    def load_snapshots(self) -> dict[int, bytes]:
+        self.initialize()
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT vehicle_id, image_jpeg FROM gallery_vehicle_snapshot"
+            ).fetchall()
+            return {int(vehicle_id): bytes(image_jpeg) for vehicle_id, image_jpeg in rows}
+        finally:
+            connection.close()
 
     def clear(self) -> None:
         self.initialize()

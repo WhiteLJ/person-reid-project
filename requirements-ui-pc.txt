@@ -1,0 +1,3 @@
+# Optional desktop UI dependency. Core/Atlas requirements.txt intentionally
+# remains unchanged. Qt 5.15 API is used by the formal MVP-10 frontend.
+PyQt5>=5.15,<6

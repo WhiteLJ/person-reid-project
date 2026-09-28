@@ -226,6 +226,14 @@ class VehicleGalleryRepositoryTests(unittest.TestCase):
         self.assertNotIn("gallery_person", tables)
         self.assertIn("gallery_vehicle", tables)
 
+    def test_snapshot_round_trip_and_cascade(self) -> None:
+        self.repository.save_vehicle(_vehicle(1))
+        snapshot = b"jpeg-bytes"
+        self.repository.save_snapshot(1, snapshot)
+        self.assertEqual(self.repository.load_snapshot(1), snapshot)
+        self.repository.delete_vehicle(1)
+        self.assertIsNone(self.repository.load_snapshot(1))
+
 
 if __name__ == "__main__":
     unittest.main()
