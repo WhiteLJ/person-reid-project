@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,15 @@ class MultiClassTrackingConfig:
 @dataclass(frozen=True)
 class SelectionConfig:
     min_iou: float
+
+
+@dataclass(frozen=True)
+class SessionTargetConfig:
+    """Runtime retention policy for LOST SessionTargets."""
+
+    # Zero preserves the historical behavior: LOST targets remain available
+    # for Recovery indefinitely.
+    lost_retention_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -263,6 +273,7 @@ class AppConfig:
     tracking: TrackingConfig
     multiclass_tracking: MultiClassTrackingConfig
     selection: SelectionConfig
+    session_target: SessionTargetConfig
     reid: ReIDConfig
     vehicle_reid: VehicleReIDConfig
     vehicle_recovery: VehicleRecoveryConfig
@@ -347,6 +358,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     tracking = _section(raw, "tracking")
     multiclass_tracking = _section(raw, "multiclass_tracking")
     selection = _section(raw, "selection")
+    session_target = _section(raw, "session_target")
     reid = _section(raw, "reid")
     vehicle_reid = _section(raw, "vehicle_reid")
     vehicle_recovery = _section(raw, "vehicle_recovery")
@@ -422,6 +434,14 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     min_iou = float(selection.get("min_iou", 0.20))
     if not 0.0 < min_iou <= 1.0:
         raise ValueError("selection.min_iou must be greater than 0 and at most 1")
+
+    lost_retention_seconds = float(
+        session_target.get("lost_retention_seconds", 0.0)
+    )
+    if not math.isfinite(lost_retention_seconds) or lost_retention_seconds < 0.0:
+        raise ValueError(
+            "session_target.lost_retention_seconds must be a finite non-negative value"
+        )
 
     reid_weight_value = reid.get(
         "weight", "weights/reid/osnet_x0_25_msmt17.pth"
@@ -950,6 +970,9 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             vehicle_class_ids=vehicle_class_ids,
         ),
         selection=SelectionConfig(min_iou=min_iou),
+        session_target=SessionTargetConfig(
+            lost_retention_seconds=lost_retention_seconds,
+        ),
         reid=ReIDConfig(
             model_name=reid_model_name,
             weight=reid_weight_path,

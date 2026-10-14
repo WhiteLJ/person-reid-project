@@ -5,6 +5,7 @@ import unittest
 import numpy as np
 
 from src.models import TargetState, Track
+from src.gallery import TargetGallery
 from src.target_manager import TargetManager
 
 
@@ -88,6 +89,77 @@ class TargetManagerTests(unittest.TestCase):
         self.assertIsNone(target.current_track_id)
         self.assertEqual(target.last_track_id, 7)
         self.assertEqual(manager.selected_track_ids, set())
+
+    def test_active_target_never_expires(self) -> None:
+        manager = TargetManager()
+        target = manager.select(self.track_a, _embedding(1, 0))
+
+        self.assertEqual(manager.expire_lost_targets(1.0), ())
+        self.assertIn(target.target_id, manager.targets)
+        self.assertEqual(target.state, TargetState.ACTIVE)
+
+    def test_lost_target_before_ttl_remains_recoverable(self) -> None:
+        manager = TargetManager()
+        target = manager.select(self.track_a, _embedding(1, 0))
+        manager.update_visibility([], lost_grace_frames=1, frame_index=1)
+
+        lost_at = manager.lost_since(target.target_id)
+        self.assertIsNotNone(lost_at)
+        assert lost_at is not None
+        self.assertEqual(
+            manager.expire_lost_targets(10.0, now=lost_at + 9.0),
+            (),
+        )
+        manager.recover(
+            target_id=target.target_id,
+            track=self.track_b,
+            embedding=_embedding(1, 0),
+            similarity=1.0,
+            frame_index=2,
+            max_reference_embeddings=8,
+            reference_update_threshold=0.80,
+        )
+
+        self.assertEqual(target.state, TargetState.ACTIVE)
+        self.assertEqual(target.current_track_id, self.track_b.track_id)
+
+    def test_lost_target_after_ttl_is_removed(self) -> None:
+        manager = TargetManager()
+        target = manager.select(self.track_a, _embedding(1, 0))
+        manager.update_visibility([], lost_grace_frames=1, frame_index=1)
+        lost_at = manager.lost_since(target.target_id)
+        assert lost_at is not None
+
+        expired = manager.expire_lost_targets(5.0, now=lost_at + 5.0)
+
+        self.assertEqual(tuple(item.target_id for item in expired), (target.target_id,))
+        self.assertNotIn(target.target_id, manager.targets)
+        self.assertIsNone(manager.lost_since(target.target_id))
+
+    def test_expiring_target_does_not_delete_gallery_identity(self) -> None:
+        manager = TargetManager()
+        target = manager.select(self.track_a, _embedding(1, 0))
+        gallery = TargetGallery()
+        person = gallery.enroll(target)
+        gallery.attach_session_target(target.target_id, person.person_id)
+        manager.update_visibility([], lost_grace_frames=1, frame_index=1)
+        lost_at = manager.lost_since(target.target_id)
+        assert lost_at is not None
+
+        manager.expire_lost_targets(1.0, now=lost_at + 1.0)
+        gallery.detach_session_target(target.target_id)
+
+        self.assertIsNotNone(gallery.get(person.person_id))
+        self.assertIsNone(gallery.person_for_session_target(target.target_id))
+
+    def test_zero_retention_preserves_permanent_lost_behavior(self) -> None:
+        manager = TargetManager()
+        target = manager.select(self.track_a, _embedding(1, 0))
+        manager.update_visibility([], lost_grace_frames=1, frame_index=1)
+
+        self.assertEqual(manager.expire_lost_targets(0.0), ())
+        self.assertIn(target.target_id, manager.targets)
+        self.assertEqual(target.state, TargetState.LOST)
 
     def test_short_loss_returns_to_active_without_rebinding(self) -> None:
         manager = TargetManager()

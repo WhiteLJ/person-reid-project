@@ -38,6 +38,29 @@ from ui.qt.models import GalleryRecordDTO, RuntimeFrame, SelectionResultDTO
 LOGGER = getLogger(__name__)
 
 
+class _FrozenTargetView:
+    """Render-only selection snapshot for a frozen edit frame."""
+
+    def __init__(self) -> None:
+        self._targets_by_track: dict[int, object] = {}
+
+    @property
+    def selected_track_ids(self) -> frozenset[int]:
+        return frozenset(self._targets_by_track)
+
+    def target_for_track(self, track_id: int) -> object | None:
+        return self._targets_by_track.get(track_id)
+
+    def bind(self, track_id: int, target: object) -> None:
+        self._targets_by_track[int(track_id)] = target
+
+    def unbind(self, track_id: int) -> None:
+        self._targets_by_track.pop(int(track_id), None)
+
+    def clear(self) -> None:
+        self._targets_by_track.clear()
+
+
 class RuntimeWorker(QObject):
     """Own all mutable runtime/business objects outside the GUI thread."""
 
@@ -95,7 +118,12 @@ class RuntimeWorker(QObject):
         self._editing = False
         self._edit_mode: str | None = None
         self._frozen_frame: np.ndarray | None = None
+        self._frozen_frame_index: int | None = None
         self._frozen_tracks: tuple[Track, ...] = ()
+        self._frozen_person_view = _FrozenTargetView()
+        self._frozen_vehicle_view = _FrozenTargetView()
+        self._frozen_person_gallery_labels_by_track: dict[int, str] = {}
+        self._frozen_vehicle_gallery_labels_by_target: dict[int, str] = {}
         self._pending_selection: tuple[str, Any, Track, np.ndarray] | None = None
         self._closing = False
 
@@ -311,6 +339,12 @@ class RuntimeWorker(QObject):
             if target is not None:
                 self._vehicle_service.mark_auto_recognized(target.target_id)
 
+        # Recovery and recognition get the current frame first.  TTL cleanup
+        # is deliberately last in the business pipeline so a LOST target can
+        # still be recovered on the same frame that reaches its retention
+        # deadline.
+        self._expire_lost_session_targets()
+
         annotated = self._render(frame)
         elapsed = perf_counter() - frame_started
         self._frame_times.append(elapsed)
@@ -321,6 +355,59 @@ class RuntimeWorker(QObject):
         # live frames.
         if not self._editing:
             self.frame_ready.emit(self._runtime_frame(annotated))
+
+    def _expire_lost_session_targets(self) -> None:
+        """Remove expired LOST targets and clear all runtime-only state."""
+
+        retention_seconds = self.config.session_target.lost_retention_seconds
+        if retention_seconds <= 0.0:
+            return
+
+        domains = (
+            (
+                "person",
+                self._person_manager,
+                self._person_service,
+                self._person_recovery,
+                self._person_recognition,
+            ),
+            (
+                "vehicle",
+                self._vehicle_manager,
+                self._vehicle_service,
+                self._vehicle_recovery,
+                self._vehicle_recognition,
+            ),
+        )
+        for domain, manager, service, recovery, recognition in domains:
+            if manager is None or service is None or recovery is None or recognition is None:
+                continue
+            expired = manager.expire_lost_targets(retention_seconds)
+            if not expired:
+                continue
+
+            target_ids = tuple(target.target_id for target in expired)
+            old_track_ids = tuple(
+                target.last_track_id
+                for target in expired
+                if target.last_track_id is not None
+            )
+            for target_id in target_ids:
+                # This detaches only the process-local Gallery association;
+                # Gallery identities and SQLite records remain intact.
+                service.detach_session_target(target_id)
+            recovery.forget_targets(target_ids)
+            recognition.forget_tracks(old_track_ids)
+            recognition.notify_gallery_changed()
+            for target in expired:
+                LOGGER.info(
+                    "SESSION_TARGET_EXPIRED domain=%s target_id=%d "
+                    "last_track_id=%s retention_seconds=%.3f",
+                    domain,
+                    target.target_id,
+                    target.last_track_id,
+                    retention_seconds,
+                )
 
     def _source_is_camera(self) -> bool:
         return bool(getattr(self._source, "is_camera", False))
@@ -364,6 +451,10 @@ class RuntimeWorker(QObject):
         *,
         person_tracks: tuple[Track, ...] | None = None,
         vehicle_tracks: tuple[Track, ...] | None = None,
+        person_target_manager: object | None = None,
+        vehicle_target_manager: object | None = None,
+        person_gallery_labels_by_track: dict[int, str] | None = None,
+        vehicle_gallery_labels_by_target: dict[int, str] | None = None,
     ) -> np.ndarray:
         render_person_tracks = (
             self._person_tracks if person_tracks is None else person_tracks
@@ -371,26 +462,50 @@ class RuntimeWorker(QObject):
         render_vehicle_tracks = (
             self._vehicle_tracks if vehicle_tracks is None else vehicle_tracks
         )
-        person_labels = {}
-        for target in self._person_manager.active_targets():
-            if target.current_track_id is None:
-                continue
-            person = self._person_gallery.person_for_session_target(target.target_id)
-            if person is not None:
-                person_labels[target.current_track_id] = format_person_id(person.person_id)
-        vehicle_labels = {}
-        for target in self._vehicle_manager.active_targets():
-            if target.current_track_id is None:
-                continue
-            vehicle = self._vehicle_gallery.vehicle_for_session_target(target.target_id)
-            if vehicle is not None:
-                vehicle_labels[target.target_id] = format_vehicle_id(vehicle.vehicle_id)
+        render_person_manager = (
+            self._person_manager
+            if person_target_manager is None
+            else person_target_manager
+        )
+        render_vehicle_manager = (
+            self._vehicle_manager
+            if vehicle_target_manager is None
+            else vehicle_target_manager
+        )
+        if person_gallery_labels_by_track is None:
+            person_labels = {}
+            for target in self._person_manager.active_targets():
+                if target.current_track_id is None:
+                    continue
+                person = self._person_gallery.person_for_session_target(
+                    target.target_id
+                )
+                if person is not None:
+                    person_labels[target.current_track_id] = format_person_id(
+                        person.person_id
+                    )
+        else:
+            person_labels = dict(person_gallery_labels_by_track)
+        if vehicle_gallery_labels_by_target is None:
+            vehicle_labels = {}
+            for target in self._vehicle_manager.active_targets():
+                if target.current_track_id is None:
+                    continue
+                vehicle = self._vehicle_gallery.vehicle_for_session_target(
+                    target.target_id
+                )
+                if vehicle is not None:
+                    vehicle_labels[target.target_id] = format_vehicle_id(
+                        vehicle.vehicle_id
+                    )
+        else:
+            vehicle_labels = dict(vehicle_gallery_labels_by_target)
         return draw_multiclass_tracks(
             frame,
             render_person_tracks,
             render_vehicle_tracks,
-            self._person_manager,
-            self._vehicle_manager,
+            render_person_manager,
+            render_vehicle_manager,
             class_name=self._tracking_pipeline.class_name,
             show_class_name=self.config.ui.show_class_name,
             show_track_id=self.config.tracking.show_track_id,
@@ -432,6 +547,11 @@ class RuntimeWorker(QObject):
         self._editing = True
         self._edit_mode = mode
         self._frozen_frame = self._current_frame.copy()
+        self._frozen_frame_index = self._frame_index
+        self._frozen_person_view = _FrozenTargetView()
+        self._frozen_vehicle_view = _FrozenTargetView()
+        self._frozen_person_gallery_labels_by_track = {}
+        self._frozen_vehicle_gallery_labels_by_target = {}
         visible = (*self._person_tracks, *self._vehicle_tracks)
         if mode == "remove":
             visible = tuple(
@@ -445,6 +565,29 @@ class RuntimeWorker(QObject):
                 is not None
             )
         self._frozen_tracks = tuple(visible)
+        for frozen_track in self._frozen_tracks:
+            if frozen_track.class_id == self.config.model.person_class_id:
+                target = self._person_manager.target_for_track(frozen_track.track_id)
+                if target is not None:
+                    self._frozen_person_view.bind(frozen_track.track_id, target)
+                    person = self._person_gallery.person_for_session_target(
+                        target.target_id
+                    )
+                    if person is not None:
+                        self._frozen_person_gallery_labels_by_track[
+                            frozen_track.track_id
+                        ] = format_person_id(person.person_id)
+            elif frozen_track.class_id in self._vehicle_class_ids:
+                target = self._vehicle_manager.target_for_track(frozen_track.track_id)
+                if target is not None:
+                    self._frozen_vehicle_view.bind(frozen_track.track_id, target)
+                    vehicle = self._vehicle_gallery.vehicle_for_session_target(
+                        target.target_id
+                    )
+                    if vehicle is not None:
+                        self._frozen_vehicle_gallery_labels_by_target[
+                            target.target_id
+                        ] = format_vehicle_id(vehicle.vehicle_id)
         self.status_message.emit("\u6846\u9009\u6a21\u5f0f" if mode == "select" else "\u64a4\u9500\u6a21\u5f0f")
         self.edit_started.emit(mode)
         self._emit_frozen_frame()
@@ -454,7 +597,12 @@ class RuntimeWorker(QObject):
         self._editing = False
         self._edit_mode = None
         self._frozen_frame = None
+        self._frozen_frame_index = None
         self._frozen_tracks = ()
+        self._frozen_person_view.clear()
+        self._frozen_vehicle_view.clear()
+        self._frozen_person_gallery_labels_by_track.clear()
+        self._frozen_vehicle_gallery_labels_by_target.clear()
         self._pending_selection = None
         self.status_message.emit("\u8fd0\u884c\u4e2d")
         self.edit_finished.emit()
@@ -483,7 +631,8 @@ class RuntimeWorker(QObject):
             return
         manager = self._person_manager if is_person else self._vehicle_manager
         if self._edit_mode == "remove":
-            target = manager.target_for_track(track.track_id)
+            frozen_view = self._frozen_person_view if is_person else self._frozen_vehicle_view
+            target = frozen_view.target_for_track(track.track_id)
             if target is None:
                 self.selection_failed.emit("只能撤销当前SessionTarget")
                 return
@@ -493,7 +642,13 @@ class RuntimeWorker(QObject):
             else:
                 self._vehicle_service.detach_session_target(target.target_id)
                 self._vehicle_recognition.notify_gallery_changed()
-            manager.deselect(track)
+            manager.remove_by_target_id(target.target_id)
+            if is_person:
+                self._frozen_person_view.unbind(track.track_id)
+                self._frozen_person_gallery_labels_by_track.pop(track.track_id, None)
+            else:
+                self._frozen_vehicle_view.unbind(track.track_id)
+                self._frozen_vehicle_gallery_labels_by_target.pop(target.target_id, None)
             self.status_message.emit("目标已撤销")
             self._emit_frozen_frame()
             return
@@ -514,6 +669,17 @@ class RuntimeWorker(QObject):
         if target is None:
             self.selection_failed.emit("\u76ee\u6807\u8d28\u91cf\u4e0d\u8db3\uff0c\u8bf7\u91cd\u65b0\u6846\u9009")
             return
+        if is_person:
+            self._frozen_person_view.bind(track.track_id, target)
+        else:
+            self._frozen_vehicle_view.bind(track.track_id, target)
+        LOGGER.info(
+            "QT_TARGET_SELECTED snapshot_frame=%s created_frame=%d target_id=%d track_id=%d",
+            self._frozen_frame_index,
+            self._frame_index,
+            target.target_id,
+            track.track_id,
+        )
         domain = "person" if is_person else "vehicle"
         self._pending_selection = (domain, target, track, self._frozen_frame.copy())
         self.selection_ready.emit(
@@ -535,6 +701,10 @@ class RuntimeWorker(QObject):
                 identity = self._vehicle_service.enroll_with_snapshot(target, frozen, track.bbox)
                 display_id = format_vehicle_id(identity.vehicle_id)
                 self._vehicle_recognition.notify_gallery_changed()
+            if domain == "person":
+                self._frozen_person_gallery_labels_by_track[track.track_id] = display_id
+            else:
+                self._frozen_vehicle_gallery_labels_by_target[target.target_id] = display_id
             self.status_message.emit(f"已保存 {display_id}")
             self._pending_selection = None
             self._publish_gallery_rows()
@@ -560,6 +730,10 @@ class RuntimeWorker(QObject):
         self._vehicle_service.detach_all_session_targets(vehicle_ids)
         self._vehicle_manager.clear()
         self._vehicle_recognition.notify_gallery_changed()
+        self._frozen_person_view.clear()
+        self._frozen_vehicle_view.clear()
+        self._frozen_person_gallery_labels_by_track.clear()
+        self._frozen_vehicle_gallery_labels_by_target.clear()
         self.status_message.emit("SessionTarget 已清空")
         self._emit_frozen_frame()
 
@@ -610,6 +784,10 @@ class RuntimeWorker(QObject):
                 self._frozen_frame,
                 person_tracks=person_tracks,
                 vehicle_tracks=vehicle_tracks,
+                person_target_manager=self._frozen_person_view,
+                vehicle_target_manager=self._frozen_vehicle_view,
+                person_gallery_labels_by_track=self._frozen_person_gallery_labels_by_track,
+                vehicle_gallery_labels_by_target=self._frozen_vehicle_gallery_labels_by_target,
             )
             self._last_annotated = annotated
             self.frame_ready.emit(self._runtime_frame(annotated))

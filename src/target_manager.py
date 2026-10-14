@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Sequence
 from logging import getLogger
+from time import monotonic
 
 import numpy as np
 
@@ -25,8 +26,14 @@ class TargetManager:
     def __init__(self) -> None:
         self.targets: dict[int, SessionTarget] = {}
         self._next_target_id = 1
+        self._lost_since: dict[int, float] = {}
         self.target_lost_count = 0
         self.target_recovered_count = 0
+
+    def lost_since(self, target_id: int) -> float | None:
+        """Return the monotonic timestamp at which a target became LOST."""
+
+        return self._lost_since.get(target_id)
 
     @property
     def selected_track_ids(self) -> set[int]:
@@ -68,6 +75,7 @@ class TargetManager:
             last_reference_frame=frame_index,
         )
         self.targets[target.target_id] = target
+        self._lost_since.pop(target.target_id, None)
         self._next_target_id += 1
         return target
 
@@ -130,6 +138,7 @@ class TargetManager:
             last_reference_frame=frame_index,
         )
         self.targets[target.target_id] = target
+        self._lost_since.pop(target.target_id, None)
         self._next_target_id += 1
         return target
 
@@ -204,6 +213,7 @@ class TargetManager:
         target.state = TargetState.LOST
         target.missing_frames = 0
         target.last_recovery_frame = None
+        self._lost_since[target.target_id] = monotonic()
         self.target_lost_count += 1
         return target
 
@@ -213,13 +223,61 @@ class TargetManager:
         target = self.target_for_track(track_id)
         if target is None:
             return False
-        del self.targets[target.target_id]
+        return self.remove_by_target_id(target.target_id)
+
+    def remove_by_target_id(self, target_id: int) -> bool:
+        """Remove one runtime SessionTarget without touching Gallery data."""
+
+        if target_id not in self.targets:
+            return False
+        del self.targets[target_id]
+        self._lost_since.pop(target_id, None)
         return True
+
+    def expire_lost_targets(
+        self,
+        lost_retention_seconds: float,
+        *,
+        now: float | None = None,
+    ) -> tuple[SessionTarget, ...]:
+        """Remove LOST targets whose monotonic retention period has elapsed.
+
+        A retention of zero deliberately performs no cleanup, preserving the
+        historical permanent-LOST behavior.  The optional ``now`` argument is
+        only for deterministic tests and diagnostics; production callers use
+        the monotonic clock automatically.
+        """
+
+        if not np.isfinite(lost_retention_seconds) or lost_retention_seconds < 0.0:
+            raise ValueError("lost_retention_seconds must be finite and non-negative")
+        if lost_retention_seconds == 0.0:
+            return ()
+
+        current_time = monotonic() if now is None else float(now)
+        if not np.isfinite(current_time):
+            raise ValueError("now must be finite")
+
+        expired: list[SessionTarget] = []
+        for target in tuple(self.lost_targets()):
+            lost_at = self._lost_since.get(target.target_id)
+            if lost_at is None:
+                # A target can only reach LOST through this manager, but keep
+                # the cleanup safe if an older caller constructed state first.
+                self._lost_since[target.target_id] = current_time
+                continue
+            if current_time - lost_at < lost_retention_seconds:
+                continue
+            expired.append(target)
+
+        for target in expired:
+            self.remove_by_target_id(target.target_id)
+        return tuple(expired)
 
     def clear(self) -> None:
         """Delete all session targets and their in-memory embeddings."""
 
         self.targets.clear()
+        self._lost_since.clear()
 
     def is_selected(self, track_id: int) -> bool:
         return track_id in self.selected_track_ids
@@ -306,6 +364,7 @@ class TargetManager:
             target.current_track_id = None
             target.state = TargetState.LOST
             target.last_recovery_frame = None
+            self._lost_since[target.target_id] = monotonic()
             self.target_lost_count += 1
             LOGGER.info(
                 "TARGET_LOST frame=%d target_id=%d old_track_id=%d missing_frames=%d",
@@ -432,6 +491,7 @@ class TargetManager:
         target.state = TargetState.ACTIVE
         target.missing_frames = 0
         target.last_recovery_frame = frame_index
+        self._lost_since.pop(target_id, None)
         self.target_recovered_count += 1
         if reference_support_similarity is None:
             LOGGER.info(

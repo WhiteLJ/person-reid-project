@@ -332,6 +332,33 @@ class GalleryRecognitionCoordinator:
 
         return dict(self._retry_until_frame)
 
+    def forget_tracks(self, track_ids: Collection[int]) -> None:
+        """Clear recognition state for runtime tracks removed with a target.
+
+        Recognition state is process-local and track-scoped.  Removing a
+        SessionTarget must not leave its pending confirmation or retry
+        cooldown attached to a later tracker identity that reuses the number.
+        """
+
+        removed_ids = {int(track_id) for track_id in track_ids}
+        if not removed_ids:
+            return
+        for track_id in removed_ids:
+            self._track_ages.pop(track_id, None)
+            self._last_seen_frame.pop(track_id, None)
+            self._retry_until_frame.pop(track_id, None)
+        for key in list(self._pending):
+            if key[1] in removed_ids:
+                del self._pending[key]
+
+        sweep = self._recognition_sweep
+        if sweep is not None and any(
+            track_id in removed_ids for track_id in sweep.candidate_track_ids
+        ):
+            # The snapshot contains a removed runtime identity.  Discard the
+            # whole attempt rather than matching a stale entry later.
+            self._recognition_sweep = None
+
     def invalidate_retry_state(self) -> None:
         """Allow all visible Tracks to be reconsidered after Gallery changes."""
 

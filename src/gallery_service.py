@@ -268,6 +268,15 @@ class GalleryPersistenceService:
 
         return sum(self.enrich_reference_update(event) for event in events)
 
+    def detach_session_target(self, target_id: int) -> bool:
+        """Detach a runtime target while preserving Person Gallery data."""
+
+        detached = self.gallery.detach_session_target(target_id)
+        self._explicitly_enrolled_target_ids.discard(target_id)
+        self._post_recovery_blocked.discard(target_id)
+        self._stable_active_frames.pop(target_id, None)
+        return detached
+
     def _mark_explicit_enrollment(self, target_id: int) -> None:
         if target_id in self._explicitly_enrolled_target_ids:
             return

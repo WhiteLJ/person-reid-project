@@ -41,6 +41,10 @@ multiclass_tracking:
 selection:
   min_iou: 0.20
 
+session_target:
+  # 0 keeps LOST SessionTargets indefinitely; positive values enable TTL cleanup.
+  lost_retention_seconds: 0
+
 reid:
   model_name: "osnet_x0_25"
   # Not loaded by the Ascend backend; retained for config schema parity.

@@ -367,6 +367,33 @@ class TargetRecoveryCoordinator:
     def track_ages(self) -> dict[int, int]:
         return dict(self._track_ages)
 
+    def forget_targets(self, target_ids: Collection[int]) -> None:
+        """Drop lifecycle state for SessionTargets removed by the manager.
+
+        This only clears pending bookkeeping; it does not alter recovery
+        scoring, thresholds, or the matching algorithm.
+        """
+
+        removed_ids = {int(target_id) for target_id in target_ids}
+        if not removed_ids:
+            return
+        for key in list(self._pending):
+            if key[0] in removed_ids:
+                del self._pending[key]
+
+        sweep = self._recovery_sweep
+        if sweep is None:
+            return
+        remaining_target_ids = tuple(
+            target_id
+            for target_id in sweep.target_ids
+            if target_id not in removed_ids
+        )
+        if not remaining_target_ids:
+            self._recovery_sweep = None
+        else:
+            sweep.target_ids = remaining_target_ids
+
     def drain_reference_updates(self) -> tuple[ReferenceUpdateEvent, ...]:
         """Consume accepted reference events exactly once."""
 
