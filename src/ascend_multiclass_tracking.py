@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Mapping, Sequence
 from time import perf_counter
 from typing import Any
@@ -14,6 +15,9 @@ from .ascend_tracker import AscendBotSortTracker
 from .config import AppConfig
 from .models import Detection, Track
 from .pc_multiclass_tracking import MultiClassTrackingResult, MultiClassTrackingStats
+
+
+_TRACK_DIAGNOSTIC_WINDOW = 4096
 
 
 _DEFAULT_CLASS_NAMES = {
@@ -78,8 +82,9 @@ class AscendMultiClassTrackingPipeline:
         }
         self.frame_count = 0
         self.yolo_inference_count = 0
-        self._person_track_ids: set[int] = set()
-        self._vehicle_track_ids: set[int] = set()
+        # Diagnostics only: keep a bounded recent window for long camera runs.
+        self._person_track_ids: deque[int] = deque(maxlen=_TRACK_DIAGNOSTIC_WINDOW)
+        self._vehicle_track_ids: deque[int] = deque(maxlen=_TRACK_DIAGNOSTIC_WINDOW)
         self.last_detections: list[Detection] = []
         self.yolo_ms_total = 0.0
         self.person_tracker_ms_total = 0.0
@@ -112,8 +117,8 @@ class AscendMultiClassTrackingPipeline:
         vehicle_tracks = self.vehicle_tracker.update(vehicle_detections, frame)
         self.vehicle_tracker_ms_total += (perf_counter() - vehicle_started) * 1000.0
 
-        self._person_track_ids.update(track.track_id for track in person_tracks)
-        self._vehicle_track_ids.update(track.track_id for track in vehicle_tracks)
+        self._person_track_ids.extend(track.track_id for track in person_tracks)
+        self._vehicle_track_ids.extend(track.track_id for track in vehicle_tracks)
         return MultiClassTrackingResult(
             person_tracks=person_tracks,
             vehicle_tracks=vehicle_tracks,
@@ -123,8 +128,8 @@ class AscendMultiClassTrackingPipeline:
         return MultiClassTrackingStats(
             frames=self.frame_count,
             yolo_inference_count=self.yolo_inference_count,
-            unique_person_tracks=len(self._person_track_ids),
-            unique_vehicle_tracks=len(self._vehicle_track_ids),
+            unique_person_tracks=len(set(self._person_track_ids)),
+            unique_vehicle_tracks=len(set(self._vehicle_track_ids)),
             yolo_ms_total=self.yolo_ms_total,
             person_tracker_ms_total=self.person_tracker_ms_total,
             vehicle_tracker_ms_total=self.vehicle_tracker_ms_total,

@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QAbstractTableModel, QModelIndex, Qt, pyqtSignal
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QAbstractItemView, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget
+from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, pyqtSignal
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtWidgets import QAbstractItemView, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget
 
 from .models import GalleryRecordDTO
 
 
 class ThumbnailDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index) -> None:
-        pixmap = index.data(Qt.DecorationRole)
+        pixmap = index.data(Qt.ItemDataRole.DecorationRole)
         if isinstance(pixmap, QPixmap) and not pixmap.isNull():
-            scaled = pixmap.scaled(option.rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            scaled = pixmap.scaled(
+                option.rect.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
             painter.drawPixmap(option.rect.x() + (option.rect.width() - scaled.width()) // 2, option.rect.y() + (option.rect.height() - scaled.height()) // 2, scaled)
             return
         super().paint(painter, option, index)
@@ -40,29 +44,29 @@ class GalleryTableModel(QAbstractTableModel):
     def columnCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else 3
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             return self.HEADERS[section]
         return None
 
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
         record = self.record_at(index.row())
         if record is None:
             return None
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             if index.column() == 0:
                 return record.display_id
             if index.column() == 2:
                 return "\u5220\u9664"
             return "\u65e0\u5feb\u7167" if record.snapshot_jpeg is None else ""
-        if role == Qt.DecorationRole and index.column() == 1 and record.snapshot_jpeg:
+        if role == Qt.ItemDataRole.DecorationRole and index.column() == 1 and record.snapshot_jpeg:
             pixmap = QPixmap()
             pixmap.loadFromData(record.snapshot_jpeg, "JPG")
             return pixmap
-        if role == Qt.TextAlignmentRole and index.column() in {0, 1, 2}:
-            return int(Qt.AlignCenter)
+        if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in {0, 1, 2}:
+            return Qt.AlignmentFlag.AlignCenter
         return None
 
 
@@ -72,14 +76,21 @@ class SnapshotPreviewDialog(QDialog):
         self.setWindowTitle(record.display_id)
         layout = QVBoxLayout(self)
         image = QLabel("\u65e0\u5feb\u7167")
-        image.setAlignment(Qt.AlignCenter)
+        image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         if record.snapshot_jpeg:
             pixmap = QPixmap()
             pixmap.loadFromData(record.snapshot_jpeg, "JPG")
             if not pixmap.isNull():
-                image.setPixmap(pixmap.scaled(800, 600, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                image.setPixmap(
+                    pixmap.scaled(
+                        800,
+                        600,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
         layout.addWidget(image)
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
@@ -107,21 +118,21 @@ class GalleryPage(QWidget):
         domain_buttons.setSpacing(10)
         domain_buttons.addWidget(self.people_button)
         domain_buttons.addWidget(self.vehicle_button)
-        toolbar.addLayout(domain_buttons, 0, 0, alignment=Qt.AlignLeft)
-        toolbar.addWidget(self.batch_button, 0, 1, alignment=Qt.AlignCenter)
-        toolbar.addWidget(self.back_button, 0, 2, alignment=Qt.AlignRight)
+        toolbar.addLayout(domain_buttons, 0, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        toolbar.addWidget(self.batch_button, 0, 1, alignment=Qt.AlignmentFlag.AlignCenter)
+        toolbar.addWidget(self.back_button, 0, 2, alignment=Qt.AlignmentFlag.AlignRight)
         root.addLayout(toolbar)
         self.table = QTableView()
         self.model = GalleryTableModel(self)
         self.table.setModel(self.model)
         self.table.setItemDelegateForColumn(1, ThumbnailDelegate(self.table))
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setAlternatingRowColors(True)
         header = self.table.horizontalHeader()
-        header.setDefaultAlignment(Qt.AlignCenter)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         for column in range(3):
-            header.setSectionResizeMode(column, QHeaderView.Stretch)
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setDefaultSectionSize(150)
         root.addWidget(self.table, 1)
         self.people_button.clicked.connect(lambda: self.set_domain("person"))
@@ -148,7 +159,11 @@ class GalleryPage(QWidget):
 
     def _toggle_batch(self) -> None:
         self._batch_mode = not self._batch_mode
-        self.table.setSelectionMode(QAbstractItemView.MultiSelection if self._batch_mode else QAbstractItemView.SingleSelection)
+        self.table.setSelectionMode(
+            QAbstractItemView.SelectionMode.MultiSelection
+            if self._batch_mode
+            else QAbstractItemView.SelectionMode.SingleSelection
+        )
         self.batch_button.setText("\u786e\u8ba4\u6279\u91cf\u5220\u9664" if self._batch_mode else "\u6279\u91cf\u7ba1\u7406")
         if self._batch_mode:
             return
@@ -167,4 +182,4 @@ class GalleryPage(QWidget):
         if index.column() == 1:
             record = self.model.record_at(index.row())
             if record is not None:
-                SnapshotPreviewDialog(record, self).exec_()
+                SnapshotPreviewDialog(record, self).exec()

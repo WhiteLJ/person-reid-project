@@ -6,9 +6,9 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import QPoint, QRectF, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QImage, QPainter, QPen
-from PyQt5.QtWidgets import QWidget
+from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QImage, QPainter, QPen
+from PyQt6.QtWidgets import QWidget
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,7 @@ class VideoCanvas(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setMinimumSize(320, 240)
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._source_bgr: np.ndarray | None = None
         self._image: QImage | None = None
         self._transform: CanvasTransform | None = None
@@ -90,7 +90,7 @@ class VideoCanvas(QWidget):
             rgb.shape[1],
             rgb.shape[0],
             int(rgb.strides[0]),
-            QImage.Format_RGB888,
+            QImage.Format.Format_RGB888,
         ).copy()
         self._update_transform()
         self.update()
@@ -100,7 +100,7 @@ class VideoCanvas(QWidget):
         self._mode_text = mode_text
         self._drag_start = None
         self._drag_current = None
-        self.setFocus(Qt.OtherFocusReason)
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
         self.update()
 
     def end_edit(self) -> None:
@@ -149,12 +149,15 @@ class VideoCanvas(QWidget):
             painter.setPen(QPen(QColor(255, 215, 0), 2))
             painter.drawText(16, 28, self._mode_text)
             if self._drag_start is not None and self._drag_current is not None:
-                rect = QRectF(self._drag_start, self._drag_current).normalized()
+                rect = QRectF(
+                    QPointF(self._drag_start),
+                    QPointF(self._drag_current),
+                ).normalized()
                 painter.drawRect(rect)
         painter.end()
 
     def mousePressEvent(self, event) -> None:
-        if self._editing and event.button() == Qt.LeftButton:
+        if self._editing and event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = event.pos()
             self._drag_current = event.pos()
             self.update()
@@ -171,9 +174,12 @@ class VideoCanvas(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        if self._editing and event.button() == Qt.LeftButton and self._drag_start is not None:
+        if self._editing and event.button() == Qt.MouseButton.LeftButton and self._drag_start is not None:
             self._drag_current = event.pos()
-            rect = QRectF(self._drag_start, self._drag_current).normalized()
+            rect = QRectF(
+                QPointF(self._drag_start),
+                QPointF(self._drag_current),
+            ).normalized()
             transform = self._transform
             source = self._source_bgr
             self._drag_start = None

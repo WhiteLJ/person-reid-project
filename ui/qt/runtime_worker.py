@@ -6,17 +6,17 @@ from collections import deque
 from dataclasses import replace
 from logging import getLogger
 from pathlib import Path
-from time import perf_counter
+from time import monotonic, perf_counter
 from typing import Any
 
 import numpy as np
-from PyQt5.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 
 from src.active_identity_guard import ActiveIdentityGuard
 from src.ascend_runtime import AscendRuntime
 from src.config import AppConfig, parse_source
 from src.database import GalleryRepository
-from src.frame_source import FrameSource
+from src.frame_source import FrameSource, SourceReadStatus
 from src.gallery import TargetGallery, format_person_id
 from src.gallery_recognition import GalleryRecognitionCoordinator
 from src.gallery_service import GalleryPersistenceService
@@ -89,6 +89,8 @@ class RuntimeWorker(QObject):
         self._last_annotated: np.ndarray | None = None
         self._last_fps = 0.0
         self._frame_times: deque[float] = deque(maxlen=30)
+        self._next_source_reconnect_at = 0.0
+        self._source_failure_status_sent = False
         self._paused = False
         self._editing = False
         self._edit_mode: str | None = None
@@ -237,13 +239,30 @@ class RuntimeWorker(QObject):
 
     @pyqtSlot()
     def process_next_frame(self) -> None:
-        if self._closing or self._paused or self._editing or self._source is None:
+        if self._closing or self._paused or self._source is None:
             return
         frame_started = perf_counter()
-        frame = self._source.read()
+        try:
+            frame = self._source.read()
+        except RuntimeError:
+            if not self._source_is_camera():
+                raise
+            self._handle_camera_read_failure()
+            return
         if frame is None:
+            if self._source_is_camera():
+                self._handle_camera_read_failure()
+                return
+            LOGGER.info(
+                "SOURCE_END type=%s source=%s status=%s",
+                self._source_kind(),
+                self._source.source_label,
+                self._source_read_status(),
+            )
             self.request_shutdown()
             return
+        self._source_failure_status_sent = False
+        self._next_source_reconnect_at = 0.0
         self._frame_index += 1
         self._current_frame = frame.copy()
         result = self._tracking_pipeline.process(frame)
@@ -297,9 +316,61 @@ class RuntimeWorker(QObject):
         self._frame_times.append(elapsed)
         self._last_fps = 1.0 / (sum(self._frame_times) / len(self._frame_times)) if self._frame_times else 0.0
         self._last_annotated = annotated
-        self.frame_ready.emit(self._runtime_frame(annotated))
+        # The live pipeline continues during editing, but the GUI keeps the
+        # frozen frame used by the ROI session instead of replacing it with
+        # live frames.
+        if not self._editing:
+            self.frame_ready.emit(self._runtime_frame(annotated))
 
-    def _render(self, frame: np.ndarray) -> np.ndarray:
+    def _source_is_camera(self) -> bool:
+        return bool(getattr(self._source, "is_camera", False))
+
+    def _source_kind(self) -> str:
+        return str(getattr(self._source, "source_kind", "unknown"))
+
+    def _source_read_status(self) -> str:
+        return str(
+            getattr(self._source, "read_status", SourceReadStatus.TEMPORARY_FAILURE)
+        )
+
+    def _handle_camera_read_failure(self) -> None:
+        """Keep the worker alive and retry a failed USB-camera read."""
+
+        failures = int(getattr(self._source, "consecutive_read_failures", 0))
+        if not self._source_failure_status_sent:
+            LOGGER.warning(
+                "CAMERA_READ_WAIT source=%s failures=%d status=%s",
+                self._source.source_label,
+                failures,
+                self._source_read_status(),
+            )
+            self.status_message.emit("摄像头读取失败，等待恢复")
+            self._source_failure_status_sent = True
+
+        now = monotonic()
+        if now < self._next_source_reconnect_at:
+            return
+        self._next_source_reconnect_at = now + 1.0
+        reconnect = getattr(self._source, "reconnect", None)
+        if not callable(reconnect):
+            return
+        if reconnect():
+            LOGGER.info("CAMERA_RECOVERY_WAIT source=%s", self._source.source_label)
+            self.status_message.emit("摄像头已重新连接，等待新画面")
+
+    def _render(
+        self,
+        frame: np.ndarray,
+        *,
+        person_tracks: tuple[Track, ...] | None = None,
+        vehicle_tracks: tuple[Track, ...] | None = None,
+    ) -> np.ndarray:
+        render_person_tracks = (
+            self._person_tracks if person_tracks is None else person_tracks
+        )
+        render_vehicle_tracks = (
+            self._vehicle_tracks if vehicle_tracks is None else vehicle_tracks
+        )
         person_labels = {}
         for target in self._person_manager.active_targets():
             if target.current_track_id is None:
@@ -316,8 +387,8 @@ class RuntimeWorker(QObject):
                 vehicle_labels[target.target_id] = format_vehicle_id(vehicle.vehicle_id)
         return draw_multiclass_tracks(
             frame,
-            self._person_tracks,
-            self._vehicle_tracks,
+            render_person_tracks,
+            render_vehicle_tracks,
             self._person_manager,
             self._vehicle_manager,
             class_name=self._tracking_pipeline.class_name,
@@ -376,6 +447,7 @@ class RuntimeWorker(QObject):
         self._frozen_tracks = tuple(visible)
         self.status_message.emit("\u6846\u9009\u6a21\u5f0f" if mode == "select" else "\u64a4\u9500\u6a21\u5f0f")
         self.edit_started.emit(mode)
+        self._emit_frozen_frame()
 
     @pyqtSlot()
     def finish_edit(self) -> None:
@@ -427,7 +499,15 @@ class RuntimeWorker(QObject):
             return
 
         recovery = self._person_recovery if is_person else self._vehicle_recovery
-        domain_tracks = self._person_tracks if is_person else self._vehicle_tracks
+        domain_tracks = tuple(
+            frozen_track
+            for frozen_track in self._frozen_tracks
+            if (
+                frozen_track.class_id == self.config.model.person_class_id
+                if is_person
+                else frozen_track.class_id in self._vehicle_class_ids
+            )
+        )
         target = recovery.select_from_track(
             self._frozen_frame, track, self._frame_index, tracks=domain_tracks
         )
@@ -516,7 +596,21 @@ class RuntimeWorker(QObject):
 
     def _emit_frozen_frame(self) -> None:
         if self._frozen_frame is not None:
-            annotated = self._render(self._frozen_frame)
+            person_tracks = tuple(
+                track
+                for track in self._frozen_tracks
+                if track.class_id == self.config.model.person_class_id
+            )
+            vehicle_tracks = tuple(
+                track
+                for track in self._frozen_tracks
+                if track.class_id in self._vehicle_class_ids
+            )
+            annotated = self._render(
+                self._frozen_frame,
+                person_tracks=person_tracks,
+                vehicle_tracks=vehicle_tracks,
+            )
             self._last_annotated = annotated
             self.frame_ready.emit(self._runtime_frame(annotated))
 

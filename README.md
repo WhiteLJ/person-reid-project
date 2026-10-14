@@ -91,7 +91,7 @@ ui:
 
 ## MVP-10 Qt frontend
 
-The formal entry point is one full-screen Qt 5 Widgets window with a stacked
+The formal entry point is one full-screen PyQt6 Widgets window with a stacked
 Tracking page and Gallery Management page. The Tracking page has the four
 controls `Select`, `Remove`, `Gallery`, and `Quit`; the formal UI is mouse-only.
 Clicking `Select` or `Remove` freezes the current source frame and enters a
@@ -105,9 +105,8 @@ SQLite database without snapshot rows remains valid and displays a placeholder.
 The UI dependency is optional and is listed separately in
 `requirements-ui-pc.txt`; the core `requirements.txt` is unchanged.
 On a Windows PC install it with `python -m pip install -r requirements-ui-pc.txt`.
-On the Ubuntu 22.04 ARM64 Atlas image use the system package
-`sudo apt install python3-pyqt5` when Qt is available; the application never
-installs dependencies automatically.
+On the Ubuntu 22.04 ARM64 Atlas image, use the available PyQt6 environment
+package; the application never installs dependencies automatically.
 
 The formal frontend does not use OpenCV HighGUI. OpenCV remains used for image
 operations, preprocessing, detection, and tracking. Camera/RTSP/Hikvision input

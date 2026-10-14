@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QPoint, QThread, Qt, pyqtSignal
-from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
+from PyQt6.QtCore import QPoint, QThread, Qt, pyqtSignal
+from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
 
 from src.config import AppConfig
 from .gallery_page import GalleryPage
@@ -17,7 +17,7 @@ class TargetDecisionPopup(QFrame):
     discardRequested = pyqtSignal()
 
     def __init__(self, parent=None) -> None:
-        super().__init__(parent, Qt.Tool)
+        super().__init__(parent, Qt.WindowType.Tool)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         self.save_button = QPushButton("\u4fdd\u5b58\u76ee\u6807")
@@ -95,7 +95,10 @@ class QtMainWindow(QMainWindow):
         self.quit_button = QPushButton("\u9000\u51fa")
         for button in (self.select_button, self.remove_button, self.database_button, self.quit_button):
             button.setMinimumHeight(56)
-            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            button.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Fixed,
+            )
             toolbar.addWidget(button, 1)
         self.select_button.setCheckable(True)
         self.remove_button.setCheckable(True)
@@ -249,7 +252,12 @@ class QtMainWindow(QMainWindow):
             return
         title = "\u6279\u91cf\u5220\u9664" if batch else "\u5220\u9664\u76ee\u6807"
         text = f"\u786e\u8ba4\u5220\u9664 {len(values)} \u4e2a\u6301\u4e45\u8eab\u4efd\u5417?\nSessionTarget \u4e0d\u4f1a\u505c\u6b62\u8ddf\u8e2a."
-        if QMessageBox.question(self, title, text, QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+        if QMessageBox.question(
+            self,
+            title,
+            text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
             return
         self.deleteGalleryRequested.emit(domain, values, batch)
 
@@ -265,7 +273,12 @@ class QtMainWindow(QMainWindow):
         self._request_shutdown()
 
     def _confirm_quit(self) -> None:
-        if QMessageBox.question(self, "\u9000\u51fa", "\u786e\u8ba4\u9000\u51fa\u7a0b\u5e8f\u5417?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+        if QMessageBox.question(
+            self,
+            "\u9000\u51fa",
+            "\u786e\u8ba4\u9000\u51fa\u7a0b\u5e8f\u5417?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes:
             self._request_shutdown()
 
     def _request_shutdown(self) -> None:
@@ -283,7 +296,12 @@ class QtMainWindow(QMainWindow):
         if self._shutdown_requested:
             event.accept()
             return
-        if QMessageBox.question(self, "\u9000\u51fa", "\u786e\u8ba4\u9000\u51fa\u7a0b\u5e8f\u5417?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+        if QMessageBox.question(
+            self,
+            "\u9000\u51fa",
+            "\u786e\u8ba4\u9000\u51fa\u7a0b\u5e8f\u5417?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes:
             self._request_shutdown()
             event.accept()
         else:
@@ -297,4 +315,4 @@ def launch_qt(config: AppConfig, source_override: str | None = None) -> int:
     app = QApplication.instance() or QApplication([])
     window = QtMainWindow(config, source_override)
     window.showFullScreen()
-    return app.exec_()
+    return app.exec()

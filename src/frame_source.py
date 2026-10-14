@@ -11,6 +11,15 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 
+class SourceReadStatus:
+    """Status values for distinguishing EOF from a live-source read failure."""
+
+    NOT_OPEN = "not_open"
+    FRAME = "frame"
+    EOF = "eof"
+    TEMPORARY_FAILURE = "temporary_failure"
+
+
 @runtime_checkable
 class FrameSource(Protocol):
     """Minimal BGR frame source contract."""

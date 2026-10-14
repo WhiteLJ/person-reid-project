@@ -6,8 +6,8 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PyQt5.QtCore import QRectF
-    from PyQt5.QtWidgets import QAbstractItemView, QApplication, QMainWindow
+    from PyQt6.QtCore import QRectF, Qt
+    from PyQt6.QtWidgets import QAbstractItemView, QApplication, QMainWindow
     from src.config import load_config
     from ui.qt.gallery_page import GalleryTableModel
     from ui.qt.main_window import QtMainWindow
@@ -18,7 +18,7 @@ except ImportError:
     QT_AVAILABLE = False
 
 
-@unittest.skipUnless(QT_AVAILABLE, "PyQt5 is an optional UI dependency")
+@unittest.skipUnless(QT_AVAILABLE, "PyQt6 is an optional UI dependency")
 class QtMVP10Tests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -110,7 +110,7 @@ class QtMVP10Tests(unittest.TestCase):
         window.close()
 
     def test_gallery_table_uses_full_width_and_mouse_multi_selection(self) -> None:
-        from PyQt5.QtWidgets import QHeaderView
+        from PyQt6.QtWidgets import QHeaderView
         from ui.qt.gallery_page import GalleryPage
 
         page = GalleryPage()
@@ -118,9 +118,14 @@ class QtMVP10Tests(unittest.TestCase):
         page.show()
         self.app.processEvents()
         header = page.table.horizontalHeader()
-        self.assertTrue(all(header.sectionResizeMode(column) == QHeaderView.Stretch for column in range(3)))
+        self.assertTrue(
+            all(
+                header.sectionResizeMode(column) == QHeaderView.ResizeMode.Stretch
+                for column in range(3)
+            )
+        )
         page._toggle_batch()
-        self.assertEqual(page.table.selectionMode(), QAbstractItemView.MultiSelection)
+        self.assertEqual(page.table.selectionMode(), QAbstractItemView.SelectionMode.MultiSelection)
         page.close()
 
 

@@ -8,6 +8,7 @@ It does not create SessionTargets, run ReID, or touch Gallery state.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,9 @@ import yaml
 
 from .config import AppConfig
 from .models import Detection, Track
+
+
+_TRACK_DIAGNOSTIC_WINDOW = 4096
 
 
 def _to_numpy(value: Any) -> np.ndarray:
@@ -285,8 +289,10 @@ class MultiClassTrackingPipeline:
         )
         self.frame_count = 0
         self.yolo_inference_count = 0
-        self._person_track_ids: set[int] = set()
-        self._vehicle_track_ids: set[int] = set()
+        # Diagnostics only: keep a bounded recent window instead of retaining
+        # every Track ID ever allocated during a long camera run.
+        self._person_track_ids: deque[int] = deque(maxlen=_TRACK_DIAGNOSTIC_WINDOW)
+        self._vehicle_track_ids: deque[int] = deque(maxlen=_TRACK_DIAGNOSTIC_WINDOW)
         self.last_detections: list[Detection] = []
         self.yolo_ms_total = 0.0
         self.person_tracker_ms_total = 0.0
@@ -336,8 +342,8 @@ class MultiClassTrackingPipeline:
         self.vehicle_tracker_ms_total += (
             perf_counter() - vehicle_tracker_started
         ) * 1000.0
-        self._person_track_ids.update(track.track_id for track in person_tracks)
-        self._vehicle_track_ids.update(track.track_id for track in vehicle_tracks)
+        self._person_track_ids.extend(track.track_id for track in person_tracks)
+        self._vehicle_track_ids.extend(track.track_id for track in vehicle_tracks)
         return MultiClassTrackingResult(
             person_tracks=person_tracks,
             vehicle_tracks=vehicle_tracks,
@@ -347,8 +353,10 @@ class MultiClassTrackingPipeline:
         return MultiClassTrackingStats(
             frames=self.frame_count,
             yolo_inference_count=self.yolo_inference_count,
-            unique_person_tracks=len(self._person_track_ids),
-            unique_vehicle_tracks=len(self._vehicle_track_ids),
+            # These are unique IDs observed in the bounded recent diagnostic
+            # window, not an unbounded lifetime history.
+            unique_person_tracks=len(set(self._person_track_ids)),
+            unique_vehicle_tracks=len(set(self._vehicle_track_ids)),
             yolo_ms_total=self.yolo_ms_total,
             person_tracker_ms_total=self.person_tracker_ms_total,
             vehicle_tracker_ms_total=self.vehicle_tracker_ms_total,
