@@ -157,6 +157,20 @@ vehicle_gallery_enrichment:
   max_reference_embeddings: 8
   duplicate_similarity_threshold: 0.95
 
+vehicle_plate:
+  # Optional CPU provider. Install HyperLPR3 before enabling in a deployment.
+  enabled: true
+  provider: "hyperlpr3"
+  min_confidence: 0.85
+  min_plate_width: 60
+  min_plate_height: 18
+  min_sharpness: 80.0
+  confirmation_hits: 2
+  pending_max_age_frames: 30
+  min_track_age_frames: 3
+  max_new_plate_inferences_per_frame: 1
+  inference_interval_frames: 5
+
 database:
   path: "database/person_reid.db"
 

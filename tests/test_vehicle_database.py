@@ -25,7 +25,9 @@ def _embedding(index: int = 0) -> np.ndarray:
     return value
 
 
-def _vehicle(vehicle_id: int, reference_count: int = 1) -> GalleryVehicle:
+def _vehicle(
+    vehicle_id: int, reference_count: int = 1, plate_number: str | None = None
+) -> GalleryVehicle:
     references = [_embedding(index) for index in range(reference_count)]
     centroid = np.mean(np.stack(references), axis=0).astype(np.float32)
     centroid /= np.linalg.norm(centroid)
@@ -34,6 +36,7 @@ def _vehicle(vehicle_id: int, reference_count: int = 1) -> GalleryVehicle:
         label=f"Target V{vehicle_id:03d}",
         reference_embeddings=references,
         centroid=centroid,
+        plate_number=plate_number,
     )
 
 
@@ -81,6 +84,95 @@ class VehicleGalleryRepositoryTests(unittest.TestCase):
         for expected, actual in zip(vehicle.reference_embeddings, loaded.reference_embeddings):
             self.assertTrue(np.array_equal(expected, actual))
         self.assertTrue(np.array_equal(vehicle.centroid, loaded.centroid))
+
+    def test_plate_number_round_trip_and_nullable_legacy_value(self) -> None:
+        self.repository.save_vehicle(_vehicle(1, plate_number="粤b 12345"))
+        loaded = VehicleGalleryRepository(self.path).load_vehicle(1)
+        assert loaded is not None
+        self.assertEqual(loaded.plate_number, "粤B12345")
+
+        self.repository.save_vehicle(_vehicle(2))
+        loaded_without_plate = self.repository.load_vehicle(2)
+        assert loaded_without_plate is not None
+        self.assertIsNone(loaded_without_plate.plate_number)
+
+    def test_legacy_schema_is_migrated_without_losing_vehicle(self) -> None:
+        connection = self.repository._connect()
+        try:
+            embedding = _embedding(0).tobytes()
+            connection.execute(
+                """
+                CREATE TABLE gallery_vehicle (
+                    vehicle_id INTEGER PRIMARY KEY,
+                    label TEXT NOT NULL,
+                    centroid BLOB NOT NULL,
+                    centroid_dim INTEGER NOT NULL,
+                    centroid_dtype TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO gallery_vehicle VALUES (1, 'Target V001', ?, 2048, 'float32')",
+                (embedding,),
+            )
+            connection.execute(
+                """
+                CREATE TABLE gallery_vehicle_embedding (
+                    vehicle_id INTEGER NOT NULL,
+                    embedding_index INTEGER NOT NULL,
+                    embedding BLOB NOT NULL,
+                    embedding_dim INTEGER NOT NULL,
+                    embedding_dtype TEXT NOT NULL,
+                    PRIMARY KEY (vehicle_id, embedding_index)
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO gallery_vehicle_embedding VALUES (1, 0, ?, 2048, 'float32')",
+                (embedding,),
+            )
+            connection.execute(
+                "CREATE TABLE gallery_vehicle_meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL)"
+            )
+            connection.execute("INSERT INTO gallery_vehicle_meta VALUES ('next_vehicle_id', 2)")
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.repository.initialize()
+        loaded = self.repository.load_vehicle(1)
+        assert loaded is not None
+        self.assertIsNone(loaded.plate_number)
+        connection = self.repository._connect()
+        try:
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(gallery_vehicle)"
+                ).fetchall()
+            }
+        finally:
+            connection.close()
+        self.assertIn("plate_number", columns)
+
+    def test_update_plate_does_not_change_features_or_allocator(self) -> None:
+        self.repository.save_vehicle(_vehicle(1))
+        self.repository.save_snapshot(1, b"snapshot")
+        before = self.repository.load_vehicle(1)
+        assert before is not None
+        next_before = self.repository.load_next_vehicle_id()
+
+        self.repository.update_vehicle_plate(1, "粤B12345")
+
+        after = self.repository.load_vehicle(1)
+        assert after is not None
+        self.assertEqual(after.plate_number, "粤B12345")
+        self.assertTrue(np.array_equal(before.centroid, after.centroid))
+        self.assertTrue(
+            np.array_equal(before.reference_embeddings[0], after.reference_embeddings[0])
+        )
+        self.assertEqual(self.repository.load_snapshot(1), b"snapshot")
+        self.assertEqual(self.repository.load_next_vehicle_id(), next_before)
 
     def test_reference_order_and_cascade_delete(self) -> None:
         self.repository.save_vehicle(_vehicle(1, reference_count=3))

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .models import SessionTarget
+from .vehicle_plate import normalize_plate_number
 
 
 VEHICLE_EMBEDDING_DIMENSION = 2048
@@ -48,6 +49,7 @@ class GalleryVehicle:
     label: str
     reference_embeddings: list[np.ndarray] = field(default_factory=list)
     centroid: np.ndarray = field(default_factory=_empty_embedding)
+    plate_number: str | None = None
 
 
 class VehicleTargetGallery:
@@ -87,7 +89,11 @@ class VehicleTargetGallery:
         self._session_target_to_vehicle.clear()
         self._next_vehicle_id = restored_next_id
 
-    def enroll(self, session_target: SessionTarget) -> GalleryVehicle:
+    def enroll(
+        self,
+        session_target: SessionTarget,
+        plate_number: str | None = None,
+    ) -> GalleryVehicle:
         """Snapshot a valid Vehicle SessionTarget, idempotently."""
 
         existing_vehicle_id = self._session_target_to_vehicle.get(
@@ -111,6 +117,7 @@ class VehicleTargetGallery:
             label=f"Target {format_vehicle_id(vehicle_id)}",
             reference_embeddings=references,
             centroid=centroid,
+            plate_number=normalize_plate_number(plate_number),
         )
         self._vehicles[vehicle_id] = vehicle
         self._session_target_to_vehicle[session_target.target_id] = vehicle_id
@@ -139,6 +146,7 @@ class VehicleTargetGallery:
                     for reference in reference_embeddings
                 ],
                 centroid=np.asarray(centroid).copy(),
+                plate_number=current.plate_number,
             )
         )
 
@@ -170,6 +178,26 @@ class VehicleTargetGallery:
         return self.apply_feature_snapshot(
             self.feature_snapshot(vehicle_id, reference_embeddings, centroid)
         )
+
+    def update_vehicle_plate(
+        self, vehicle_id: int, plate_number: str | None
+    ) -> GalleryVehicle:
+        """Update only the optional plate identity while preserving features."""
+
+        current = self.get(vehicle_id)
+        if current is None:
+            raise KeyError(f"unknown Vehicle Gallery identity: {vehicle_id}")
+        updated = _copy_gallery_vehicle(
+            GalleryVehicle(
+                vehicle_id=current.vehicle_id,
+                label=current.label,
+                reference_embeddings=[reference.copy() for reference in current.reference_embeddings],
+                centroid=current.centroid.copy(),
+                plate_number=normalize_plate_number(plate_number),
+            )
+        )
+        self._vehicles[current.vehicle_id] = updated
+        return updated
 
     def all_vehicles(self) -> tuple[GalleryVehicle, ...]:
         return tuple(self._vehicles[index] for index in sorted(self._vehicles))
@@ -305,6 +333,7 @@ def _copy_gallery_vehicle(vehicle: GalleryVehicle) -> GalleryVehicle:
         label=vehicle.label,
         reference_embeddings=references,
         centroid=centroid,
+        plate_number=normalize_plate_number(vehicle.plate_number),
     )
 
 

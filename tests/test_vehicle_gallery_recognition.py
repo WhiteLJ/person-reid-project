@@ -15,10 +15,12 @@ from src.config import (
 from src.models import SessionTarget, TargetState, Track
 from src.reid_frame_cache import ReIDFrameCache
 from src.target_manager import TargetManager
+from src.gallery_recognition import GalleryRecognitionCandidate
 from src.vehicle_database import VehicleGalleryRepository
 from src.vehicle_gallery import GalleryVehicle, VehicleTargetGallery
 from src.vehicle_gallery_recognition import VehicleGalleryRecognitionCoordinator
 from src.vehicle_gallery_service import VehicleGalleryPersistenceService
+from src.vehicle_plate import VehiclePlateCoordinator, VehiclePlateState
 
 
 def _unit(index: int = 0) -> np.ndarray:
@@ -27,13 +29,16 @@ def _unit(index: int = 0) -> np.ndarray:
     return value
 
 
-def _vehicle(vehicle_id: int, index: int = 0) -> GalleryVehicle:
+def _vehicle(
+    vehicle_id: int, index: int = 0, plate_number: str | None = None
+) -> GalleryVehicle:
     reference = _unit(index)
     return GalleryVehicle(
         vehicle_id=vehicle_id,
         label=f"Target V{vehicle_id:03d}",
         reference_embeddings=[reference.copy()],
         centroid=reference.copy(),
+        plate_number=plate_number,
     )
 
 
@@ -128,6 +133,7 @@ def _coordinator(
     *,
     cache: ReIDFrameCache | None = None,
     vehicle_class_ids: tuple[int, ...] = (2,),
+    plate_coordinator: VehiclePlateCoordinator | None = None,
     **overrides: object,
 ) -> VehicleGalleryRecognitionCoordinator:
     return VehicleGalleryRecognitionCoordinator(
@@ -140,6 +146,7 @@ def _coordinator(
         quality_config=_quality_config(),
         vehicle_class_ids=vehicle_class_ids,
         embedding_cache=cache,
+        plate_coordinator=plate_coordinator,
     )
 
 
@@ -204,6 +211,22 @@ class VehicleGalleryRecognitionTests(unittest.TestCase):
 
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0].candidate.track.class_id, 5)
+
+    def test_different_stable_plate_blocks_gallery_pair(self) -> None:
+        plate = VehiclePlateCoordinator(
+            type("PlateConfig", (), {"enabled": True})(), provider=None
+        )
+        plate._track_states[27] = VehiclePlateState(stable_plate="粤B67890")
+        coordinator = _coordinator(
+            TargetManager(),
+            _gallery(_vehicle(1, 0, plate_number="粤B12345")),
+            _FakeVehicleReID([_unit(0)]),
+            plate_coordinator=plate,
+        )
+        vehicle = coordinator.gallery.get(1)
+        assert vehicle is not None
+        candidate = GalleryRecognitionCandidate(_track(27), _unit(0))
+        self.assertFalse(coordinator._plate_pair_compatible(vehicle, candidate))
 
     def test_unmatched_vehicle_uses_retry_cooldown_without_reducing_quality_retries(self) -> None:
         low = _unit(1)

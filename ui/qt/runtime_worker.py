@@ -31,6 +31,11 @@ from src.vehicle_gallery import VehicleTargetGallery, format_vehicle_id
 from src.vehicle_gallery_recognition import VehicleGalleryRecognitionCoordinator
 from src.vehicle_gallery_service import VehicleGalleryPersistenceService
 from src.vehicle_recovery import VehicleRecoveryCoordinator
+from src.vehicle_plate import (
+    PlateConfirmation,
+    VehiclePlateCoordinator,
+    create_plate_provider,
+)
 from src.visualization import draw_multiclass_tracks
 from ui.qt.models import GalleryRecordDTO, RuntimeFrame, SelectionResultDTO
 
@@ -101,6 +106,7 @@ class RuntimeWorker(QObject):
         self._vehicle_recovery: VehicleRecoveryCoordinator | None = None
         self._person_recognition: GalleryRecognitionCoordinator | None = None
         self._vehicle_recognition: VehicleGalleryRecognitionCoordinator | None = None
+        self._vehicle_plate: VehiclePlateCoordinator | None = None
         self._person_guard: ActiveIdentityGuard | None = None
         self._person_cache = ReIDFrameCache()
         self._vehicle_cache = ReIDFrameCache()
@@ -210,6 +216,14 @@ class RuntimeWorker(QObject):
             self._vehicle_repository = vehicle_repository
             self._vehicle_gallery = vehicle_gallery
             self._vehicle_service = vehicle_service
+            plate_provider = None
+            if config.vehicle_plate.enabled:
+                plate_provider = create_plate_provider(config.vehicle_plate.provider)
+            self._vehicle_plate = VehiclePlateCoordinator(
+                config.vehicle_plate,
+                plate_provider,
+                vehicle_class_ids=self._vehicle_class_ids,
+            )
         except Exception:
             self._close_runtime()
             raise
@@ -252,6 +266,7 @@ class RuntimeWorker(QObject):
             quality_config=config.vehicle_reid_quality,
             vehicle_class_ids=self._vehicle_class_ids,
             embedding_cache=self._vehicle_cache,
+            plate_coordinator=self._vehicle_plate,
         )
         self._vehicle_recognition = VehicleGalleryRecognitionCoordinator(
             target_manager=self._vehicle_manager,
@@ -263,6 +278,7 @@ class RuntimeWorker(QObject):
             quality_config=config.vehicle_reid_quality,
             vehicle_class_ids=self._vehicle_class_ids,
             embedding_cache=self._vehicle_cache,
+            plate_coordinator=self._vehicle_plate,
         )
 
     @pyqtSlot()
@@ -297,6 +313,13 @@ class RuntimeWorker(QObject):
         self._person_tracks = tuple(result.person_tracks)
         self._vehicle_tracks = tuple(result.vehicle_tracks)
 
+        plate_confirmations: tuple[PlateConfirmation, ...] = ()
+        if self._vehicle_plate is not None:
+            plate_confirmations = self._vehicle_plate.process_frame(
+                frame, self._vehicle_tracks, self._frame_index
+            )
+            self._sync_vehicle_plate_confirmations(plate_confirmations)
+
         guard_result = self._person_guard.process_frame(
             frame, self._person_tracks, self._frame_index
         )
@@ -306,9 +329,14 @@ class RuntimeWorker(QObject):
             self._frame_index,
             reference_update_blocked_target_ids=guard_result.blocked_reference_update_target_ids,
         )
-        self._vehicle_recovery.process_frame(
+        recovered_vehicles = self._vehicle_recovery.process_frame(
             frame, self._vehicle_tracks, self._frame_index
         )
+        for match in recovered_vehicles:
+            if self._vehicle_plate is not None:
+                self._vehicle_plate.bind_target_to_track(
+                    match.target_id, match.candidate.track.track_id
+                )
 
         self._person_service.update_runtime_state(
             self._person_manager.targets.values(), self._frame_index
@@ -338,6 +366,17 @@ class RuntimeWorker(QObject):
             target = self._vehicle_manager.target_for_track(match.candidate.track.track_id)
             if target is not None:
                 self._vehicle_service.mark_auto_recognized(target.target_id)
+                if self._vehicle_plate is not None:
+                    vehicle = self._vehicle_gallery.get(match.person_id)
+                    if vehicle is not None:
+                        self._vehicle_plate.set_target_plate(
+                            target.target_id, vehicle.plate_number
+                        )
+                        self._vehicle_plate.bind_target_to_track(
+                            target.target_id, match.candidate.track.track_id
+                        )
+
+        self._sync_active_vehicle_plates()
 
         # Recovery and recognition get the current frame first.  TTL cleanup
         # is deliberately last in the business pipeline so a LOST target can
@@ -355,6 +394,56 @@ class RuntimeWorker(QObject):
         # live frames.
         if not self._editing:
             self.frame_ready.emit(self._runtime_frame(annotated))
+
+    def _sync_vehicle_plate_confirmations(
+        self, confirmations: tuple[PlateConfirmation, ...]
+    ) -> None:
+        if self._vehicle_plate is None or self._vehicle_manager is None:
+            return
+        for confirmation in confirmations:
+            target = self._vehicle_manager.target_for_track(confirmation.track_id)
+            if target is None:
+                continue
+            self._vehicle_plate.bind_target_to_track(
+                target.target_id, confirmation.track_id
+            )
+            self._sync_gallery_plate_for_target(target.target_id, confirmation.plate_number)
+
+    def _sync_active_vehicle_plates(self) -> None:
+        if self._vehicle_plate is None or self._vehicle_manager is None:
+            return
+        for target in self._vehicle_manager.targets.values():
+            if target.current_track_id is None:
+                continue
+            plate = self._vehicle_plate.bind_target_to_track(
+                target.target_id, target.current_track_id
+            )
+            if plate is not None:
+                self._sync_gallery_plate_for_target(target.target_id, plate)
+
+    def _sync_gallery_plate_for_target(
+        self, target_id: int, plate_number: str | None
+    ) -> None:
+        if (
+            self._vehicle_service is None
+            or self._vehicle_gallery is None
+            or plate_number is None
+        ):
+            return
+        vehicle = self._vehicle_gallery.vehicle_for_session_target(target_id)
+        if vehicle is None:
+            return
+        if vehicle.plate_number is not None:
+            return
+        updated = self._vehicle_service.update_vehicle_plate(
+            vehicle.vehicle_id, plate_number
+        )
+        LOGGER.info(
+            "VEHICLE_GALLERY_PLATE_UPDATED vehicle_id=%d plate=%s",
+            updated.vehicle_id,
+            updated.plate_number,
+        )
+        self._publish_gallery_rows()
 
     def _expire_lost_session_targets(self) -> None:
         """Remove expired LOST targets and clear all runtime-only state."""
@@ -396,6 +485,8 @@ class RuntimeWorker(QObject):
                 # This detaches only the process-local Gallery association;
                 # Gallery identities and SQLite records remain intact.
                 service.detach_session_target(target_id)
+                if domain == "vehicle" and self._vehicle_plate is not None:
+                    self._vehicle_plate.forget_target(target_id)
             recovery.forget_targets(target_ids)
             recognition.forget_tracks(old_track_ids)
             recognition.notify_gallery_changed()
@@ -642,6 +733,8 @@ class RuntimeWorker(QObject):
             else:
                 self._vehicle_service.detach_session_target(target.target_id)
                 self._vehicle_recognition.notify_gallery_changed()
+                if self._vehicle_plate is not None:
+                    self._vehicle_plate.forget_target(target.target_id)
             manager.remove_by_target_id(target.target_id)
             if is_person:
                 self._frozen_person_view.unbind(track.track_id)
@@ -669,6 +762,8 @@ class RuntimeWorker(QObject):
         if target is None:
             self.selection_failed.emit("\u76ee\u6807\u8d28\u91cf\u4e0d\u8db3\uff0c\u8bf7\u91cd\u65b0\u6846\u9009")
             return
+        if is_vehicle and self._vehicle_plate is not None:
+            self._vehicle_plate.bind_target_to_track(target.target_id, track.track_id)
         if is_person:
             self._frozen_person_view.bind(track.track_id, target)
         else:
@@ -698,7 +793,14 @@ class RuntimeWorker(QObject):
                 display_id = format_person_id(identity.person_id)
                 self._person_recognition.notify_gallery_changed()
             else:
-                identity = self._vehicle_service.enroll_with_snapshot(target, frozen, track.bbox)
+                plate = (
+                    self._vehicle_plate.target_plate(target.target_id)
+                    if self._vehicle_plate is not None
+                    else None
+                )
+                identity = self._vehicle_service.enroll_with_snapshot(
+                    target, frozen, track.bbox, plate_number=plate
+                )
                 display_id = format_vehicle_id(identity.vehicle_id)
                 self._vehicle_recognition.notify_gallery_changed()
             if domain == "person":
@@ -729,6 +831,9 @@ class RuntimeWorker(QObject):
         vehicle_ids = tuple(self._vehicle_manager.targets)
         self._vehicle_service.detach_all_session_targets(vehicle_ids)
         self._vehicle_manager.clear()
+        if self._vehicle_plate is not None:
+            for target_id in vehicle_ids:
+                self._vehicle_plate.forget_target(target_id)
         self._vehicle_recognition.notify_gallery_changed()
         self._frozen_person_view.clear()
         self._frozen_vehicle_view.clear()
@@ -798,10 +903,22 @@ class RuntimeWorker(QObject):
         rows = []
         for person in self._person_gallery.all_people():
             rows.append(
-                GalleryRecordDTO("person", person.person_id, format_person_id(person.person_id), people.get(person.person_id))
+                GalleryRecordDTO(
+                    "person",
+                    person.person_id,
+                    format_person_id(person.person_id),
+                    people.get(person.person_id),
+                    None,
+                )
             )
         for vehicle in self._vehicle_gallery.all_vehicles():
             rows.append(
-                GalleryRecordDTO("vehicle", vehicle.vehicle_id, format_vehicle_id(vehicle.vehicle_id), vehicles.get(vehicle.vehicle_id))
+                GalleryRecordDTO(
+                    "vehicle",
+                    vehicle.vehicle_id,
+                    format_vehicle_id(vehicle.vehicle_id),
+                    vehicles.get(vehicle.vehicle_id),
+                    vehicle.plate_number,
+                )
             )
         self.gallery_rows_ready.emit(tuple(rows))

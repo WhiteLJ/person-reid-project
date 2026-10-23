@@ -163,6 +163,27 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 python app.py --config config/config_atlas.yaml --source data/your_video.mp4
 ```
 
+For the long-running USB-camera deployment, install the desktop launcher once
+on the Atlas board:
+
+```bash
+bash deploy/atlas/install_camera_launcher.sh
+```
+
+This creates `Person-ReID-Camera.desktop` on the desktop. Clicking it loads the
+CANN environment and starts the application with camera index `0`; it never
+opens a video file. The launcher searches for the `person-reid` Python
+environment under the usual Anaconda/Miniconda locations. If the environment
+is installed elsewhere, set `PYTHON_BIN` in
+`deploy/atlas/start_camera.sh` or export it before launching.
+
+To use another USB camera index without changing the application, set
+`CAMERA_INDEX`, for example:
+
+```bash
+CAMERA_INDEX=1 bash deploy/atlas/start_camera.sh
+```
+
 ## 5. Atlas2A Vehicle OM smoke test
 
 Run this on the actual board after the OM files are present:

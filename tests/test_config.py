@@ -144,6 +144,10 @@ class ConfigTests(unittest.TestCase):
         self.assertAlmostEqual(
             config.vehicle_gallery_enrichment.duplicate_similarity_threshold, 0.95
         )
+        self.assertTrue(config.vehicle_plate.enabled)
+        self.assertEqual(config.vehicle_plate.provider, "hyperlpr3")
+        self.assertEqual(config.vehicle_plate.confirmation_hits, 2)
+        self.assertEqual(config.vehicle_plate.max_new_plate_inferences_per_frame, 1)
         self.assertEqual(
             config.database.path,
             Path("database/person_reid.db").resolve(),

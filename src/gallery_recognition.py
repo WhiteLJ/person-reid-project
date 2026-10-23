@@ -143,6 +143,7 @@ def assign_gallery_matches(
     recognition_margin: float,
     *,
     identity_id_getter: Callable[[Any], int] | None = None,
+    pair_filter: Callable[[Any, GalleryRecognitionCandidate], bool] | None = None,
 ) -> list[GalleryRecognitionMatch]:
     """Return conservative, deterministic one-to-one Gallery assignments.
 
@@ -166,6 +167,8 @@ def assign_gallery_matches(
     scores: dict[tuple[int, int], float] = {}
     for person_index, person in enumerate(person_list):
         for candidate_index, candidate in enumerate(candidate_list):
+            if pair_filter is not None and not pair_filter(person, candidate):
+                continue
             try:
                 scores[(person_index, candidate_index)] = gallery_recognition_score(
                     person,
@@ -269,6 +272,8 @@ class GalleryRecognitionCoordinator:
         track_class_id: int | None = None,
         track_class_ids: Collection[int] | None = None,
         gallery_adapter: GalleryRecognitionAdapter | None = None,
+        gallery_pair_filter: Callable[[Any, GalleryRecognitionCandidate], bool]
+        | None = None,
     ) -> None:
         self.target_manager = target_manager
         self.gallery = gallery
@@ -303,6 +308,7 @@ class GalleryRecognitionCoordinator:
         self.quality_config = quality_config or ReIDQualityConfig()
         self.quality_assessor = quality_assessor
         self.gallery_adapter = gallery_adapter or person_gallery_adapter(gallery)
+        self.gallery_pair_filter = gallery_pair_filter
         self._track_ages: dict[int, int] = {}
         self._last_seen_frame: dict[int, int] = {}
         self._pending: dict[tuple[int, int], _PendingRecognition] = {}
@@ -672,6 +678,7 @@ class GalleryRecognitionCoordinator:
             recognition_threshold=self.recognition_config.recognition_threshold,
             recognition_margin=self.recognition_config.recognition_margin,
             identity_id_getter=self.gallery_adapter.identity_id,
+            pair_filter=self.gallery_pair_filter,
         )
         accepted_pairs = {
             (match.person_id, match.candidate.track.track_id) for match in matches

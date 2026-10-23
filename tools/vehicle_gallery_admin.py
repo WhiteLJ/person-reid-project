@@ -59,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"{format_vehicle_id(vehicle.vehicle_id)}\t"
                     f"{vehicle.label}\t"
+                    f"plate={vehicle.plate_number or 'NULL'}\t"
                     f"references={len(vehicle.reference_embeddings)}"
                 )
             return 0

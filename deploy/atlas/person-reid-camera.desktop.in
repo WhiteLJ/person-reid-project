@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Person ReID Camera
+Comment=Start Person + Vehicle ReID with Atlas USB camera
+Exec=/bin/bash @REPO_DIR@/deploy/atlas/start_camera.sh
+Path=@REPO_DIR@
+Terminal=true
+Categories=Application;Video;

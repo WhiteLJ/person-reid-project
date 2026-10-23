@@ -173,6 +173,7 @@ def assign_recovery_matches(
     recovery_margin: float,
     recovery_reference_support_threshold: float = 0.80,
     recovery_reference_support_top_k: int = 3,
+    pair_filter: Callable[[SessionTarget, RecoveryCandidate], bool] | None = None,
 ) -> list[RecoveryMatch]:
     """Return conservative one-to-one target/candidate assignments.
 
@@ -203,6 +204,8 @@ def assign_recovery_matches(
     scores: dict[tuple[int, int], tuple[float, float]] = {}
     for target_index, target in enumerate(target_list):
         for candidate_index, candidate in enumerate(candidate_list):
+            if pair_filter is not None and not pair_filter(target, candidate):
+                continue
             try:
                 evidence = recovery_evidence(
                     target,
@@ -313,6 +316,8 @@ class TargetRecoveryCoordinator:
         track_class_id: int | None = None,
         quality_assessor: Callable[..., Any] | None = None,
         track_class_ids: Collection[int] | None = None,
+        recovery_pair_filter: Callable[[SessionTarget, RecoveryCandidate], bool]
+        | None = None,
     ) -> None:
         self.target_manager = target_manager
         self.reid_extractor = reid_extractor
@@ -344,6 +349,7 @@ class TargetRecoveryCoordinator:
             else None
         )
         self.quality_assessor = quality_assessor
+        self.recovery_pair_filter = recovery_pair_filter
         self.last_recovered_track_ids: frozenset[int] = frozenset()
         self._track_ages: dict[int, int] = {}
         self._last_seen_frame: dict[int, int] = {}
@@ -727,6 +733,7 @@ class TargetRecoveryCoordinator:
             recovery_reference_support_top_k=(
                 self.recovery_config.recovery_reference_support_top_k
             ),
+            pair_filter=self.recovery_pair_filter,
         )
         self._log_recovery_rejections(
             lost_targets,

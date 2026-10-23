@@ -15,8 +15,13 @@ from .config import (
 from .reid_frame_cache import ReIDFrameCache
 from .models import TargetState, Track
 from .target_manager import TargetManager
-from .target_recovery import RecoveryMatch, TargetRecoveryCoordinator
+from .target_recovery import (
+    RecoveryCandidate,
+    RecoveryMatch,
+    TargetRecoveryCoordinator,
+)
 from .vehicle_reid_quality import assess_vehicle_reid_quality
+from .vehicle_plate import VehiclePlateCoordinator
 
 
 LOGGER = getLogger(__name__)
@@ -41,10 +46,12 @@ class VehicleRecoveryCoordinator(TargetRecoveryCoordinator):
         *,
         vehicle_class_ids: Collection[int] = (2,),
         embedding_cache: ReIDFrameCache | None = None,
+        plate_coordinator: VehiclePlateCoordinator | None = None,
     ) -> None:
         classes = tuple(sorted({int(class_id) for class_id in vehicle_class_ids}))
         if not classes:
             raise ValueError("Vehicle Recovery requires at least one vehicle class")
+        self.plate_coordinator = plate_coordinator
 
         def quality_assessor(frame, track, tracks):
             return assess_vehicle_reid_quality(
@@ -63,7 +70,29 @@ class VehicleRecoveryCoordinator(TargetRecoveryCoordinator):
             embedding_cache=embedding_cache,
             track_class_ids=classes,
             quality_assessor=quality_assessor,
+            recovery_pair_filter=self._plate_pair_compatible,
         )
+
+    def _plate_pair_compatible(self, target, candidate: RecoveryCandidate) -> bool:
+        if self.plate_coordinator is None or not self.plate_coordinator.enabled:
+            return True
+        target_plate = self.plate_coordinator.target_plate(target.target_id)
+        candidate_plate = self.plate_coordinator.track_plate(candidate.track.track_id)
+        if (
+            target_plate is not None
+            and candidate_plate is not None
+            and target_plate != candidate_plate
+        ):
+            LOGGER.info(
+                "VEHICLE_PLATE_CONFLICT mode=recovery target_id=%d "
+                "candidate_track_id=%d target_plate=%s candidate_plate=%s",
+                target.target_id,
+                candidate.track.track_id,
+                target_plate,
+                candidate_plate,
+            )
+            return False
+        return True
 
     def process_frame(
         self,

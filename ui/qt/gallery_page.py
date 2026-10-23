@@ -24,7 +24,7 @@ class ThumbnailDelegate(QStyledItemDelegate):
 
 
 class GalleryTableModel(QAbstractTableModel):
-    HEADERS = ("\u76ee\u6807 ID", "\u76ee\u6807\u56fe\u50cf", "\u5220\u9664")
+    HEADERS = ("\u76ee\u6807 ID", "\u76ee\u6807\u56fe\u50cf", "\u8f66\u724c\u53f7", "\u5220\u9664")
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -42,7 +42,7 @@ class GalleryTableModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self._records)
 
     def columnCount(self, parent=QModelIndex()) -> int:
-        return 0 if parent.isValid() else 3
+        return 0 if parent.isValid() else 4
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
@@ -59,13 +59,19 @@ class GalleryTableModel(QAbstractTableModel):
             if index.column() == 0:
                 return record.display_id
             if index.column() == 2:
+                return (
+                    record.plate_number
+                    if record.plate_number is not None
+                    else ("\u2014" if record.domain == "person" else "NULL")
+                )
+            if index.column() == 3:
                 return "\u5220\u9664"
             return "\u65e0\u5feb\u7167" if record.snapshot_jpeg is None else ""
         if role == Qt.ItemDataRole.DecorationRole and index.column() == 1 and record.snapshot_jpeg:
             pixmap = QPixmap()
             pixmap.loadFromData(record.snapshot_jpeg, "JPG")
             return pixmap
-        if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in {0, 1, 2}:
+        if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in {0, 1, 2, 3}:
             return Qt.AlignmentFlag.AlignCenter
         return None
 
@@ -131,7 +137,7 @@ class GalleryPage(QWidget):
         self.table.setAlternatingRowColors(True)
         header = self.table.horizontalHeader()
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
-        for column in range(3):
+        for column in range(4):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setDefaultSectionSize(150)
         root.addWidget(self.table, 1)
@@ -173,7 +179,7 @@ class GalleryPage(QWidget):
             self.deleteRequested.emit(self._domain, ids, True)
 
     def _table_clicked(self, index) -> None:
-        if index.column() == 2 and not self._batch_mode:
+        if index.column() == 3 and not self._batch_mode:
             record = self.model.record_at(index.row())
             if record is not None:
                 self.deleteRequested.emit(record.domain, record.identity_id, False)

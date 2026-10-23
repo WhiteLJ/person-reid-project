@@ -31,12 +31,20 @@ class QtMVP10Tests(unittest.TestCase):
         self.assertAlmostEqual(point[1], 500)
         self.assertEqual(transform.widget_roi_to_source(QRectF(250, 375, 500, 250), (1080, 1920, 3)), (480, 300, 1440, 780))
 
-    def test_gallery_model_has_only_three_columns_and_placeholder(self) -> None:
+    def test_gallery_model_has_plate_column_and_placeholder(self) -> None:
         model = GalleryTableModel()
-        model.set_records((GalleryRecordDTO("person", 1, "P001", None),))
-        self.assertEqual(model.columnCount(), 3)
+        model.set_records(
+            (
+                GalleryRecordDTO("person", 1, "P001", None),
+                GalleryRecordDTO("vehicle", 1, "V001", None, "粤B12345"),
+            )
+        )
+        self.assertEqual(model.columnCount(), 4)
         self.assertEqual(model.data(model.index(0, 0)), "P001")
         self.assertEqual(model.data(model.index(0, 1)), "\u65e0\u5feb\u7167")
+        self.assertEqual(model.data(model.index(0, 2)), "\u2014")
+        model.set_records((GalleryRecordDTO("vehicle", 1, "V001", None),))
+        self.assertEqual(model.data(model.index(0, 2)), "NULL")
 
     def test_canvas_is_widget_and_preserves_source_copy(self) -> None:
         import numpy as np
@@ -121,7 +129,7 @@ class QtMVP10Tests(unittest.TestCase):
         self.assertTrue(
             all(
                 header.sectionResizeMode(column) == QHeaderView.ResizeMode.Stretch
-                for column in range(3)
+                for column in range(4)
             )
         )
         page._toggle_batch()

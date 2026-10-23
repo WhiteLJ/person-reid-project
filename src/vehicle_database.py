@@ -16,6 +16,7 @@ from .vehicle_gallery import (
     VEHICLE_EMBEDDING_DTYPE,
     _validate_vehicle_id,
 )
+from .vehicle_plate import normalize_plate_number
 
 
 _EMBEDDING_BYTES = VEHICLE_EMBEDDING_DIMENSION * np.dtype("<f4").itemsize
@@ -40,6 +41,7 @@ class VehicleGalleryRepository:
                     CREATE TABLE IF NOT EXISTS gallery_vehicle (
                         vehicle_id INTEGER PRIMARY KEY,
                         label TEXT NOT NULL,
+                        plate_number TEXT NULL,
                         centroid BLOB NOT NULL,
                         centroid_dim INTEGER NOT NULL,
                         centroid_dtype TEXT NOT NULL,
@@ -76,6 +78,16 @@ class VehicleGalleryRepository:
                     );
                     """
                 )
+                columns = {
+                    str(row[1])
+                    for row in connection.execute(
+                        "PRAGMA table_info(gallery_vehicle)"
+                    ).fetchall()
+                }
+                if "plate_number" not in columns:
+                    connection.execute(
+                        "ALTER TABLE gallery_vehicle ADD COLUMN plate_number TEXT NULL"
+                    )
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO gallery_vehicle_meta(key, value)
@@ -97,7 +109,8 @@ class VehicleGalleryRepository:
         try:
             vehicle_rows = connection.execute(
                 """
-                SELECT vehicle_id, label, centroid, centroid_dim, centroid_dtype
+                SELECT vehicle_id, label, plate_number, centroid,
+                       centroid_dim, centroid_dtype
                 FROM gallery_vehicle
                 ORDER BY vehicle_id
                 """
@@ -157,15 +170,16 @@ class VehicleGalleryRepository:
                     f"vehicle_id={vehicle_id} has no reference embeddings"
                 )
             centroid = self._decode_embedding(
-                row[2],
                 row[3],
                 row[4],
+                row[5],
                 context=f"vehicle_id={vehicle_id} centroid",
             )
             vehicles.append(
                 GalleryVehicle(
                     vehicle_id=vehicle_id,
                     label=label,
+                    plate_number=normalize_plate_number(row[2]),
                     reference_embeddings=[reference.copy() for reference in references],
                     centroid=centroid.copy(),
                 )
@@ -214,12 +228,14 @@ class VehicleGalleryRepository:
                 connection.execute(
                     """
                     INSERT INTO gallery_vehicle(
-                        vehicle_id, label, centroid, centroid_dim, centroid_dtype
-                    ) VALUES (?, ?, ?, ?, ?)
+                        vehicle_id, label, plate_number, centroid,
+                        centroid_dim, centroid_dtype
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         vehicle_id,
                         label,
+                        normalize_plate_number(vehicle.plate_number),
                         centroid_blob,
                         VEHICLE_EMBEDDING_DIMENSION,
                         VEHICLE_EMBEDDING_DTYPE,
@@ -342,6 +358,32 @@ class VehicleGalleryRepository:
                 f"failed to update vehicle_id={vehicle_id} in {self.path}"
             ) from exc
 
+    def update_vehicle_plate(
+        self, vehicle_id: int, plate_number: str | None
+    ) -> None:
+        """Update only the nullable plate column in one transaction."""
+
+        vehicle_id = _validate_vehicle_id(vehicle_id)
+        normalized = normalize_plate_number(plate_number)
+        self.initialize()
+        try:
+            with self._transaction() as connection:
+                cursor = connection.execute(
+                    "UPDATE gallery_vehicle SET plate_number = ? "
+                    "WHERE vehicle_id = ?",
+                    (normalized, vehicle_id),
+                )
+                if cursor.rowcount != 1:
+                    raise VehicleRepositoryError(
+                        f"cannot update plate for unknown vehicle_id={vehicle_id}"
+                    )
+        except VehicleRepositoryError:
+            raise
+        except sqlite3.Error as exc:
+            raise VehicleRepositoryError(
+                f"failed to update plate for vehicle_id={vehicle_id} in {self.path}"
+            ) from exc
+
     def delete_vehicle(self, vehicle_id: int) -> bool:
         vehicle_id = _validate_vehicle_id(vehicle_id)
         self.initialize()
@@ -400,8 +442,8 @@ class VehicleGalleryRepository:
                 if vehicle_id < next_vehicle_id:
                     raise VehicleRepositoryError(f"vehicle_id={vehicle_id} would reuse an allocated historical ID")
                 connection.execute(
-                    "INSERT INTO gallery_vehicle(vehicle_id, label, centroid, centroid_dim, centroid_dtype) VALUES (?, ?, ?, ?, ?)",
-                    (vehicle_id, label, centroid_blob, VEHICLE_EMBEDDING_DIMENSION, VEHICLE_EMBEDDING_DTYPE),
+                    "INSERT INTO gallery_vehicle(vehicle_id, label, plate_number, centroid, centroid_dim, centroid_dtype) VALUES (?, ?, ?, ?, ?, ?)",
+                    (vehicle_id, label, normalize_plate_number(vehicle.plate_number), centroid_blob, VEHICLE_EMBEDDING_DIMENSION, VEHICLE_EMBEDDING_DTYPE),
                 )
                 connection.executemany(
                     "INSERT INTO gallery_vehicle_embedding(vehicle_id, embedding_index, embedding, embedding_dim, embedding_dtype) VALUES (?, ?, ?, ?, ?)",

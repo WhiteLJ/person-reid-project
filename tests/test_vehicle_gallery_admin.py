@@ -45,7 +45,7 @@ class VehicleGalleryAdminTests(unittest.TestCase):
         output = StringIO()
         with redirect_stdout(output):
             self.assertEqual(main(["--db", str(self.path), "list"]), 0)
-        self.assertIn("V001\tTarget V001\treferences=1", output.getvalue())
+        self.assertIn("V001\tTarget V001\tplate=NULL\treferences=1", output.getvalue())
 
         output = StringIO()
         with redirect_stdout(output):

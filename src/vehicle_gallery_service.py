@@ -14,6 +14,7 @@ from .models import SessionTarget, TargetState
 from .target_recovery import ReferenceUpdateEvent
 from .vehicle_database import VehicleGalleryRepository, VehicleRepositoryError
 from .vehicle_gallery import GalleryVehicle, VehicleTargetGallery
+from .vehicle_plate import normalize_plate_number
 from .gallery_snapshot import encode_track_snapshot
 
 
@@ -54,15 +55,22 @@ class VehicleGalleryPersistenceService:
         self._stable_active_frames.clear()
         return self.gallery.all_vehicles()
 
-    def enroll(self, session_target: SessionTarget) -> GalleryVehicle:
+    def enroll(
+        self,
+        session_target: SessionTarget,
+        plate_number: str | None = None,
+    ) -> GalleryVehicle:
         """Persist one existing Vehicle SessionTarget, idempotently."""
 
         existing = self.gallery.vehicle_for_session_target(session_target.target_id)
         if existing is not None:
             self._mark_explicit_enrollment(session_target.target_id)
+            normalized = normalize_plate_number(plate_number)
+            if normalized is not None and existing.plate_number is None:
+                existing = self.update_vehicle_plate(existing.vehicle_id, normalized)
             return existing
 
-        vehicle = self.gallery.enroll(session_target)
+        vehicle = self.gallery.enroll(session_target, plate_number=plate_number)
         try:
             self.repository.save_vehicle(vehicle)
         except Exception:
@@ -78,19 +86,23 @@ class VehicleGalleryPersistenceService:
         session_target: SessionTarget,
         source_frame,
         track_bbox,
+        plate_number: str | None = None,
     ) -> GalleryVehicle:
         """Enroll a target and persist a clean source-frame crop."""
 
         existing = self.gallery.vehicle_for_session_target(session_target.target_id)
         if existing is not None:
             self._mark_explicit_enrollment(session_target.target_id)
+            normalized = normalize_plate_number(plate_number)
+            if normalized is not None and existing.plate_number is None:
+                existing = self.update_vehicle_plate(existing.vehicle_id, normalized)
             if self.repository.load_snapshot(existing.vehicle_id) is None:
                 self.repository.save_snapshot(
                     existing.vehicle_id,
                     encode_track_snapshot(source_frame, track_bbox),
                 )
             return existing
-        vehicle = self.gallery.enroll(session_target)
+        vehicle = self.gallery.enroll(session_target, plate_number=plate_number)
         snapshot = encode_track_snapshot(source_frame, track_bbox)
         try:
             saver = getattr(self.repository, "save_vehicle_with_snapshot", None)
@@ -104,6 +116,29 @@ class VehicleGalleryPersistenceService:
             raise
         self._mark_explicit_enrollment(session_target.target_id)
         return vehicle
+
+    def update_vehicle_plate(
+        self, vehicle_id: int, plate_number: str | None
+    ) -> GalleryVehicle:
+        """Persist and then apply a plate-only update without touching features."""
+
+        normalized = normalize_plate_number(plate_number)
+        vehicle = self.gallery.get(vehicle_id)
+        if vehicle is None:
+            raise KeyError(f"unknown Vehicle Gallery identity: {vehicle_id}")
+        self.repository.update_vehicle_plate(vehicle_id, normalized)
+        try:
+            return self.gallery.update_vehicle_plate(vehicle_id, normalized)
+        except Exception:
+            LOGGER.exception(
+                "VEHICLE_GALLERY_PLATE_MEMORY_APPLY_FAILED vehicle_id=%d",
+                vehicle_id,
+            )
+            persisted = self.repository.load_vehicle(vehicle_id)
+            if persisted is None:
+                raise
+            self.gallery.apply_feature_snapshot(persisted)
+            return persisted
 
     def mark_auto_recognized(self, target_id: int) -> None:
         """Start the safety cooldown for a cold-start recognized identity."""

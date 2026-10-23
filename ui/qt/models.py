@@ -35,6 +35,7 @@ class GalleryRecordDTO:
     identity_id: int
     display_id: str
     snapshot_jpeg: bytes | None = None
+    plate_number: str | None = None
 
 
 @dataclass(frozen=True)

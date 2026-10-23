@@ -8,8 +8,10 @@ from src.config import VehicleReIDQualityConfig, VehicleRecoveryConfig
 from src.models import TargetState, Track
 from src.reid_frame_cache import ReIDFrameCache
 from src.target_manager import TargetManager
+from src.target_recovery import RecoveryCandidate
 from src.vehicle_recovery import VehicleRecoveryCoordinator
 from src.vehicle_reid_quality import assess_vehicle_reid_quality
+from src.vehicle_plate import VehiclePlateCoordinator, VehiclePlateState
 
 
 class _FakeVehicleReID:
@@ -74,7 +76,13 @@ class VehicleRecoveryTests(unittest.TestCase):
         self.frame = np.zeros((240, 640, 3), dtype=np.uint8)
         self.initial_track = _track(4)
 
-    def _coordinator(self, extractor=None, vehicle_class_ids=(2,), **overrides):
+    def _coordinator(
+        self,
+        extractor=None,
+        vehicle_class_ids=(2,),
+        plate_coordinator=None,
+        **overrides,
+    ):
         manager = TargetManager()
         extractor = extractor or _FakeVehicleReID()
         coordinator = VehicleRecoveryCoordinator(
@@ -85,6 +93,7 @@ class VehicleRecoveryTests(unittest.TestCase):
             quality_config=_quality_config(),
             vehicle_class_ids=vehicle_class_ids,
             embedding_cache=ReIDFrameCache(),
+            plate_coordinator=plate_coordinator,
         )
         return manager, coordinator, extractor
 
@@ -183,6 +192,27 @@ class VehicleRecoveryTests(unittest.TestCase):
         )
         self.assertFalse(rejected.accepted)
         self.assertEqual(rejected.reason, "vehicle_overlap")
+
+    def test_stable_plate_conflict_rejects_recovery_pair(self) -> None:
+        plate = VehiclePlateCoordinator(
+            type("PlateConfig", (), {"enabled": True})(), provider=None
+        )
+        manager, coordinator, _extractor = self._coordinator(
+            plate_coordinator=plate
+        )
+        target = coordinator.select_from_track(
+            self.frame,
+            self.initial_track,
+            0,
+            tracks=[self.initial_track],
+        )
+        assert target is not None
+        plate.set_target_plate(target.target_id, "粤B12345")
+        plate._track_states[38] = VehiclePlateState(stable_plate="粤B67890")
+        candidate = RecoveryCandidate(
+            _track(38), np.eye(2048, dtype=np.float32)[0]
+        )
+        self.assertFalse(coordinator._plate_pair_compatible(target, candidate))
 
     def test_vehicle_cache_is_independent_from_person_cache_with_same_track_id(self) -> None:
         person_cache = ReIDFrameCache()

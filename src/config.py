@@ -253,6 +253,23 @@ class VehicleGalleryEnrichmentConfig:
 
 
 @dataclass(frozen=True)
+class VehiclePlateConfig:
+    """Optional, quality-gated Vehicle plate evidence settings."""
+
+    enabled: bool = False
+    provider: str = "hyperlpr3"
+    min_confidence: float = 0.85
+    min_plate_width: int = 60
+    min_plate_height: int = 18
+    min_sharpness: float = 80.0
+    confirmation_hits: int = 2
+    pending_max_age_frames: int = 30
+    min_track_age_frames: int = 3
+    max_new_plate_inferences_per_frame: int = 1
+    inference_interval_frames: int = 5
+
+
+@dataclass(frozen=True)
 class UIConfig:
     window_name: str
     wait_key_ms: int
@@ -287,6 +304,7 @@ class AppConfig:
     database: DatabaseConfig
     vehicle_database: VehicleDatabaseConfig
     vehicle_gallery_enrichment: VehicleGalleryEnrichmentConfig
+    vehicle_plate: VehiclePlateConfig
     ui: UIConfig
     diagnostics: DiagnosticsConfig
 
@@ -372,6 +390,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     database = _section(raw, "database")
     vehicle_database = _section(raw, "vehicle_database")
     vehicle_gallery_enrichment = _section(raw, "vehicle_gallery_enrichment")
+    vehicle_plate = _section(raw, "vehicle_plate")
     ui = _section(raw, "ui")
     diagnostics = _section(raw, "diagnostics")
 
@@ -886,6 +905,43 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             "greater than 0 and at most 1"
         )
 
+    vehicle_plate_values = {
+        "enabled": bool(vehicle_plate.get("enabled", False)),
+        "provider": str(vehicle_plate.get("provider", "hyperlpr3")).strip().lower(),
+        "min_confidence": float(vehicle_plate.get("min_confidence", 0.85)),
+        "min_plate_width": int(vehicle_plate.get("min_plate_width", 60)),
+        "min_plate_height": int(vehicle_plate.get("min_plate_height", 18)),
+        "min_sharpness": float(vehicle_plate.get("min_sharpness", 80.0)),
+        "confirmation_hits": int(vehicle_plate.get("confirmation_hits", 2)),
+        "pending_max_age_frames": int(vehicle_plate.get("pending_max_age_frames", 30)),
+        "min_track_age_frames": int(vehicle_plate.get("min_track_age_frames", 3)),
+        "max_new_plate_inferences_per_frame": int(
+            vehicle_plate.get("max_new_plate_inferences_per_frame", 1)
+        ),
+        "inference_interval_frames": int(
+            vehicle_plate.get("inference_interval_frames", 5)
+        ),
+    }
+    if not vehicle_plate_values["provider"]:
+        raise ValueError("vehicle_plate.provider cannot be empty")
+    if not 0.0 < vehicle_plate_values["min_confidence"] <= 1.0:
+        raise ValueError("vehicle_plate.min_confidence must be in (0, 1]")
+    if vehicle_plate_values["min_plate_width"] < 1:
+        raise ValueError("vehicle_plate.min_plate_width must be positive")
+    if vehicle_plate_values["min_plate_height"] < 1:
+        raise ValueError("vehicle_plate.min_plate_height must be positive")
+    if vehicle_plate_values["min_sharpness"] < 0.0:
+        raise ValueError("vehicle_plate.min_sharpness must be non-negative")
+    for name in (
+        "confirmation_hits",
+        "pending_max_age_frames",
+        "min_track_age_frames",
+        "max_new_plate_inferences_per_frame",
+        "inference_interval_frames",
+    ):
+        if vehicle_plate_values[name] < 1:
+            raise ValueError(f"vehicle_plate.{name} must be positive")
+
     database_value = database.get("path", "database/person_reid.db")
     database_path = Path(database_value)
     if not str(database_path).strip():
@@ -1057,6 +1113,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             max_reference_embeddings=vehicle_gallery_max_reference_embeddings,
             duplicate_similarity_threshold=vehicle_duplicate_similarity_threshold,
         ),
+        vehicle_plate=VehiclePlateConfig(**vehicle_plate_values),
         ui=UIConfig(
             window_name=str(ui.get("window_name", "Person Tracking - MVP-8.2")),
             wait_key_ms=max(1, int(ui.get("wait_key_ms", 1))),

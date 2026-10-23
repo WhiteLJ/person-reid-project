@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection
+from logging import getLogger
 
 from .config import (
     GalleryRecognitionConfig,
@@ -13,12 +14,17 @@ from .config import (
 )
 from .gallery_recognition import (
     GalleryRecognitionAdapter,
+    GalleryRecognitionCandidate,
     GalleryRecognitionCoordinator,
 )
 from .reid_frame_cache import ReIDFrameCache
 from .target_manager import TargetManager
 from .vehicle_gallery import VehicleTargetGallery, format_vehicle_id
 from .vehicle_reid_quality import assess_vehicle_reid_quality
+from .vehicle_plate import VehiclePlateCoordinator
+
+
+LOGGER = getLogger(__name__)
 
 
 class VehicleGalleryRecognitionCoordinator(GalleryRecognitionCoordinator):
@@ -38,6 +44,7 @@ class VehicleGalleryRecognitionCoordinator(GalleryRecognitionCoordinator):
         *,
         vehicle_class_ids: Collection[int] = (2,),
         embedding_cache: ReIDFrameCache | None = None,
+        plate_coordinator: VehiclePlateCoordinator | None = None,
     ) -> None:
         classes = tuple(sorted({int(class_id) for class_id in vehicle_class_ids}))
         if not classes:
@@ -61,6 +68,7 @@ class VehicleGalleryRecognitionCoordinator(GalleryRecognitionCoordinator):
             identity_id=lambda vehicle: vehicle.vehicle_id,
             identity_label=format_vehicle_id,
         )
+        self.plate_coordinator = plate_coordinator
         super().__init__(
             target_manager=target_manager,
             gallery=gallery,  # type: ignore[arg-type]
@@ -73,4 +81,30 @@ class VehicleGalleryRecognitionCoordinator(GalleryRecognitionCoordinator):
             embedding_cache=embedding_cache,
             quality_assessor=quality_assessor,
             gallery_adapter=adapter,
+            gallery_pair_filter=self._plate_pair_compatible,
         )
+
+    def _plate_pair_compatible(
+        self, vehicle, candidate: GalleryRecognitionCandidate
+    ) -> bool:
+        if self.plate_coordinator is None or not self.plate_coordinator.enabled:
+            return True
+        gallery_plate = getattr(vehicle, "plate_number", None)
+        candidate_plate = self.plate_coordinator.track_plate(
+            candidate.track.track_id
+        )
+        if (
+            gallery_plate is not None
+            and candidate_plate is not None
+            and gallery_plate != candidate_plate
+        ):
+            LOGGER.info(
+                "VEHICLE_PLATE_CONFLICT mode=recognition vehicle_id=%d "
+                "candidate_track_id=%d plate_a=%s plate_b=%s",
+                vehicle.vehicle_id,
+                candidate.track.track_id,
+                gallery_plate,
+                candidate_plate,
+            )
+            return False
+        return True
