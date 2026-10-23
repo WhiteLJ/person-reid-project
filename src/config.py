@@ -267,6 +267,8 @@ class VehiclePlateConfig:
     min_track_age_frames: int = 3
     max_new_plate_inferences_per_frame: int = 1
     inference_interval_frames: int = 5
+    min_inference_interval_ms: int = 500
+    max_result_age_frames: int = 15
 
 
 @dataclass(frozen=True)
@@ -921,6 +923,12 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         "inference_interval_frames": int(
             vehicle_plate.get("inference_interval_frames", 5)
         ),
+        "min_inference_interval_ms": int(
+            vehicle_plate.get("min_inference_interval_ms", 500)
+        ),
+        "max_result_age_frames": int(
+            vehicle_plate.get("max_result_age_frames", 15)
+        ),
     }
     if not vehicle_plate_values["provider"]:
         raise ValueError("vehicle_plate.provider cannot be empty")
@@ -938,9 +946,12 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         "min_track_age_frames",
         "max_new_plate_inferences_per_frame",
         "inference_interval_frames",
+        "max_result_age_frames",
     ):
         if vehicle_plate_values[name] < 1:
             raise ValueError(f"vehicle_plate.{name} must be positive")
+    if vehicle_plate_values["min_inference_interval_ms"] < 0:
+        raise ValueError("vehicle_plate.min_inference_interval_ms must be non-negative")
 
     database_value = database.get("path", "database/person_reid.db")
     database_path = Path(database_value)

@@ -34,6 +34,7 @@ from src.vehicle_recovery import VehicleRecoveryCoordinator
 from src.vehicle_plate import (
     PlateConfirmation,
     VehiclePlateCoordinator,
+    VehiclePlateOCRWorker,
     create_plate_provider,
 )
 from src.visualization import draw_multiclass_tracks
@@ -107,6 +108,7 @@ class RuntimeWorker(QObject):
         self._person_recognition: GalleryRecognitionCoordinator | None = None
         self._vehicle_recognition: VehicleGalleryRecognitionCoordinator | None = None
         self._vehicle_plate: VehiclePlateCoordinator | None = None
+        self._vehicle_plate_ocr_worker: VehiclePlateOCRWorker | None = None
         self._person_guard: ActiveIdentityGuard | None = None
         self._person_cache = ReIDFrameCache()
         self._vehicle_cache = ReIDFrameCache()
@@ -217,12 +219,17 @@ class RuntimeWorker(QObject):
             self._vehicle_gallery = vehicle_gallery
             self._vehicle_service = vehicle_service
             plate_provider = None
+            plate_ocr_worker = None
             if config.vehicle_plate.enabled:
                 plate_provider = create_plate_provider(config.vehicle_plate.provider)
+                plate_ocr_worker = VehiclePlateOCRWorker(plate_provider)
+                plate_ocr_worker.start()
+                self._vehicle_plate_ocr_worker = plate_ocr_worker
             self._vehicle_plate = VehiclePlateCoordinator(
                 config.vehicle_plate,
                 plate_provider,
                 vehicle_class_ids=self._vehicle_class_ids,
+                ocr_worker=plate_ocr_worker,
             )
         except Exception:
             self._close_runtime()
@@ -313,13 +320,6 @@ class RuntimeWorker(QObject):
         self._person_tracks = tuple(result.person_tracks)
         self._vehicle_tracks = tuple(result.vehicle_tracks)
 
-        plate_confirmations: tuple[PlateConfirmation, ...] = ()
-        if self._vehicle_plate is not None:
-            plate_confirmations = self._vehicle_plate.process_frame(
-                frame, self._vehicle_tracks, self._frame_index
-            )
-            self._sync_vehicle_plate_confirmations(plate_confirmations)
-
         guard_result = self._person_guard.process_frame(
             frame, self._person_tracks, self._frame_index
         )
@@ -337,6 +337,17 @@ class RuntimeWorker(QObject):
                 self._vehicle_plate.bind_target_to_track(
                     match.target_id, match.candidate.track.track_id
                 )
+
+        # Recovery runs before plate scheduling so a recovered target's stable
+        # plate is transferred to the new Track ID before OCR candidates are
+        # selected.  This avoids re-running OCR merely because a Track ID
+        # changed during a legitimate recovery.
+        plate_confirmations: tuple[PlateConfirmation, ...] = ()
+        if self._vehicle_plate is not None:
+            plate_confirmations = self._vehicle_plate.process_frame(
+                frame, self._vehicle_tracks, self._frame_index
+            )
+            self._sync_vehicle_plate_confirmations(plate_confirmations)
 
         self._person_service.update_runtime_state(
             self._person_manager.targets.values(), self._frame_index
@@ -869,6 +880,9 @@ class RuntimeWorker(QObject):
         self.shutdown_complete.emit()
 
     def _close_runtime(self) -> None:
+        if self._vehicle_plate_ocr_worker is not None:
+            self._vehicle_plate_ocr_worker.close()
+            self._vehicle_plate_ocr_worker = None
         if self._ascend_runtime is not None:
             self._ascend_runtime.close()
             self._ascend_runtime = None

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from threading import Event
+from time import monotonic, sleep
 from types import SimpleNamespace
 import unittest
 
@@ -9,6 +11,7 @@ from src.models import Track
 from src.vehicle_plate import (
     PlateObservation,
     VehiclePlateCoordinator,
+    VehiclePlateOCRWorker,
     _adapt_provider_result,
     normalize_plate_number,
 )
@@ -26,6 +29,8 @@ def _config(**overrides):
         min_track_age_frames=3,
         max_new_plate_inferences_per_frame=1,
         inference_interval_frames=5,
+        min_inference_interval_ms=500,
+        max_result_age_frames=15,
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -133,6 +138,179 @@ class PlateProviderAdapterTests(unittest.TestCase):
         self.assertIsNotNone(observation)
         self.assertEqual(observation.plate_number, "ABC12345")
         self.assertEqual(observation.bbox, (4, 8, 104, 36))
+
+
+@unittest.skipUnless(
+    __import__("src.vehicle_plate", fromlist=["cv2"]).cv2 is not None,
+    "OpenCV is required for asynchronous plate quality tests",
+)
+class VehiclePlateAsyncTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.frame = np.zeros((220, 220, 3), dtype=np.uint8)
+        for x in range(30, 140):
+            self.frame[50:75, x, :] = 255 if x % 2 else 0
+        self.track = _track()
+
+    def _config(self, **overrides):
+        values = dict(
+            enabled=True,
+            min_confidence=0.85,
+            min_plate_width=20,
+            min_plate_height=10,
+            min_sharpness=10.0,
+            confirmation_hits=2,
+            pending_max_age_frames=30,
+            min_track_age_frames=1,
+            max_new_plate_inferences_per_frame=1,
+            inference_interval_frames=1,
+            min_inference_interval_ms=0,
+            max_result_age_frames=5,
+        )
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def test_slow_provider_does_not_block_runtime_process_frame(self) -> None:
+        started = Event()
+        release = Event()
+
+        class SlowProvider:
+            def recognize(self, crop):
+                del crop
+                started.set()
+                release.wait(timeout=1.0)
+                return (PlateObservation("ABC12345", 0.95, (20, 40, 140, 70)),)
+
+        worker = VehiclePlateOCRWorker(SlowProvider())
+        worker.start()
+        coordinator = VehiclePlateCoordinator(
+            self._config(), SlowProvider(), ocr_worker=worker
+        )
+        try:
+            started_at = monotonic()
+            coordinator.process_frame(self.frame, [self.track], 0)
+            elapsed = monotonic() - started_at
+            self.assertLess(elapsed, 0.1)
+            self.assertTrue(started.wait(timeout=1.0))
+        finally:
+            release.set()
+            worker.close()
+
+    def test_queue_keeps_one_waiting_task_and_prefers_newest(self) -> None:
+        started = Event()
+        release = Event()
+
+        class BlockingProvider:
+            def recognize(self, crop):
+                del crop
+                started.set()
+                release.wait(timeout=1.0)
+                return ()
+
+        worker = VehiclePlateOCRWorker(BlockingProvider())
+        worker.start()
+        try:
+            tasks = [
+                worker.new_task(
+                    track_id=index,
+                    frame_index=index,
+                    track_epoch=1,
+                    class_id=2,
+                    bbox=(10, 10, 190, 190),
+                    target_id=None,
+                    stable_plate_at_submit=None,
+                    crop=self.frame.copy(),
+                )
+                for index in (1, 2, 3)
+            ]
+            self.assertIsNone(worker.submit(tasks[0]))
+            self.assertTrue(started.wait(timeout=1.0))
+            self.assertIsNone(worker.submit(tasks[1]))
+            self.assertIs(worker.submit(tasks[2]), tasks[1])
+            release.set()
+            sleep(0.05)
+            stats = worker.stats()
+            self.assertEqual(stats.dropped_tasks, 1)
+        finally:
+            release.set()
+            worker.close()
+
+    def test_expired_result_is_discarded_before_plate_state_update(self) -> None:
+        release = Event()
+
+        class SlowProvider:
+            def recognize(self, crop):
+                del crop
+                release.wait(timeout=1.0)
+                return (PlateObservation("ABC12345", 0.95, (20, 40, 140, 70)),)
+
+        worker = VehiclePlateOCRWorker(SlowProvider())
+        worker.start()
+        coordinator = VehiclePlateCoordinator(
+            self._config(max_result_age_frames=1), SlowProvider(), ocr_worker=worker
+        )
+        try:
+            coordinator.process_frame(self.frame, [self.track], 0)
+            coordinator.process_frame(self.frame, [self.track], 1)
+            coordinator.process_frame(self.frame, [self.track], 2)
+            release.set()
+            sleep(0.05)
+            coordinator.process_frame(self.frame, [self.track], 3)
+            self.assertIsNone(coordinator.track_plate(self.track.track_id))
+            self.assertEqual(coordinator.ocr_stats()["expired_results"], 1)
+        finally:
+            release.set()
+            worker.close()
+
+    def test_async_results_still_require_two_confirmation_hits(self) -> None:
+        class FastProvider:
+            def recognize(self, crop):
+                del crop
+                return (PlateObservation("ABC12345", 0.95, (20, 40, 140, 70)),)
+
+        worker = VehiclePlateOCRWorker(FastProvider())
+        worker.start()
+        coordinator = VehiclePlateCoordinator(
+            self._config(), FastProvider(), ocr_worker=worker
+        )
+        confirmations = []
+        try:
+            for frame_index in range(40):
+                confirmations.extend(
+                    coordinator.process_frame(
+                        self.frame, [self.track], frame_index
+                    )
+                )
+                if confirmations:
+                    break
+                sleep(0.01)
+            self.assertEqual(len(confirmations), 1)
+            self.assertEqual(coordinator.track_plate(1), "ABC12345")
+            self.assertGreaterEqual(coordinator.ocr_stats()["completed"], 2)
+        finally:
+            worker.close()
+
+    def test_global_interval_limits_submissions_across_tracks(self) -> None:
+        class FastProvider:
+            def recognize(self, crop):
+                del crop
+                return ()
+
+        worker = VehiclePlateOCRWorker(FastProvider())
+        worker.start()
+        coordinator = VehiclePlateCoordinator(
+            self._config(min_inference_interval_ms=500),
+            FastProvider(),
+            ocr_worker=worker,
+        )
+        second_track = _track(2)
+        try:
+            for frame_index in range(10):
+                coordinator.process_frame(
+                    self.frame, [self.track, second_track], frame_index
+                )
+            self.assertEqual(worker.stats().submitted, 1)
+        finally:
+            worker.close()
 
 
 if __name__ == "__main__":

@@ -148,6 +148,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.vehicle_plate.provider, "hyperlpr3")
         self.assertEqual(config.vehicle_plate.confirmation_hits, 2)
         self.assertEqual(config.vehicle_plate.max_new_plate_inferences_per_frame, 1)
+        self.assertEqual(config.vehicle_plate.min_inference_interval_ms, 500)
         self.assertEqual(
             config.database.path,
             Path("database/person_reid.db").resolve(),
@@ -193,6 +194,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.gallery_recognition.recognition_threshold, 0.80)
         self.assertEqual(config.gallery_recognition.recognition_candidates_per_frame, 3)
         self.assertEqual(config.gallery_recognition.unmatched_retry_interval_frames, 15)
+        self.assertTrue(config.vehicle_plate.enabled)
+        self.assertEqual(config.vehicle_plate.min_inference_interval_ms, 500)
         self.assertAlmostEqual(
             config.reid_quality.min_frame_edge_margin_ratio, 0.01
         )

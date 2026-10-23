@@ -170,6 +170,8 @@ vehicle_plate:
   min_track_age_frames: 3
   max_new_plate_inferences_per_frame: 1
   inference_interval_frames: 5
+  min_inference_interval_ms: 500
+  max_result_age_frames: 15
 
 database:
   path: "database/person_reid.db"

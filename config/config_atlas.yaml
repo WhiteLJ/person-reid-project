@@ -166,7 +166,7 @@ vehicle_gallery_enrichment:
   duplicate_similarity_threshold: 0.95
 
 vehicle_plate:
-  # HyperLPR3 is not part of the Atlas runtime image yet.
+  # Enable when HyperLPR3 is installed in the Atlas runtime environment.
   enabled: true
   provider: "hyperlpr3"
   min_confidence: 0.85
@@ -178,6 +178,8 @@ vehicle_plate:
   min_track_age_frames: 3
   max_new_plate_inferences_per_frame: 1
   inference_interval_frames: 5
+  min_inference_interval_ms: 500
+  max_result_age_frames: 15
 
 ui:
   window_name: "Person + Vehicle Tracking - Atlas 310B"

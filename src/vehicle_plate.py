@@ -13,6 +13,9 @@ from dataclasses import dataclass, field
 import logging
 import math
 from numbers import Real
+from queue import Empty, Full, Queue
+from threading import Event, Lock, Thread
+from time import monotonic, perf_counter
 from typing import Any, Protocol
 
 import numpy as np
@@ -67,6 +70,217 @@ class PlateConfirmation:
     frame_index: int
     confidence: float
     sharpness: float
+
+
+@dataclass(frozen=True)
+class PlateOCRTask:
+    """Immutable crop snapshot submitted to the background OCR worker."""
+
+    task_id: int
+    track_id: int
+    frame_index: int
+    track_epoch: int
+    class_id: int
+    bbox: tuple[float, float, float, float]
+    target_id: int | None
+    stable_plate_at_submit: str | None
+    crop: np.ndarray
+
+
+@dataclass(frozen=True)
+class PlateOCRResult:
+    task: PlateOCRTask
+    observations: tuple[PlateObservation, ...]
+    elapsed_ms: float
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class VehiclePlateOCRStats:
+    submitted: int
+    completed: int
+    failed: int
+    dropped_tasks: int
+    dropped_results: int
+    total_elapsed_ms: float
+    max_elapsed_ms: float
+
+
+class VehiclePlateOCRWorker:
+    """Run the provider outside the Qt/runtime processing thread.
+
+    The input queue is deliberately size one.  When a newer task arrives while
+    another task is waiting, the waiting task is discarded in favor of the new
+    crop.  A task already inside the provider cannot be cancelled, but its
+    result is later validated by ``VehiclePlateCoordinator`` before use.
+    """
+
+    def __init__(
+        self,
+        provider: PlateRecognitionProvider,
+        *,
+        max_pending_tasks: int = 1,
+        result_queue_size: int = 8,
+    ) -> None:
+        if max_pending_tasks != 1:
+            raise ValueError("VehiclePlateOCRWorker requires one pending task")
+        self.provider = provider
+        self._tasks: Queue[PlateOCRTask | None] = Queue(maxsize=max_pending_tasks)
+        self._results: Queue[PlateOCRResult] = Queue(maxsize=result_queue_size)
+        self._stop = Event()
+        self._lock = Lock()
+        self._thread: Thread | None = None
+        self._next_task_id = 1
+        self._submitted = 0
+        self._completed = 0
+        self._failed = 0
+        self._dropped_tasks = 0
+        self._dropped_results = 0
+        self._total_elapsed_ms = 0.0
+        self._max_elapsed_ms = 0.0
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop.clear()
+            self._thread = Thread(
+                target=self._run,
+                name="vehicle-plate-ocr",
+                daemon=True,
+            )
+            self._thread.start()
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def new_task(
+        self,
+        *,
+        track_id: int,
+        frame_index: int,
+        track_epoch: int,
+        class_id: int,
+        bbox: tuple[float, float, float, float],
+        target_id: int | None,
+        stable_plate_at_submit: str | None,
+        crop: np.ndarray,
+    ) -> PlateOCRTask:
+        with self._lock:
+            task_id = self._next_task_id
+            self._next_task_id += 1
+        return PlateOCRTask(
+            task_id=task_id,
+            track_id=int(track_id),
+            frame_index=int(frame_index),
+            track_epoch=int(track_epoch),
+            class_id=int(class_id),
+            bbox=tuple(float(value) for value in bbox),
+            target_id=None if target_id is None else int(target_id),
+            stable_plate_at_submit=stable_plate_at_submit,
+            crop=np.asarray(crop).copy(),
+        )
+
+    def submit(self, task: PlateOCRTask) -> PlateOCRTask | None:
+        """Submit newest task and return a replaced waiting task, if any."""
+
+        if not self.running:
+            raise RuntimeError("VehiclePlateOCRWorker is not running")
+        dropped: PlateOCRTask | None = None
+        try:
+            dropped = self._tasks.get_nowait()
+        except Empty:
+            pass
+        try:
+            self._tasks.put_nowait(task)
+        except Full:  # A worker can win the queue race; keep the newest task.
+            try:
+                dropped = self._tasks.get_nowait()
+                self._tasks.put_nowait(task)
+            except (Empty, Full):
+                self._increment_dropped_tasks()
+                return task
+        with self._lock:
+            self._submitted += 1
+            if dropped is not None:
+                self._dropped_tasks += 1
+        return dropped
+
+    def drain_results(self) -> tuple[PlateOCRResult, ...]:
+        results: list[PlateOCRResult] = []
+        while True:
+            try:
+                results.append(self._results.get_nowait())
+            except Empty:
+                return tuple(results)
+
+    def stats(self) -> VehiclePlateOCRStats:
+        with self._lock:
+            return VehiclePlateOCRStats(
+                submitted=self._submitted,
+                completed=self._completed,
+                failed=self._failed,
+                dropped_tasks=self._dropped_tasks,
+                dropped_results=self._dropped_results,
+                total_elapsed_ms=self._total_elapsed_ms,
+                max_elapsed_ms=self._max_elapsed_ms,
+            )
+
+    def close(self, timeout: float = 2.0) -> None:
+        thread = self._thread
+        if thread is None:
+            return
+        self._stop.set()
+        while True:
+            try:
+                self._tasks.get_nowait()
+            except Empty:
+                break
+        try:
+            self._tasks.put_nowait(None)
+        except Full:
+            pass
+        thread.join(timeout=max(0.0, timeout))
+        if not thread.is_alive():
+            self._thread = None
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                task = self._tasks.get(timeout=0.1)
+            except Empty:
+                continue
+            if task is None:
+                return
+            started = perf_counter()
+            error: str | None = None
+            observations: tuple[PlateObservation, ...] = ()
+            try:
+                observations = tuple(self.provider.recognize(task.crop))
+            except Exception as exc:  # Provider errors must not kill runtime thread.
+                error = f"{type(exc).__name__}: {exc}"
+            elapsed_ms = (perf_counter() - started) * 1000.0
+            with self._lock:
+                self._completed += 1
+                self._total_elapsed_ms += elapsed_ms
+                self._max_elapsed_ms = max(self._max_elapsed_ms, elapsed_ms)
+                if error is not None:
+                    self._failed += 1
+            result = PlateOCRResult(task, observations, elapsed_ms, error)
+            try:
+                self._results.put_nowait(result)
+            except Full:
+                try:
+                    self._results.get_nowait()
+                    self._results.put_nowait(result)
+                except (Empty, Full):
+                    with self._lock:
+                        self._dropped_results += 1
+
+    def _increment_dropped_tasks(self) -> None:
+        with self._lock:
+            self._dropped_tasks += 1
 
 
 class PlateRecognitionProvider(Protocol):
@@ -136,16 +350,24 @@ class VehiclePlateCoordinator:
         provider: PlateRecognitionProvider | None = None,
         *,
         vehicle_class_ids: Sequence[int] = (2, 5, 7),
+        ocr_worker: VehiclePlateOCRWorker | None = None,
     ) -> None:
         self.config = config
         self.provider = provider
+        self.ocr_worker = ocr_worker
         self.vehicle_class_ids = frozenset(int(value) for value in vehicle_class_ids)
         self._track_states: dict[int, VehiclePlateState] = {}
         self._target_plates: dict[int, str] = {}
         self._track_to_target: dict[int, int] = {}
         self._last_seen_frame: dict[int, int] = {}
         self._track_ages: dict[int, int] = {}
+        self._track_epochs: dict[int, int] = {}
+        self._pending_tasks: dict[int, PlateOCRTask] = {}
         self._round_robin_cursor = 0
+        self._last_global_inference_at: float | None = None
+        self._first_ocr_at: float | None = None
+        self._last_ocr_stats_log_at: float | None = None
+        self._expired_results = 0
 
     @property
     def enabled(self) -> bool:
@@ -157,9 +379,9 @@ class VehiclePlateCoordinator:
         tracks: Sequence[Any],
         frame_index: int,
     ) -> tuple[PlateConfirmation, ...]:
-        """Run at most the configured number of new plate inferences."""
+        """Advance plate state without blocking on the OCR provider."""
 
-        if not self.enabled or self.provider is None:
+        if not self.enabled:
             return ()
         visible = [
             track
@@ -176,6 +398,10 @@ class VehiclePlateCoordinator:
                 if previous is not None and frame_index == previous + 1
                 else 1
             )
+            if track_id not in self._track_epochs:
+                self._track_epochs[track_id] = 1
+            elif previous is None or frame_index != previous + 1:
+                self._track_epochs[track_id] += 1
             if previous is None or frame_index != previous + 1:
                 state.pending_counts.clear()
                 state.pending_last_frame = None
@@ -183,6 +409,17 @@ class VehiclePlateCoordinator:
                     state.stable_plate = None
 
         self._prune_states(frame_index)
+        visible_by_id = {int(track.track_id): track for track in visible}
+        if self.ocr_worker is not None:
+            confirmations = self._consume_async_results(
+                visible_by_id, frame_index
+            )
+            self._schedule_async_task(frame, visible, frame_index)
+            self._maybe_log_ocr_stats()
+            return tuple(confirmations)
+
+        if self.provider is None:
+            return ()
         candidates = [
             track
             for track in visible
@@ -238,6 +475,235 @@ class VehiclePlateCoordinator:
                 )
         return tuple(confirmations)
 
+    def ocr_stats(self) -> dict[str, float | int]:
+        """Return diagnostic counters without exposing mutable worker state."""
+
+        if self.ocr_worker is None:
+            return {
+                "submitted": 0,
+                "completed": 0,
+                "failed": 0,
+                "dropped_tasks": 0,
+                "dropped_results": 0,
+                "expired_results": self._expired_results,
+                "actual_hz": 0.0,
+                "total_elapsed_ms": 0.0,
+                "max_elapsed_ms": 0.0,
+            }
+        stats = self.ocr_worker.stats()
+        elapsed = (
+            monotonic() - self._first_ocr_at
+            if self._first_ocr_at is not None
+            else 0.0
+        )
+        return {
+            "submitted": stats.submitted,
+            "completed": stats.completed,
+            "failed": stats.failed,
+            "dropped_tasks": stats.dropped_tasks,
+            "dropped_results": stats.dropped_results,
+            "expired_results": self._expired_results,
+            "actual_hz": stats.completed / elapsed if elapsed > 0.0 else 0.0,
+            "total_elapsed_ms": stats.total_elapsed_ms,
+            "max_elapsed_ms": stats.max_elapsed_ms,
+        }
+
+    def _schedule_async_task(
+        self, frame: np.ndarray, visible: Sequence[Any], frame_index: int
+    ) -> None:
+        if self.ocr_worker is None or not self.ocr_worker.running:
+            return
+        if int(getattr(self.config, "max_new_plate_inferences_per_frame", 1)) < 1:
+            return
+        now = monotonic()
+        minimum_interval = max(
+            0.0,
+            float(getattr(self.config, "min_inference_interval_ms", 500)) / 1000.0,
+        )
+        if (
+            self._last_global_inference_at is not None
+            and now - self._last_global_inference_at < minimum_interval
+        ):
+            return
+        candidates = [
+            track
+            for track in visible
+            if int(track.track_id) not in self._pending_track_ids()
+            and self._eligible_for_inference(track, frame_index)
+        ]
+        if not candidates:
+            return
+        candidates.sort(key=lambda track: int(track.track_id))
+        offset = self._round_robin_cursor % len(candidates)
+        candidates = candidates[offset:] + candidates[:offset]
+        selected = candidates[0]
+        crop = _crop_from_track(frame, selected)
+        if crop is None:
+            return
+        track_id = int(selected.track_id)
+        state = self._track_states[track_id]
+        task = self.ocr_worker.new_task(
+            track_id=track_id,
+            frame_index=frame_index,
+            track_epoch=self._track_epochs[track_id],
+            class_id=int(selected.class_id),
+            bbox=tuple(float(value) for value in selected.bbox),
+            target_id=self._track_to_target.get(track_id),
+            stable_plate_at_submit=state.stable_plate,
+            crop=crop,
+        )
+        dropped = self.ocr_worker.submit(task)
+        if dropped is not None:
+            self._pending_tasks.pop(dropped.task_id, None)
+        self._pending_tasks[task.task_id] = task
+        state.last_inference_frame = frame_index
+        self._round_robin_cursor += 1
+        self._last_global_inference_at = now
+        self._first_ocr_at = self._first_ocr_at or now
+
+    def _consume_async_results(
+        self, visible_by_id: dict[int, Any], frame_index: int
+    ) -> list[PlateConfirmation]:
+        if self.ocr_worker is None:
+            return []
+        confirmations: list[PlateConfirmation] = []
+        for result in self.ocr_worker.drain_results():
+            task = self._pending_tasks.pop(result.task.task_id, None)
+            if task is None:
+                self._expired_results += 1
+                LOGGER.debug(
+                    "VEHICLE_PLATE_OCR_RESULT_DROPPED task_id=%d reason=unknown_task",
+                    result.task.task_id,
+                )
+                continue
+            if result.error is not None:
+                LOGGER.warning(
+                    "VEHICLE_PLATE_OCR_FAILED task_id=%d track_id=%d "
+                    "elapsed_ms=%.2f error=%s",
+                    task.task_id,
+                    task.track_id,
+                    result.elapsed_ms,
+                    result.error,
+                )
+                continue
+            reason = self._stale_result_reason(
+                task, visible_by_id.get(task.track_id), frame_index
+            )
+            if reason is not None:
+                self._expired_results += 1
+                LOGGER.info(
+                    "VEHICLE_PLATE_OCR_RESULT_DROPPED task_id=%d track_id=%d "
+                    "task_frame=%d current_frame=%d reason=%s elapsed_ms=%.2f",
+                    task.task_id,
+                    task.track_id,
+                    task.frame_index,
+                    frame_index,
+                    reason,
+                    result.elapsed_ms,
+                )
+                continue
+            confirmations.extend(
+                self._apply_observations(task, result.observations, result.elapsed_ms)
+            )
+        return confirmations
+
+    def _apply_observations(
+        self,
+        task: PlateOCRTask,
+        observations: Sequence[PlateObservation],
+        elapsed_ms: float,
+    ) -> list[PlateConfirmation]:
+        state = self._track_states.get(task.track_id)
+        if state is None:
+            return []
+        accepted: list[tuple[PlateObservation, float]] = []
+        for observation in observations:
+            sharpness = self._quality(task.crop, observation)
+            if sharpness is not None:
+                accepted.append((observation, sharpness))
+        if not accepted:
+            self._expire_pending(state, task.frame_index)
+            return []
+        observation, sharpness = max(accepted, key=lambda item: item[0].confidence)
+        confirmation = self._accept_observation(
+            task.track_id, state, observation, sharpness, task.frame_index
+        )
+        if confirmation is not None:
+            LOGGER.info(
+                "VEHICLE_PLATE_CONFIRMED frame=%d track_id=%d target_id=%s "
+                "plate=%s ocr_ms=%.2f",
+                task.frame_index,
+                task.track_id,
+                self._track_to_target.get(task.track_id),
+                confirmation.plate_number,
+                elapsed_ms,
+            )
+        else:
+            LOGGER.debug(
+                "VEHICLE_PLATE_OBSERVED frame=%d track_id=%d plate=%s "
+                "confidence=%.4f sharpness=%.2f ocr_ms=%.2f",
+                task.frame_index,
+                task.track_id,
+                normalize_plate_number(observation.plate_number),
+                observation.confidence,
+                sharpness,
+                elapsed_ms,
+            )
+        return [] if confirmation is None else [confirmation]
+
+    def _stale_result_reason(
+        self, task: PlateOCRTask, current_track: Any | None, frame_index: int
+    ) -> str | None:
+        if current_track is None:
+            return "track_missing"
+        if int(current_track.class_id) not in self.vehicle_class_ids:
+            return "class_changed"
+        if frame_index - task.frame_index > int(
+            getattr(self.config, "max_result_age_frames", 15)
+        ):
+            return "result_expired"
+        if self._track_epochs.get(task.track_id) != task.track_epoch:
+            return "track_epoch_changed"
+        current_target = self._track_to_target.get(task.track_id)
+        if current_target != task.target_id and task.target_id is not None:
+            return "target_changed"
+        state = self._track_states.get(task.track_id)
+        if (
+            state is not None
+            and state.stable_plate is not None
+            and state.stable_plate != task.stable_plate_at_submit
+        ):
+            return "plate_state_changed"
+        return None
+
+    def _pending_track_ids(self) -> frozenset[int]:
+        return frozenset(task.track_id for task in self._pending_tasks.values())
+
+    def _maybe_log_ocr_stats(self) -> None:
+        if self.ocr_worker is None:
+            return
+        now = monotonic()
+        if (
+            self._last_ocr_stats_log_at is not None
+            and now - self._last_ocr_stats_log_at < 5.0
+        ):
+            return
+        stats = self.ocr_stats()
+        if int(stats["submitted"]) == 0:
+            return
+        self._last_ocr_stats_log_at = now
+        LOGGER.info(
+            "VEHICLE_PLATE_OCR_STATS submitted=%d completed=%d actual_hz=%.3f "
+            "dropped_tasks=%d expired_results=%d avg_ms=%.2f max_ms=%.2f",
+            stats["submitted"],
+            stats["completed"],
+            stats["actual_hz"],
+            stats["dropped_tasks"],
+            stats["expired_results"],
+            stats["total_elapsed_ms"] / max(1, int(stats["completed"])),
+            stats["max_elapsed_ms"],
+        )
+
     def track_plate(self, track_id: int) -> str | None:
         state = self._track_states.get(int(track_id))
         return None if state is None else state.stable_plate
@@ -282,6 +748,7 @@ class VehiclePlateCoordinator:
         self._track_states.pop(track_id, None)
         self._last_seen_frame.pop(track_id, None)
         self._track_ages.pop(track_id, None)
+        self._track_epochs.pop(track_id, None)
         self._track_to_target.pop(track_id, None)
 
     def _eligible_for_inference(self, track: Any, frame_index: int) -> bool:
