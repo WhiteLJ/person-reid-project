@@ -167,7 +167,7 @@ vehicle_gallery_enrichment:
 
 vehicle_plate:
   # HyperLPR3 is not part of the Atlas runtime image yet.
-  enabled: false
+  enabled: true
   provider: "hyperlpr3"
   min_confidence: 0.85
   min_plate_width: 60
