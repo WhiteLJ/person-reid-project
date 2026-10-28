@@ -48,6 +48,7 @@ class _GuardState:
     verification_track_id: int | None = None
     verification_hits: int = 0
     failed_clean_frames: int = 0
+    ambiguous_since_frame: int | None = None
 
 
 @dataclass(frozen=True)
@@ -189,6 +190,21 @@ class ActiveIdentityGuard:
                     self.guard_config.clear_overlap_ratio
                 )
                 if still_ambiguous:
+                    LOGGER.debug(
+                        "IDENTITY_GUARD_WAIT_OVERLAP frame=%d target_id=%d "
+                        "track_id=%d overlap=%.3f clear_threshold=%.3f "
+                        "wait_frames=%d",
+                        frame_index,
+                        target.target_id,
+                        track_id,
+                        self._max_overlap_with_people(track, tracks),
+                        self.guard_config.clear_overlap_ratio,
+                        (
+                            frame_index - state.ambiguous_since_frame
+                            if state.ambiguous_since_frame is not None
+                            else 0
+                        ),
+                    )
                     continue
 
                 verification_candidates = self._verification_candidates(
@@ -373,6 +389,7 @@ class ActiveIdentityGuard:
                 state.verification_track_id = None
                 state.verification_hits = 0
                 state.failed_clean_frames = 0
+                state.ambiguous_since_frame = frame_index
                 blocked.add(target.target_id)
                 LOGGER.info(
                     "IDENTITY_GUARD_AMBIGUOUS frame=%d target_id=%d track_id=%d "
@@ -579,4 +596,5 @@ class ActiveIdentityGuard:
         state.verification_track_id = None
         state.verification_hits = 0
         state.failed_clean_frames = 0
+        state.ambiguous_since_frame = None
         state.history = [current_geometry] if current_geometry is not None else []

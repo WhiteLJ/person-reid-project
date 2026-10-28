@@ -57,7 +57,7 @@ reid:
 reid_recovery:
   lost_grace_frames: 5
   reference_update_interval_frames: 15
-  recovery_interval_frames: 5
+  recovery_interval_frames: 2
   max_reference_embeddings: 8
   # Conservative engineering starting values based on the current test video;
   # these are not universal optima.
@@ -66,7 +66,7 @@ reid_recovery:
   reference_update_threshold: 0.80
   recovery_reference_support_threshold: 0.80
   recovery_reference_support_top_k: 3
-  recovery_min_track_age_frames: 3
+  recovery_min_track_age_frames: 2
   recovery_confirmation_hits: 2
   recovery_pending_max_age_frames: 60
   recovery_candidates_per_frame: 3
@@ -89,7 +89,7 @@ active_identity_guard:
   max_area_growth_ratio: 1.70
   max_center_shift_ratio: 0.35
   overlap_trigger_ratio: 0.15
-  clear_overlap_ratio: 0.10
+  clear_overlap_ratio: 0.15
   confirmation_hits: 2
   max_candidates: 3
 
@@ -108,14 +108,14 @@ vehicle_recovery:
   # Engineering starting values; recalibrate for the deployment site.
   lost_grace_frames: 5
   reference_update_interval_frames: 15
-  recovery_interval_frames: 5
+  recovery_interval_frames: 2
   max_reference_embeddings: 8
   recovery_threshold: 0.60
   recovery_margin: 0.08
   reference_update_threshold: 0.55
   recovery_reference_support_threshold: 0.55
   recovery_reference_support_top_k: 3
-  recovery_min_track_age_frames: 3
+  recovery_min_track_age_frames: 2
   recovery_confirmation_hits: 2
   recovery_pending_max_age_frames: 60
   recovery_candidates_per_frame: 1
@@ -130,24 +130,24 @@ vehicle_reid_quality:
 
 gallery_recognition:
   enabled: true
-  recognition_interval_frames: 10
-  min_track_age_frames: 5
+  recognition_interval_frames: 3
+  min_track_age_frames: 3
   recognition_threshold: 0.80
   recognition_margin: 0.05
   confirmation_hits: 2
   recognition_candidates_per_frame: 3
-  unmatched_retry_interval_frames: 15
+  unmatched_retry_interval_frames: 5
 
 vehicle_gallery_recognition:
   # Engineering starting values; recalibrate for the deployment site.
   enabled: true
-  recognition_interval_frames: 5
-  min_track_age_frames: 3
+  recognition_interval_frames: 2
+  min_track_age_frames: 2
   recognition_threshold: 0.60
   recognition_margin: 0.08
   confirmation_hits: 2
   recognition_candidates_per_frame: 1
-  unmatched_retry_interval_frames: 15
+  unmatched_retry_interval_frames: 5
 
 database:
   path: "database/person_reid.db"

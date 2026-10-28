@@ -65,6 +65,7 @@ class RecoveryFrameStats:
     sweep_processed_this_frame: int = 0
     sweep_frames: int = 0
     sweep_reid_ms: float = 0.0
+    sweep_skip_reason: str | None = None
 
 
 @dataclass
@@ -518,6 +519,8 @@ class TargetRecoveryCoordinator:
             reference_jobs.append(("reference", target.target_id, track, quality.crop))
 
         sweep_started = False
+        due_targets: tuple[SessionTarget, ...] = ()
+        recovery_skip_reason: str | None = None
         sweep = self._recovery_sweep
         if sweep is None:
             due_targets = tuple(
@@ -530,36 +533,66 @@ class TargetRecoveryCoordinator:
                 )
             )
             if due_targets:
-                candidate_ids = tuple(
-                    sorted(
-                        track.track_id
-                        for track in self.target_manager.recovery_candidates(tracks)
-                        if track.class_id in self.track_class_ids
-                        and self._track_ages.get(track.track_id, 0)
-                        >= self.recovery_config.recovery_min_track_age_frames
+                eligible_tracks = [
+                    track
+                    for track in self.target_manager.recovery_candidates(tracks)
+                    if track.class_id in self.track_class_ids
+                    and self._track_ages.get(track.track_id, 0)
+                    >= self.recovery_config.recovery_min_track_age_frames
+                ]
+                eligible_tracks.sort(
+                    key=lambda track: (
+                        self._track_ages.get(track.track_id, 0),
+                        track.track_id,
                     )
                 )
-                sweep = _RecoverySweep(
-                    start_frame=frame_index,
-                    target_ids=tuple(target.target_id for target in due_targets),
-                    candidate_track_ids=candidate_ids,
-                )
-                self._recovery_sweep = sweep
-                sweep_started = True
-                for target in due_targets:
-                    # The interval is measured between sweep starts, not
-                    # between sub-batches inside a sweep.
-                    self.target_manager.mark_recovery_attempt(target, frame_index)
-                self.recovery_attempted_count += len(due_targets)
-                LOGGER.debug(
-                    "RECOVERY_SWEEP_STARTED frame=%d targets=%d candidates=%d budget=%d",
-                    frame_index,
-                    len(due_targets),
-                    len(candidate_ids),
-                    self.recovery_config.recovery_candidates_per_frame,
-                )
+                candidate_ids = tuple(track.track_id for track in eligible_tracks)
+                if not candidate_ids:
+                    # Do not consume the recovery interval when there is no
+                    # snapshot to process.  A candidate may become eligible
+                    # on the very next frame as its age increases.
+                    recovery_skip_reason = "no_eligible_candidates"
+                    LOGGER.debug(
+                        "RECOVERY_SWEEP_SKIPPED frame=%d targets=%s "
+                        "reason=%s min_track_age=%d",
+                        frame_index,
+                        tuple(target.target_id for target in due_targets),
+                        recovery_skip_reason,
+                        self.recovery_config.recovery_min_track_age_frames,
+                    )
+                else:
+                    LOGGER.debug(
+                        "RECOVERY_CANDIDATE_ORDER frame=%d order=%s",
+                        frame_index,
+                        tuple(
+                            (
+                                track.track_id,
+                                self._track_ages.get(track.track_id, 0),
+                            )
+                            for track in eligible_tracks
+                        ),
+                    )
+                    sweep = _RecoverySweep(
+                        start_frame=frame_index,
+                        target_ids=tuple(target.target_id for target in due_targets),
+                        candidate_track_ids=candidate_ids,
+                    )
+                    self._recovery_sweep = sweep
+                    sweep_started = True
+                    for target in due_targets:
+                        # The interval is measured between sweep starts, not
+                        # between sub-batches inside a sweep.
+                        self.target_manager.mark_recovery_attempt(target, frame_index)
+                    self.recovery_attempted_count += len(due_targets)
+                    LOGGER.debug(
+                        "RECOVERY_SWEEP_STARTED frame=%d targets=%d candidates=%d budget=%d",
+                        frame_index,
+                        len(due_targets),
+                        len(candidate_ids),
+                        self.recovery_config.recovery_candidates_per_frame,
+                    )
 
-        recovery_due = sweep is not None
+        recovery_due = bool(due_targets) or sweep is not None
         processed_track_ids: tuple[int, ...] = ()
         valid_candidate_ids: set[int] = set()
         candidate_jobs: list[tuple[str, int, Track, np.ndarray]] = []
@@ -579,8 +612,9 @@ class TargetRecoveryCoordinator:
                 if not quality.accepted or quality.crop is None:
                     self.quality_rejected_count += 1
                     LOGGER.debug(
-                        "REID_QUALITY_REJECTED kind=recovery track=%d reason=%s",
+                        "REID_QUALITY_REJECTED kind=recovery track=%d age=%d reason=%s",
                         track.track_id,
+                        self._track_ages.get(track.track_id, 0),
                         quality.reason or "unknown",
                     )
                     continue
@@ -659,6 +693,7 @@ class TargetRecoveryCoordinator:
             sweep_processed_this_frame=len(processed_track_ids),
             sweep_frames=(sweep.frames if sweep else 0),
             sweep_reid_ms=(sweep.reid_ms if sweep else 0.0),
+            sweep_skip_reason=recovery_skip_reason,
         )
         if sweep is not None:
             LOGGER.debug(
@@ -719,7 +754,21 @@ class TargetRecoveryCoordinator:
             for track_id, embedding in sweep.embeddings.items()
             if track_id in current_tracks and track_id in currently_unbound
         ]
-        if not lost_targets or not recovery_candidates:
+        if not lost_targets:
+            LOGGER.debug(
+                "RECOVERY_SWEEP_RESULT frame=%d reason=no_lost_targets "
+                "snapshot_candidates=%d",
+                frame_index,
+                len(sweep.embeddings),
+            )
+            return []
+        if not recovery_candidates:
+            LOGGER.debug(
+                "RECOVERY_SWEEP_RESULT frame=%d reason=no_valid_candidate_embeddings "
+                "snapshot_candidates=%d",
+                frame_index,
+                len(sweep.candidate_track_ids),
+            )
             return []
 
         matches = assign_recovery_matches(
@@ -823,6 +872,12 @@ class TargetRecoveryCoordinator:
                     continue
                 scored.append((centroid, support, candidate))
             if not scored:
+                LOGGER.debug(
+                    "TARGET_RECOVERY_REJECTED frame=%d target_id=%d "
+                    "reason=no_compatible_scored_pair",
+                    frame_index,
+                    target.target_id,
+                )
                 continue
 
             centroid, support, candidate = max(

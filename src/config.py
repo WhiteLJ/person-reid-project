@@ -747,10 +747,10 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             )
     if (
         active_identity_guard_values["clear_overlap_ratio"]
-        >= active_identity_guard_values["overlap_trigger_ratio"]
+        > active_identity_guard_values["overlap_trigger_ratio"]
     ):
         raise ValueError(
-            "active_identity_guard.clear_overlap_ratio must be below "
+            "active_identity_guard.clear_overlap_ratio must not exceed "
             "overlap_trigger_ratio"
         )
 

@@ -9,6 +9,8 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 ASCEND_ENV="${ASCEND_ENV:-/usr/local/Ascend/ascend-toolkit/set_env.sh}"
 CAMERA_INDEX="${CAMERA_INDEX:-0}"
 
+export PYTHONNOUSERSITE=1
+
 if [[ -f "${ASCEND_ENV}" ]]; then
     # shellcheck disable=SC1090
     if ! source "${ASCEND_ENV}"; then
@@ -35,14 +37,9 @@ if [[ -z "${PYTHON_BIN}" ]]; then
     done
 fi
 
-# CANN's set_env.sh may already expose the board's conda environment in PATH.
-if [[ -z "${PYTHON_BIN}" ]] && command -v python >/dev/null 2>&1; then
-    PYTHON_BIN="$(command -v python)"
-fi
-
 if [[ -z "${PYTHON_BIN}" ]]; then
     echo "Python environment 'person-reid' was not found." >&2
-    echo "Set PYTHON_BIN to that environment's Python executable." >&2
+    echo "Set PYTHON_BIN to the absolute person-reid Python executable." >&2
     exit 1
 fi
 

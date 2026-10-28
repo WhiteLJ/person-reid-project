@@ -185,6 +185,8 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(config.ascend.reid_dynamic_batches, (1, 2, 4, 8))
         self.assertEqual(config.reid_recovery.recovery_threshold, 0.85)
+        self.assertEqual(config.reid_recovery.recovery_interval_frames, 2)
+        self.assertEqual(config.reid_recovery.recovery_min_track_age_frames, 2)
         self.assertEqual(
             config.reid_recovery.recovery_reference_support_threshold, 0.80
         )
@@ -192,14 +194,28 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.reid_recovery.recovery_candidates_per_frame, 3)
         self.assertEqual(config.session_target.lost_retention_seconds, 0.0)
         self.assertEqual(config.gallery_recognition.recognition_threshold, 0.80)
+        self.assertEqual(config.gallery_recognition.recognition_interval_frames, 3)
+        self.assertEqual(config.gallery_recognition.min_track_age_frames, 3)
         self.assertEqual(config.gallery_recognition.recognition_candidates_per_frame, 3)
-        self.assertEqual(config.gallery_recognition.unmatched_retry_interval_frames, 15)
+        self.assertEqual(config.gallery_recognition.unmatched_retry_interval_frames, 5)
+        self.assertEqual(config.vehicle_recovery.recovery_interval_frames, 2)
+        self.assertEqual(config.vehicle_recovery.recovery_min_track_age_frames, 2)
+        self.assertEqual(
+            config.vehicle_gallery_recognition.recognition_interval_frames, 2
+        )
+        self.assertEqual(
+            config.vehicle_gallery_recognition.min_track_age_frames, 2
+        )
+        self.assertEqual(
+            config.vehicle_gallery_recognition.unmatched_retry_interval_frames, 5
+        )
         self.assertTrue(config.vehicle_plate.enabled)
         self.assertEqual(config.vehicle_plate.min_inference_interval_ms, 500)
         self.assertAlmostEqual(
             config.reid_quality.min_frame_edge_margin_ratio, 0.01
         )
         self.assertAlmostEqual(config.reid_quality.max_person_overlap_ratio, 0.40)
+        self.assertAlmostEqual(config.active_identity_guard.clear_overlap_ratio, 0.15)
         self.assertFalse(config.ui.show_unselected_tracks)
         self.assertAlmostEqual(
             config.gallery_enrichment.duplicate_similarity_threshold, 0.95

@@ -553,6 +553,65 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(extractor.batch_calls, 1)
         self.assertEqual(extractor.batch_sizes, [1])
 
+    def test_empty_recovery_sweep_does_not_consume_recovery_interval(self) -> None:
+        extractor = _FakeReIDExtractor(
+            np.asarray((1, 0)),
+            np.asarray((1, 0)),
+        )
+        _manager, coordinator = self._coordinator(
+            extractor,
+            recovery_interval_frames=3,
+            recovery_min_track_age_frames=2,
+            recovery_confirmation_hits=1,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+
+        # The target becomes LOST, but there is no eligible replacement yet.
+        coordinator.process_frame(self.frame, [], 1)
+        self.assertIsNone(target.last_recovery_frame)
+        self.assertEqual(
+            coordinator.last_frame_recovery_stats.sweep_skip_reason,
+            "no_eligible_candidates",
+        )
+
+        # The candidate is still too young on frame 2, so no empty sweep is
+        # created and the next frame remains immediately eligible.
+        coordinator.process_frame(self.frame, [self.track_b], 2)
+        self.assertIsNone(target.last_recovery_frame)
+        self.assertEqual(extractor.batch_calls, 0)
+
+        coordinator.process_frame(self.frame, [self.track_b], 3)
+        self.assertEqual(target.last_recovery_frame, 3)
+        self.assertEqual(extractor.batch_calls, 1)
+
+    def test_recovery_sweep_prioritizes_younger_eligible_tracks(self) -> None:
+        extractor = _FakeReIDExtractor(
+            np.asarray((1, 0)),
+            np.asarray((0, 1)),
+        )
+        _manager, coordinator = self._coordinator(
+            extractor,
+            recovery_min_track_age_frames=1,
+            recovery_candidates_per_frame=1,
+            recovery_confirmation_hits=1,
+        )
+        target = coordinator.select_from_track(self.frame, self.track_a, 0)
+        assert target is not None
+        older = Track(21, (100, 20, 150, 220), 0.99, 0)
+        newer = Track(22, (200, 20, 250, 220), 0.99, 0)
+
+        # Track 21 has already been visible for one frame when the target
+        # becomes LOST; Track 22 is newly introduced on the recovery frame.
+        coordinator.process_frame(self.frame, [self.track_a, older], 0)
+        coordinator.process_frame(self.frame, [older, newer], 1)
+
+        assert coordinator._recovery_sweep is not None
+        self.assertEqual(
+            coordinator._recovery_sweep.candidate_track_ids,
+            (22, 21),
+        )
+
     def test_active_track_is_excluded_from_recovery_candidates(self) -> None:
         extractor = _FakeReIDExtractor(np.asarray((1, 0)), np.asarray((1, 0)))
         manager, coordinator = self._coordinator(extractor)

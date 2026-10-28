@@ -80,6 +80,7 @@ def person_gallery_adapter(gallery: TargetGallery) -> GalleryRecognitionAdapter:
 @dataclass
 class _PendingRecognition:
     hits: int
+    last_attempt_frame: int
 
 
 @dataclass(frozen=True)
@@ -451,6 +452,25 @@ class GalleryRecognitionCoordinator:
             return []
 
         sweep.protected_track_ids.update(protected_ids)
+        added_track_ids, skipped_retry = self._extend_sweep_candidates(
+            sweep,
+            tracks,
+            frame_index,
+        )
+        if skipped_retry:
+            self.retry_skipped_count += skipped_retry
+            self._retry_skipped_this_frame += skipped_retry
+        if added_track_ids:
+            LOGGER.debug(
+                "GALLERY_RECOGNITION_SWEEP_CANDIDATES_ADDED frame=%d "
+                "added=%s ages=%s",
+                frame_index,
+                tuple(added_track_ids),
+                tuple(
+                    (track_id, self._track_ages.get(track_id, 0))
+                    for track_id in added_track_ids
+                ),
+            )
         sweep.frames += 1
         selected_ids = sweep.next_track_ids(
             self._recognition_budget(len(sweep.candidate_track_ids))
@@ -476,8 +496,9 @@ class GalleryRecognitionCoordinator:
             if not quality.accepted or quality.crop is None:
                 self.quality_rejected_count += 1
                 LOGGER.debug(
-                    "REID_QUALITY_REJECTED kind=gallery track=%d reason=%s",
+                    "REID_QUALITY_REJECTED kind=gallery track=%d age=%d reason=%s",
                     track_id,
+                    self._track_ages.get(track_id, 0),
                     quality.reason or "unknown",
                 )
                 continue
@@ -587,7 +608,51 @@ class GalleryRecognitionCoordinator:
         if not identity_ids:
             return None
 
-        candidate_track_ids: list[int] = []
+        candidate_track_ids, skipped_retry = self._eligible_candidate_track_ids(
+            tracks,
+            frame_index,
+            protected_track_ids,
+        )
+
+        self.retry_skipped_count += skipped_retry
+        self._retry_skipped_this_frame = skipped_retry
+        if not candidate_track_ids:
+            return None
+
+        self._last_recognition_frame = frame_index
+        sweep = _RecognitionSweep(
+            start_frame=frame_index,
+            identity_ids=identity_ids,
+            candidate_track_ids=tuple(candidate_track_ids),
+        )
+        LOGGER.debug(
+            "GALLERY_RECOGNITION_CANDIDATE_ORDER frame=%d order=%s",
+            frame_index,
+            tuple(
+                (track_id, self._track_ages.get(track_id, 0))
+                for track_id in candidate_track_ids
+            ),
+        )
+        LOGGER.debug(
+            "GALLERY_RECOGNITION_SWEEP_STARTED frame=%d identities=%d "
+            "candidates=%d budget=%d skipped_retry=%d",
+            frame_index,
+            len(identity_ids),
+            len(candidate_track_ids),
+            self._recognition_budget(len(candidate_track_ids)),
+            skipped_retry,
+        )
+        return sweep
+
+    def _eligible_candidate_track_ids(
+        self,
+        tracks: Sequence[Track],
+        frame_index: int,
+        protected_track_ids: set[int],
+    ) -> tuple[list[int], int]:
+        """Return eligible IDs in age order and count retry-cooldown skips."""
+
+        candidate_tracks: list[Track] = []
         skipped_retry = 0
         for track in tracks:
             if track.class_id not in self.track_class_ids:
@@ -611,29 +676,42 @@ class GalleryRecognitionCoordinator:
             if next_eligible_frame is not None and frame_index < next_eligible_frame:
                 skipped_retry += 1
                 continue
-            candidate_track_ids.append(track.track_id)
-
-        self.retry_skipped_count += skipped_retry
-        self._retry_skipped_this_frame = skipped_retry
-        if not candidate_track_ids:
-            return None
-
-        self._last_recognition_frame = frame_index
-        sweep = _RecognitionSweep(
-            start_frame=frame_index,
-            identity_ids=identity_ids,
-            candidate_track_ids=tuple(candidate_track_ids),
+            candidate_tracks.append(track)
+        candidate_tracks.sort(
+            key=lambda track: (
+                self._track_ages.get(track.track_id, 0),
+                track.track_id,
+            )
         )
-        LOGGER.debug(
-            "GALLERY_RECOGNITION_SWEEP_STARTED frame=%d identities=%d "
-            "candidates=%d budget=%d skipped_retry=%d",
+        return [track.track_id for track in candidate_tracks], skipped_retry
+
+    def _extend_sweep_candidates(
+        self,
+        sweep: _RecognitionSweep,
+        tracks: Sequence[Track],
+        frame_index: int,
+    ) -> tuple[list[int], int]:
+        """Append newly eligible Tracks without starting a second sweep.
+
+        Recognition extraction is incremental, but final assignment still sees
+        every candidate captured before the sweep completes.  This prevents a
+        Track that reaches the minimum age during a long sweep from waiting
+        for another recognition interval.
+        """
+
+        candidate_ids, skipped_retry = self._eligible_candidate_track_ids(
+            tracks,
             frame_index,
-            len(identity_ids),
-            len(candidate_track_ids),
-            self._recognition_budget(len(candidate_track_ids)),
-            skipped_retry,
+            sweep.protected_track_ids,
         )
-        return sweep
+        existing_ids = set(sweep.candidate_track_ids)
+        added = [track_id for track_id in candidate_ids if track_id not in existing_ids]
+        if added:
+            sweep.candidate_track_ids = (
+                *sweep.candidate_track_ids,
+                *added,
+            )
+        return added, skipped_retry
 
     def _complete_sweep(
         self,
@@ -669,7 +747,20 @@ class GalleryRecognitionCoordinator:
                 GalleryRecognitionCandidate(track, embedding.copy())
             )
 
-        if not identities or not candidates:
+        if not identities:
+            LOGGER.debug(
+                "GALLERY_RECOGNITION_SWEEP_RESULT frame=%d "
+                "reason=no_free_gallery_identity",
+                frame_index,
+            )
+            return []
+        if not candidates:
+            LOGGER.debug(
+                "GALLERY_RECOGNITION_SWEEP_RESULT frame=%d "
+                "reason=no_valid_current_candidates snapshot_candidates=%d",
+                frame_index,
+                len(sweep.candidate_track_ids),
+            )
             return []
 
         matches = assign_gallery_matches(
@@ -689,8 +780,15 @@ class GalleryRecognitionCoordinator:
             match.candidate.track.track_id for match in matches
         }
         for track_id in attempted_track_ids - matched_track_ids:
-            self._retry_until_frame[track_id] = (
-                frame_index + self._retry_interval()
+            next_frame = frame_index + self._retry_interval()
+            self._retry_until_frame[track_id] = next_frame
+            LOGGER.debug(
+                "GALLERY_RECOGNITION_RETRY_COOLDOWN frame=%d track=%d "
+                "next_eligible_frame=%d interval=%d",
+                frame_index,
+                track_id,
+                next_frame,
+                self._retry_interval(),
             )
 
         recognized: list[GalleryRecognitionMatch] = []
@@ -699,13 +797,23 @@ class GalleryRecognitionCoordinator:
             pending = self._pending.get(key)
             hits = 1 if pending is None else pending.hits + 1
             if hits < self.recognition_config.confirmation_hits:
-                self._pending[key] = _PendingRecognition(hits=hits)
+                frame_gap = (
+                    0
+                    if pending is None
+                    else frame_index - pending.last_attempt_frame
+                )
+                self._pending[key] = _PendingRecognition(
+                    hits=hits,
+                    last_attempt_frame=frame_index,
+                )
                 LOGGER.debug(
-                    "GALLERY_RECOGNITION_PENDING identity=%s track=%d hits=%d/%d similarity=%.4f",
+                    "GALLERY_RECOGNITION_PENDING identity=%s track=%d hits=%d/%d "
+                    "frame_gap=%d similarity=%.4f",
                     self.gallery_adapter.identity_label(match.person_id),
                     match.candidate.track.track_id,
                     hits,
                     self.recognition_config.confirmation_hits,
+                    frame_gap,
                     match.similarity,
                 )
                 continue

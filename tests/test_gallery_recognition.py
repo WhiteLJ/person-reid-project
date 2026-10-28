@@ -181,6 +181,43 @@ class GalleryRecognitionTests(unittest.TestCase):
         self.assertEqual(gallery.session_target_for_person_id(1), 1)
         self.assertEqual(gallery.session_target_for_person_id(2), 2)
 
+    def test_new_track_is_added_to_active_sweep_before_final_matching(self) -> None:
+        extractor = _FakeReIDExtractor(
+            [_unit((0, 1)), _unit((0, 1)), _unit((1, 0))]
+        )
+        coordinator = _coordinator(
+            TargetManager(),
+            _gallery(_person(1, (1, 0))),
+            extractor,
+            recognition_interval_frames=100,
+            recognition_candidates_per_frame=1,
+            confirmation_hits=1,
+        )
+
+        first = _track(11)
+        second = _track(12, 50)
+        third = Track(13, (120, 5, 160, 110), 0.9, 0)
+        frame = np.zeros((120, 200, 3), dtype=np.uint8)
+        self.assertEqual(
+            coordinator.process_frame(frame, [first, second], 0),
+            [],
+        )
+        # Track 13 appears while the first sweep is still processing.  It is
+        # appended to that same snapshot and must not wait for frame 100.
+        self.assertEqual(
+            coordinator.process_frame(frame, [first, second, third], 1),
+            [],
+        )
+        matches = coordinator.process_frame(
+            frame,
+            [first, second, third],
+            2,
+        )
+
+        self.assertEqual(extractor.batch_sizes, [1, 1, 1])
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].candidate.track.track_id, 13)
+
     def test_low_similarity_is_not_recognized(self) -> None:
         extractor = _FakeReIDExtractor([_unit((0, 1))])
         manager = TargetManager()

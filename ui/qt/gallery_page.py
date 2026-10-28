@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, pyqtSignal
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import QAbstractItemView, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget
 
 from .models import GalleryRecordDTO
@@ -97,6 +97,9 @@ class SnapshotPreviewDialog(QDialog):
                 )
         layout.addWidget(image)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        button_font = QFont(self.font())
+        button_font.setPointSize(16)
+        buttons.setFont(button_font)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
@@ -120,6 +123,15 @@ class GalleryPage(QWidget):
         self.vehicle_button = QPushButton("\u8f66\u8f86\u5e93")
         self.batch_button = QPushButton("\u6279\u91cf\u7ba1\u7406")
         self.back_button = QPushButton("\u8fd4\u56de")
+        for button in (
+            self.people_button,
+            self.vehicle_button,
+            self.batch_button,
+            self.back_button,
+        ):
+            button_font = QFont(button.font())
+            button_font.setPointSize(16)
+            button.setFont(button_font)
         domain_buttons = QHBoxLayout()
         domain_buttons.setSpacing(10)
         domain_buttons.addWidget(self.people_button)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QPoint, QThread, Qt, pyqtSignal
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
 
 from src.config import AppConfig
@@ -22,6 +23,10 @@ class TargetDecisionPopup(QFrame):
         layout.setContentsMargins(6, 4, 6, 4)
         self.save_button = QPushButton("\u4fdd\u5b58\u76ee\u6807")
         self.discard_button = QPushButton("\u4e0d\u4fdd\u5b58")
+        button_font = QFont(self.font())
+        button_font.setPointSize(16)
+        self.save_button.setFont(button_font)
+        self.discard_button.setFont(button_font)
         layout.addWidget(self.save_button)
         layout.addWidget(self.discard_button)
         self.save_button.clicked.connect(self.saveRequested.emit)
@@ -94,6 +99,9 @@ class QtMainWindow(QMainWindow):
         self.database_button = QPushButton("\u6570\u636e\u5e93")
         self.quit_button = QPushButton("\u9000\u51fa")
         for button in (self.select_button, self.remove_button, self.database_button, self.quit_button):
+            button_font = QFont(button.font())
+            button_font.setPointSize(18)
+            button.setFont(button_font)
             button.setMinimumHeight(56)
             button.setSizePolicy(
                 QSizePolicy.Policy.Expanding,
