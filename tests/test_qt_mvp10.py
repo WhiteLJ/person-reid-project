@@ -80,21 +80,41 @@ class QtMVP10Tests(unittest.TestCase):
         self.assertEqual(canvas.source_frame.shape, frame.shape)
         self.assertIsNotNone(canvas.transform)
 
-    def test_formal_window_has_one_qmainwindow_and_four_main_controls(self) -> None:
+    def test_formal_window_has_one_qmainwindow_and_split_window_controls(self) -> None:
         window = QtMainWindow(load_config("config/config.yaml"), start_worker=False)
         self.assertIsInstance(window, QMainWindow)
         self.assertEqual(
-            [button.text() for button in (window.select_button, window.remove_button, window.database_button, window.quit_button)],
-            ["\u6846\u9009", "\u64a4\u9500", "\u6570\u636e\u5e93", "\u9000\u51fa"],
+            [
+                button.text()
+                for button in (
+                    window.select_button,
+                    window.remove_button,
+                    window.database_button,
+                    window.minimize_button,
+                    window.quit_button,
+                )
+            ],
+            ["\u6846\u9009", "\u64a4\u9500", "\u6570\u636e\u5e93", "\u6700\u5c0f\u5316", "\u9000\u51fa"],
         )
         self.assertEqual(window.stack.count(), 3)
         self.assertEqual(window.select_button.font().pointSize(), 20)
         self.assertGreaterEqual(window.select_button.minimumHeight(), 64)
+        self.assertEqual(window.minimize_button.font().pointSize(), 18)
+        self.assertGreaterEqual(window.minimize_button.minimumHeight(), 64)
         window.resize(1200, 800)
         window.show()
         self.app.processEvents()
-        widths = [button.width() for button in (window.select_button, window.remove_button, window.database_button, window.quit_button)]
-        self.assertLessEqual(max(widths) - min(widths), 2)
+        large_widths = [
+            button.width()
+            for button in (window.select_button, window.remove_button, window.database_button)
+        ]
+        small_widths = [window.minimize_button.width(), window.quit_button.width()]
+        self.assertLessEqual(max(large_widths) - min(large_widths), 2)
+        self.assertLessEqual(max(small_widths) - min(small_widths), 2)
+        shutdown_requests = []
+        window.shutdownRequested.connect(lambda: shutdown_requests.append(True))
+        window.minimize_button.click()
+        self.assertEqual(shutdown_requests, [])
         self.assertNotIn("keyPressEvent", QtMainWindow.__dict__)
         self.assertNotIn("keyPressEvent", VideoCanvas.__dict__)
         window._shutdown_requested = True
@@ -108,6 +128,8 @@ class QtMVP10Tests(unittest.TestCase):
         self.assertEqual(window.select_button.text(), "\u5b8c\u6210\u6846\u9009")
         self.assertFalse(window.remove_button.isEnabled())
         self.assertFalse(window.database_button.isEnabled())
+        self.assertTrue(window.minimize_button.isEnabled())
+        self.assertTrue(window.quit_button.isEnabled())
 
         finish_requests = []
         window.finishEditRequested.connect(lambda: finish_requests.append(True))
@@ -120,11 +142,15 @@ class QtMVP10Tests(unittest.TestCase):
         self.assertEqual(window.remove_button.text(), "\u5b8c\u6210\u64a4\u9500")
         self.assertFalse(window.select_button.isEnabled())
         self.assertFalse(window.database_button.isEnabled())
+        self.assertTrue(window.minimize_button.isEnabled())
+        self.assertTrue(window.quit_button.isEnabled())
         window._edit_finished()
         self.assertEqual(window._edit_mode, None)
         self.assertTrue(window.select_button.isEnabled())
         self.assertTrue(window.remove_button.isEnabled())
         self.assertTrue(window.database_button.isEnabled())
+        self.assertTrue(window.minimize_button.isEnabled())
+        self.assertTrue(window.quit_button.isEnabled())
         window._shutdown_requested = True
         window.close()
 
@@ -149,6 +175,7 @@ class QtMVP10Tests(unittest.TestCase):
 
         page = GalleryPage()
         self.assertTrue(hasattr(page, "import_button"))
+        self.assertTrue(hasattr(page, "appearance_log_button"))
         self.assertEqual(page.import_button.font().pointSize(), 18)
         self.assertGreaterEqual(page.import_button.minimumHeight(), 60)
         requested_domains = []

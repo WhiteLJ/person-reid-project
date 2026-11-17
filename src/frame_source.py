@@ -28,6 +28,10 @@ class FrameSource(Protocol):
     def source_label(self) -> str:
         ...
 
+    @property
+    def nominal_fps(self) -> float | None:
+        ...
+
     def open(self) -> None:
         ...
 

@@ -16,6 +16,15 @@ class ConfigTests(unittest.TestCase):
         config = load_config(Path("config/config.yaml"))
         self.assertEqual(config.runtime.num_workers, 0)
         self.assertEqual(config.video.source, 0)
+        self.assertTrue(config.replay.enabled)
+        self.assertEqual(
+            config.replay.directory,
+            Path("/home/HwHiAiUser/person_reid/replay").resolve(),
+        )
+        self.assertEqual(config.replay.segment_minutes, 10.0)
+        self.assertEqual(config.replay.retention_segments, 4)
+        self.assertEqual(config.replay.codec, "mp4v")
+        self.assertEqual(config.replay.queue_size, 120)
         self.assertEqual(config.inference.backend, "torch")
         self.assertEqual(config.ascend.device_id, 0)
         self.assertEqual(

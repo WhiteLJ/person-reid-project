@@ -53,6 +53,19 @@ class RuntimeConfig:
 
 
 @dataclass(frozen=True)
+class ReplayConfig:
+    """Rolling raw-camera replay settings."""
+
+    enabled: bool = True
+    directory: Path = Path("/home/HwHiAiUser/person_reid/replay")
+    segment_minutes: float = 10.0
+    retention_segments: int = 4
+    codec: str = "mp4v"
+    fallback_fps: float = 25.0
+    queue_size: int = 120
+
+
+@dataclass(frozen=True)
 class TrackingConfig:
     tracker: str
     persist: bool
@@ -317,6 +330,7 @@ class AppConfig:
     ui: UIConfig
     diagnostics: DiagnosticsConfig
     recognition_log: RecognitionLogConfig
+    replay: ReplayConfig
 
 
 def parse_source(value: Any) -> int | str:
@@ -383,6 +397,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     inference = _section(raw, "inference")
     ascend = _section(raw, "ascend")
     runtime = _section(raw, "runtime")
+    replay = _section(raw, "replay")
     tracking = _section(raw, "tracking")
     multiclass_tracking = _section(raw, "multiclass_tracking")
     selection = _section(raw, "selection")
@@ -987,6 +1002,32 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     if not recognition_log_path.is_absolute():
         recognition_log_path = project_root / recognition_log_path
 
+    replay_directory = Path(
+        replay.get("directory", "/home/HwHiAiUser/person_reid/replay")
+    )
+    if not str(replay_directory).strip():
+        raise ValueError("replay.directory cannot be empty")
+    if not replay_directory.is_absolute():
+        replay_directory = project_root / replay_directory
+    replay_segment_minutes = float(replay.get("segment_minutes", 10.0))
+    replay_retention_segments = int(replay.get("retention_segments", 4))
+    replay_codec = str(replay.get("codec", "mp4v")).strip()
+    replay_fallback_fps = float(replay.get("fallback_fps", 25.0))
+    replay_queue_size = int(replay.get("queue_size", 120))
+    if not math.isfinite(replay_segment_minutes) or replay_segment_minutes <= 0.0:
+        raise ValueError("replay.segment_minutes must be positive")
+    if replay_retention_segments < 1:
+        raise ValueError("replay.retention_segments must be positive")
+    if not replay_codec:
+        raise ValueError("replay.codec cannot be empty")
+    if (
+        not math.isfinite(replay_fallback_fps)
+        or replay_fallback_fps <= 0.0
+    ):
+        raise ValueError("replay.fallback_fps must be positive")
+    if replay_queue_size < 1:
+        raise ValueError("replay.queue_size must be positive")
+
     tracker_value = str(tracking.get("tracker", "botsort.yaml"))
     tracker_path = Path(tracker_value)
     if not tracker_path.is_absolute():
@@ -1158,4 +1199,13 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             ),
         ),
         recognition_log=RecognitionLogConfig(path=recognition_log_path),
+        replay=ReplayConfig(
+            enabled=bool(replay.get("enabled", True)),
+            directory=replay_directory,
+            segment_minutes=replay_segment_minutes,
+            retention_segments=replay_retention_segments,
+            codec=replay_codec,
+            fallback_fps=replay_fallback_fps,
+            queue_size=replay_queue_size,
+        ),
     )

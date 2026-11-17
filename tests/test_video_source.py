@@ -12,6 +12,7 @@ from src.frame_source import SourceReadStatus
 class _FakeCapture:
     def __init__(self) -> None:
         self.released = False
+        self.fps = 30.0
         self.frames = [np.zeros((4, 5, 3), dtype=np.uint8)]
 
     def isOpened(self) -> bool:
@@ -28,6 +29,9 @@ class _FakeCapture:
     def release(self) -> None:
         self.released = True
 
+    def get(self, _property) -> float:
+        return self.fps
+
 
 class VideoSourceTests(unittest.TestCase):
     @patch("src.video_source.cv2.VideoCapture")
@@ -39,6 +43,7 @@ class VideoSourceTests(unittest.TestCase):
         source.open()
         frame = source.read()
         self.assertIsNotNone(frame)
+        self.assertEqual(source.nominal_fps, 30.0)
         self.assertIsNone(source.read())
         source.release()
 
@@ -75,6 +80,17 @@ class VideoSourceTests(unittest.TestCase):
         self.assertIsNotNone(source.read())
         self.assertEqual(source.read_status, SourceReadStatus.FRAME)
         self.assertEqual(video_capture.call_count, 2)
+
+    @patch("src.video_source.cv2.VideoCapture")
+    def test_invalid_camera_fps_is_exposed_as_unknown(self, video_capture) -> None:
+        for fps in (0.0, float("nan")):
+            fake_capture = _FakeCapture()
+            fake_capture.fps = fps
+            video_capture.return_value = fake_capture
+            source = VideoSource(0)
+            source.open()
+            self.assertIsNone(source.nominal_fps)
+            source.release()
 
 
 if __name__ == "__main__":

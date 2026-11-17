@@ -117,8 +117,9 @@ class QtMainWindow(QMainWindow):
         self.select_button = QPushButton("\u6846\u9009")
         self.remove_button = QPushButton("\u64a4\u9500")
         self.database_button = QPushButton("\u6570\u636e\u5e93")
+        self.minimize_button = QPushButton("\u6700\u5c0f\u5316")
         self.quit_button = QPushButton("\u9000\u51fa")
-        for button in (self.select_button, self.remove_button, self.database_button, self.quit_button):
+        for button in (self.select_button, self.remove_button, self.database_button):
             button_font = QFont(button.font())
             button_font.setPointSize(20)
             button.setFont(button_font)
@@ -128,6 +129,25 @@ class QtMainWindow(QMainWindow):
                 QSizePolicy.Policy.Fixed,
             )
             toolbar.addWidget(button, 1)
+        window_controls = QWidget(self.main_page)
+        window_controls_layout = QHBoxLayout(window_controls)
+        window_controls_layout.setContentsMargins(0, 0, 0, 0)
+        window_controls_layout.setSpacing(10)
+        for button in (self.minimize_button, self.quit_button):
+            button_font = QFont(button.font())
+            button_font.setPointSize(18)
+            button.setFont(button_font)
+            button.setMinimumHeight(64)
+            button.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Fixed,
+            )
+            window_controls_layout.addWidget(button, 1)
+        window_controls.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        toolbar.addWidget(window_controls, 1)
         self.select_button.setCheckable(True)
         self.remove_button.setCheckable(True)
         active_style = "QPushButton:checked { background-color: #2f75b5; color: white; }"
@@ -142,6 +162,7 @@ class QtMainWindow(QMainWindow):
         self.select_button.clicked.connect(lambda _checked=False: self._toggle_edit("select"))
         self.remove_button.clicked.connect(lambda _checked=False: self._toggle_edit("remove"))
         self.database_button.clicked.connect(self._open_gallery)
+        self.minimize_button.clicked.connect(self.showMinimized)
         self.quit_button.clicked.connect(self._confirm_quit)
         self.video_canvas.roiSelected.connect(self.submitRoiRequested.emit)
         self.gallery_page.backRequested.connect(self._back_to_tracking)
@@ -269,6 +290,7 @@ class QtMainWindow(QMainWindow):
         self.select_button.setEnabled(not pending and not remove_active)
         self.remove_button.setEnabled(not pending and not select_active)
         self.database_button.setEnabled(not pending and active is None)
+        self.minimize_button.setEnabled(True)
         self.quit_button.setEnabled(True)
 
     def _open_gallery(self) -> None:

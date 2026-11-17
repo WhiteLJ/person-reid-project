@@ -74,6 +74,7 @@ class RuntimeWorkerCameraTests(unittest.TestCase):
         worker._person_recognition = Mock()
         worker._vehicle_recognition = Mock()
         worker._vehicle_recognition.process_frame.return_value = []
+        worker._replay_recorder = Mock()
         worker._render = lambda frame, **kwargs: frame
         worker._runtime_frame = lambda frame: object()
         return worker
@@ -88,6 +89,11 @@ class RuntimeWorkerCameraTests(unittest.TestCase):
         worker.process_next_frame()
 
         self.assertEqual(source.read_count, 1)
+        worker._replay_recorder.submit.assert_called_once()
+        np.testing.assert_array_equal(
+            worker._replay_recorder.submit.call_args.args[0],
+            np.zeros((8, 10, 3), dtype=np.uint8),
+        )
         worker._tracking_pipeline.process.assert_called_once()
         self.assertEqual(frames, [])
 
@@ -101,6 +107,7 @@ class RuntimeWorkerCameraTests(unittest.TestCase):
 
         self.assertEqual(shutdown, [])
         self.assertEqual(source.reconnect_count, 1)
+        worker._replay_recorder.submit.assert_not_called()
 
 
 if __name__ == "__main__":

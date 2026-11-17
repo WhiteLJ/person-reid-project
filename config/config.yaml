@@ -182,6 +182,15 @@ vehicle_database:
 recognition_log:
   path: "data/recognition_log.db"
 
+replay:
+  enabled: true
+  directory: "/home/HwHiAiUser/person_reid/replay"
+  segment_minutes: 10
+  retention_segments: 4
+  codec: "mp4v"
+  fallback_fps: 25.0
+  queue_size: 120
+
 ui:
   window_name: "Person Tracking - MVP-8.2"
   wait_key_ms: 1

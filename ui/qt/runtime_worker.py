@@ -26,6 +26,7 @@ from src.models import Track
 from src.reid import ReIDExtractor
 from src.reid_frame_cache import ReIDFrameCache
 from src.recognition_log_database import RecognitionLogRepository
+from src.replay_recorder import RollingReplayRecorder
 from src.roi_selector import find_track_by_roi, roi_xyxy_to_xywh
 from src.source_factory import create_frame_source
 from src.target_manager import TargetManager
@@ -121,6 +122,7 @@ class RuntimeWorker(QObject):
         self._vehicle_recognition: VehicleGalleryRecognitionCoordinator | None = None
         self._vehicle_plate: VehiclePlateCoordinator | None = None
         self._vehicle_plate_ocr_worker: VehiclePlateOCRWorker | None = None
+        self._replay_recorder: RollingReplayRecorder | None = None
         self._pending_external_vehicle_imports: dict[
             str, tuple[np.ndarray, bytes, np.ndarray]
         ] = {}
@@ -157,6 +159,7 @@ class RuntimeWorker(QObject):
             self._initialize_runtime()
             self._source = create_frame_source(self.config)
             self._source.open()
+            self._start_replay_recorder()
             self._timer = QTimer(self)
             self._timer.setInterval(1)
             self._timer.timeout.connect(self.process_next_frame)
@@ -348,6 +351,10 @@ class RuntimeWorker(QObject):
             return
         self._source_failure_status_sent = False
         self._next_source_reconnect_at = 0.0
+        # Submit the untouched source frame before any detection, ReID, or
+        # rendering work.  The recorder copies it into its bounded queue.
+        if self._replay_recorder is not None:
+            self._replay_recorder.submit(frame)
         self._frame_index += 1
         self._current_frame = frame.copy()
         result = self._tracking_pipeline.process(frame)
@@ -680,6 +687,34 @@ class RuntimeWorker(QObject):
 
     def _source_is_camera(self) -> bool:
         return bool(getattr(self._source, "is_camera", False))
+
+    def _start_replay_recorder(self) -> None:
+        if self._source is None or not self._source_is_camera():
+            LOGGER.info(
+                "REPLAY_SKIPPED reason=non_camera_source source=%s",
+                getattr(self._source, "source_label", None),
+            )
+            return
+        replay_config = getattr(self.config, "replay", None)
+        if replay_config is None or not replay_config.enabled:
+            LOGGER.info("REPLAY_SKIPPED reason=disabled")
+            return
+        try:
+            recorder = RollingReplayRecorder(
+                replay_config.directory,
+                segment_minutes=replay_config.segment_minutes,
+                retention_segments=replay_config.retention_segments,
+                codec=replay_config.codec,
+                fallback_fps=replay_config.fallback_fps,
+                queue_size=replay_config.queue_size,
+            )
+            if recorder.start(getattr(self._source, "nominal_fps", None)):
+                self._replay_recorder = recorder
+            else:
+                LOGGER.warning("REPLAY_DISABLED reason=start_failed")
+        except Exception:
+            LOGGER.exception("REPLAY_START_FAILED")
+            self._replay_recorder = None
 
     def _source_kind(self) -> str:
         return str(getattr(self._source, "source_kind", "unknown"))
@@ -1236,12 +1271,20 @@ class RuntimeWorker(QObject):
         self._closing = True
         if self._timer is not None:
             self._timer.stop()
+        # Stop replay first so all queued raw frames are flushed and the last
+        # MP4 is released before the source and inference resources close.
+        self._close_runtime()
         if self._source is not None:
             self._source.release()
-        self._close_runtime()
         self.shutdown_complete.emit()
 
     def _close_runtime(self) -> None:
+        if self._replay_recorder is not None:
+            try:
+                self._replay_recorder.close()
+            except Exception:
+                LOGGER.exception("REPLAY_CLOSE_FAILED")
+            self._replay_recorder = None
         if self._vehicle_plate_ocr_worker is not None:
             self._vehicle_plate_ocr_worker.close()
             self._vehicle_plate_ocr_worker = None

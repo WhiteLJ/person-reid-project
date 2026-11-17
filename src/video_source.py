@@ -5,6 +5,7 @@ from __future__ import annotations
 from logging import getLogger
 from pathlib import Path
 from time import monotonic
+import math
 
 import cv2
 import numpy as np
@@ -26,6 +27,7 @@ class VideoSource:
         self._consecutive_read_failures = 0
         self._reconnect_pending = False
         self._last_failure_log = 0.0
+        self._nominal_fps: float | None = None
 
     @property
     def source_label(self) -> str:
@@ -40,6 +42,10 @@ class VideoSource:
     @property
     def is_camera(self) -> bool:
         return isinstance(self.source, int)
+
+    @property
+    def nominal_fps(self) -> float | None:
+        return self._nominal_fps
 
     @property
     def read_status(self) -> str:
@@ -57,6 +63,7 @@ class VideoSource:
             self.release()
             LOGGER.error("SOURCE_OPEN_FAILED type=%s source=%s", self.source_kind, self.source_label)
             raise OSError(f"unable to open video source: {self.source}")
+        self._nominal_fps = self._read_nominal_fps()
         self._read_status = SourceReadStatus.NOT_OPEN
         LOGGER.info("SOURCE_OPENED type=%s source=%s", self.source_kind, self.source_label)
 
@@ -107,6 +114,7 @@ class VideoSource:
                 self.release()
                 LOGGER.warning("SOURCE_RECONNECT_FAILED type=%s source=%s", self.source_kind, self.source_label)
                 return False
+            self._nominal_fps = self._read_nominal_fps()
         except Exception:
             self.release()
             LOGGER.exception("SOURCE_RECONNECT_FAILED type=%s source=%s", self.source_kind, self.source_label)
@@ -120,6 +128,18 @@ class VideoSource:
         if self._capture is not None:
             self._capture.release()
             self._capture = None
+
+    def _read_nominal_fps(self) -> float | None:
+        if self._capture is None:
+            return None
+        getter = getattr(self._capture, "get", None)
+        if not callable(getter):
+            return None
+        try:
+            fps = float(getter(cv2.CAP_PROP_FPS))
+        except (TypeError, ValueError):
+            return None
+        return fps if math.isfinite(fps) and fps > 0.0 else None
 
     def __enter__(self) -> "VideoSource":
         self.open()
