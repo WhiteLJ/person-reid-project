@@ -9,8 +9,9 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
 
 from src.config import AppConfig
+from .appearance_log_page import AppearanceLogPage
 from .gallery_page import GalleryPage
-from .models import GalleryRecordDTO, RuntimeFrame, SelectionResultDTO
+from .models import AppearanceLogRecordDTO, GalleryRecordDTO, RuntimeFrame, SelectionResultDTO
 from .runtime_worker import RuntimeWorker
 from .widgets.video_canvas import VideoCanvas
 
@@ -46,6 +47,7 @@ class QtMainWindow(QMainWindow):
     deleteGalleryRequested = pyqtSignal(str, object, bool)
     importGalleryFileRequested = pyqtSignal(str, str)
     setGalleryRecognitionEnabledRequested = pyqtSignal(str, int, bool)
+    refreshAppearanceLogRequested = pyqtSignal()
     shutdownRequested = pyqtSignal()
 
     def __init__(self, config: AppConfig, source_override: str | None = None, parent=None, *, start_worker: bool = True) -> None:
@@ -60,8 +62,10 @@ class QtMainWindow(QMainWindow):
         self.stack = QStackedWidget(self)
         self.main_page = QWidget()
         self.gallery_page = GalleryPage()
+        self.appearance_log_page = AppearanceLogPage()
         self.stack.addWidget(self.main_page)
         self.stack.addWidget(self.gallery_page)
+        self.stack.addWidget(self.appearance_log_page)
         self._build_main_page()
         central = QWidget(self)
         root = QVBoxLayout(central)
@@ -80,6 +84,8 @@ class QtMainWindow(QMainWindow):
         self.worker.edit_started.connect(self._edit_started)
         self.worker.edit_finished.connect(self._edit_finished)
         self.worker.gallery_rows_ready.connect(self._gallery_rows_ready)
+        self.worker.appearance_log_rows_ready.connect(self._appearance_log_rows_ready)
+        self.worker.appearance_log_changed.connect(self._appearance_log_changed)
         self.worker.gallery_mutation_done.connect(self._gallery_mutation_done)
         self.worker.status_message.connect(self._set_status)
         self.worker.fatal_error.connect(self._fatal_error)
@@ -97,6 +103,7 @@ class QtMainWindow(QMainWindow):
         self.setGalleryRecognitionEnabledRequested.connect(
             self.worker.set_gallery_recognition_enabled
         )
+        self.refreshAppearanceLogRequested.connect(self.worker.refresh_appearance_log)
         self.shutdownRequested.connect(self.worker.request_shutdown)
         self._update_edit_controls()
         if start_worker:
@@ -140,6 +147,11 @@ class QtMainWindow(QMainWindow):
         self.gallery_page.backRequested.connect(self._back_to_tracking)
         self.gallery_page.deleteRequested.connect(self._confirm_gallery_delete)
         self.gallery_page.importRequested.connect(self._choose_gallery_import)
+        self.gallery_page.appearanceLogRequested.connect(self._open_appearance_log)
+        self.appearance_log_page.backRequested.connect(self._back_to_tracking)
+        self.appearance_log_page.refreshRequested.connect(
+            self.refreshAppearanceLogRequested.emit
+        )
 
     def _runtime_ready(self) -> None:
         self._set_status("\u8fd0\u884c\u4e2d")
@@ -262,6 +274,10 @@ class QtMainWindow(QMainWindow):
     def _open_gallery(self) -> None:
         self.stack.setCurrentWidget(self.gallery_page)
 
+    def _open_appearance_log(self) -> None:
+        self.stack.setCurrentWidget(self.appearance_log_page)
+        self.refreshAppearanceLogRequested.emit()
+
     def _back_to_tracking(self) -> None:
         self.stack.setCurrentWidget(self.main_page)
 
@@ -281,6 +297,15 @@ class QtMainWindow(QMainWindow):
 
     def _gallery_rows_ready(self, records: tuple[GalleryRecordDTO, ...]) -> None:
         self.gallery_page.set_records(records)
+
+    def _appearance_log_rows_ready(
+        self, records: tuple[AppearanceLogRecordDTO, ...]
+    ) -> None:
+        self.appearance_log_page.set_records(records)
+
+    def _appearance_log_changed(self) -> None:
+        if self.stack.currentWidget() is self.appearance_log_page:
+            self.refreshAppearanceLogRequested.emit()
 
     def _confirm_gallery_delete(self, domain: str, ids, batch: bool) -> None:
         values = [int(ids)] if isinstance(ids, int) else [int(value) for value in ids]

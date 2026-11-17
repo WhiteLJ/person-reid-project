@@ -9,9 +9,10 @@ try:
     from PyQt6.QtCore import QRectF, Qt
     from PyQt6.QtWidgets import QAbstractItemView, QApplication, QMainWindow
     from src.config import load_config
+    from ui.qt.appearance_log_page import AppearanceLogPage
     from ui.qt.gallery_page import GalleryTableModel
     from ui.qt.main_window import QtMainWindow
-    from ui.qt.models import GalleryRecordDTO
+    from ui.qt.models import AppearanceLogRecordDTO, GalleryRecordDTO
     from ui.qt.widgets.video_canvas import CanvasTransform, VideoCanvas
     QT_AVAILABLE = True
 except ImportError:
@@ -86,7 +87,7 @@ class QtMVP10Tests(unittest.TestCase):
             [button.text() for button in (window.select_button, window.remove_button, window.database_button, window.quit_button)],
             ["\u6846\u9009", "\u64a4\u9500", "\u6570\u636e\u5e93", "\u9000\u51fa"],
         )
-        self.assertEqual(window.stack.count(), 2)
+        self.assertEqual(window.stack.count(), 3)
         self.assertEqual(window.select_button.font().pointSize(), 20)
         self.assertGreaterEqual(window.select_button.minimumHeight(), 64)
         window.resize(1200, 800)
@@ -170,6 +171,52 @@ class QtMVP10Tests(unittest.TestCase):
         self.assertGreaterEqual(page.table.horizontalHeader().font().pointSize(), 18)
         page._toggle_batch()
         self.assertEqual(page.table.selectionMode(), QAbstractItemView.SelectionMode.MultiSelection)
+        page.close()
+
+    def test_appearance_log_page_is_read_only_and_newest_first(self) -> None:
+        page = AppearanceLogPage()
+        page.set_records(
+            (
+                AppearanceLogRecordDTO(
+                    event_id=1,
+                    event_time="2026-11-17 16:20:31",
+                    domain="person",
+                    identity_id=1,
+                    display_id="P001",
+                    event_type="recognition",
+                    similarity=0.91234,
+                    source_label="Camera 0",
+                ),
+                AppearanceLogRecordDTO(
+                    event_id=2,
+                    event_time="2026-11-17 16:31:02",
+                    domain="vehicle",
+                    identity_id=2,
+                    display_id="V002",
+                    event_type="recovery",
+                    plate_number="\u7ca4B12345",
+                    similarity=0.93456,
+                    source_label="Camera 0",
+                ),
+            )
+        )
+        self.assertEqual(page.model.rowCount(), 2)
+        self.assertEqual(page.model.data(page.model.index(0, 2)), "V002")
+        self.assertEqual(page.model.data(page.model.index(0, 1)), "\u8f66\u8f86")
+        self.assertEqual(page.model.data(page.model.index(0, 3)), "\u6062\u590d")
+        self.assertEqual(page.model.data(page.model.index(0, 4)), "\u7ca4B12345")
+        self.assertEqual(page.model.data(page.model.index(1, 1)), "\u4eba\u5458")
+        self.assertEqual(page.model.data(page.model.index(1, 3)), "\u8bc6\u522b")
+        self.assertEqual(page.model.data(page.model.index(1, 4)), "\u2014")
+
+        refreshes = []
+        backs = []
+        page.refreshRequested.connect(lambda: refreshes.append(True))
+        page.backRequested.connect(lambda: backs.append(True))
+        page.refresh_button.click()
+        page.back_button.click()
+        self.assertEqual(refreshes, [True])
+        self.assertEqual(backs, [True])
         page.close()
 
 

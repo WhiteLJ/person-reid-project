@@ -228,6 +228,7 @@ class GalleryPage(QWidget):
     backRequested = pyqtSignal()
     deleteRequested = pyqtSignal(str, object, bool)
     importRequested = pyqtSignal(str)
+    appearanceLogRequested = pyqtSignal()
     recognitionEnabledChanged = pyqtSignal(str, int, bool)
 
     def __init__(self, parent=None) -> None:
@@ -243,12 +244,14 @@ class GalleryPage(QWidget):
         toolbar.setColumnStretch(2, 1)
         self.people_button = QPushButton("\u4eba\u5458\u5e93")
         self.vehicle_button = QPushButton("\u8f66\u8f86\u5e93")
+        self.appearance_log_button = QPushButton("\u51fa\u73b0\u8bb0\u5f55")
         self.import_button = QPushButton("\u8bfb\u53d6\u5916\u90e8\u6587\u4ef6")
         self.batch_button = QPushButton("\u6279\u91cf\u7ba1\u7406")
         self.back_button = QPushButton("\u8fd4\u56de")
         for button in (
             self.people_button,
             self.vehicle_button,
+            self.appearance_log_button,
             self.import_button,
             self.batch_button,
             self.back_button,
@@ -261,6 +264,7 @@ class GalleryPage(QWidget):
         domain_buttons.setSpacing(10)
         domain_buttons.addWidget(self.people_button)
         domain_buttons.addWidget(self.vehicle_button)
+        domain_buttons.addWidget(self.appearance_log_button)
         toolbar.addLayout(domain_buttons, 0, 0, alignment=Qt.AlignmentFlag.AlignLeft)
         management_buttons = QHBoxLayout()
         management_buttons.setSpacing(10)
@@ -292,6 +296,7 @@ class GalleryPage(QWidget):
         root.addWidget(self.table, 1)
         self.people_button.clicked.connect(lambda: self.set_domain("person"))
         self.vehicle_button.clicked.connect(lambda: self.set_domain("vehicle"))
+        self.appearance_log_button.clicked.connect(self.appearanceLogRequested.emit)
         self.import_button.clicked.connect(lambda: self.importRequested.emit(self._domain))
         self.batch_button.clicked.connect(self._toggle_batch)
         self.back_button.clicked.connect(self.backRequested)

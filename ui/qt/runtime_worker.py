@@ -42,7 +42,12 @@ from src.vehicle_plate import (
 )
 from src.time_utils import current_local_timestamp
 from src.visualization import draw_multiclass_tracks
-from ui.qt.models import GalleryRecordDTO, RuntimeFrame, SelectionResultDTO
+from ui.qt.models import (
+    AppearanceLogRecordDTO,
+    GalleryRecordDTO,
+    RuntimeFrame,
+    SelectionResultDTO,
+)
 
 
 LOGGER = getLogger(__name__)
@@ -81,6 +86,8 @@ class RuntimeWorker(QObject):
     edit_started = pyqtSignal(str)
     edit_finished = pyqtSignal()
     gallery_rows_ready = pyqtSignal(object)
+    appearance_log_rows_ready = pyqtSignal(object)
+    appearance_log_changed = pyqtSignal()
     gallery_mutation_done = pyqtSignal(str)
     status_message = pyqtSignal(str)
     fatal_error = pyqtSignal(str)
@@ -522,6 +529,7 @@ class RuntimeWorker(QObject):
                 ),
                 plate_number=plate_number,
             )
+            self.appearance_log_changed.emit()
         except Exception:
             LOGGER.exception(
                 "RECOGNITION_LOG_WRITE_FAILED domain=%s identity_id=%d "
@@ -531,6 +539,39 @@ class RuntimeWorker(QObject):
                 event_type,
                 self._frame_index,
             )
+
+    @pyqtSlot()
+    def refresh_appearance_log(self) -> None:
+        """Read the append-only event history and publish Qt DTOs."""
+
+        if self._recognition_log is None:
+            self.appearance_log_rows_ready.emit(())
+            self.status_message.emit("\u51fa\u73b0\u8bb0\u5f55\u8bfb\u53d6\u5931\u8d25")
+            return
+        try:
+            events = self._recognition_log.load_all()
+            rows = tuple(
+                AppearanceLogRecordDTO(
+                    event_id=event.event_id,
+                    event_time=event.event_time,
+                    domain=event.domain,
+                    identity_id=event.identity_id,
+                    display_id=event.display_id,
+                    event_type=event.event_type,
+                    similarity=event.similarity,
+                    track_id=event.track_id,
+                    frame_index=event.frame_index,
+                    source_label=event.source_label,
+                    plate_number=event.plate_number,
+                )
+                for event in events
+            )
+        except Exception:
+            LOGGER.exception("APPEARANCE_LOG_READ_FAILED")
+            self.appearance_log_rows_ready.emit(())
+            self.status_message.emit("\u51fa\u73b0\u8bb0\u5f55\u8bfb\u53d6\u5931\u8d25")
+            return
+        self.appearance_log_rows_ready.emit(rows)
 
     def _sync_vehicle_plate_confirmations(
         self, confirmations: tuple[PlateConfirmation, ...]

@@ -41,6 +41,23 @@ class GalleryRecordDTO:
 
 
 @dataclass(frozen=True)
+class AppearanceLogRecordDTO:
+    """Read-only event data published by the runtime worker to Qt."""
+
+    event_id: int
+    event_time: str
+    domain: str
+    identity_id: int
+    display_id: str
+    event_type: str
+    similarity: float | None = None
+    track_id: int | None = None
+    frame_index: int | None = None
+    source_label: str | None = None
+    plate_number: str | None = None
+
+
+@dataclass(frozen=True)
 class SelectionResultDTO:
     domain: str
     target_id: int
