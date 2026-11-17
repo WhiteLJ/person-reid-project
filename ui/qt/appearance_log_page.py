@@ -87,6 +87,7 @@ class AppearanceLogPage(QWidget):
 
     backRequested = pyqtSignal()
     refreshRequested = pyqtSignal()
+    exportRequested = pyqtSignal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -103,13 +104,15 @@ class AppearanceLogPage(QWidget):
         toolbar.addStretch(1)
 
         self.refresh_button = QPushButton("\u5237\u65b0")
+        self.export_button = QPushButton("\u5bfc\u51faTXT")
         self.back_button = QPushButton("\u8fd4\u56de")
-        for button in (self.refresh_button, self.back_button):
+        for button in (self.export_button, self.refresh_button, self.back_button):
             button_font = QFont(button.font())
             button_font.setPointSize(18)
             button.setFont(button_font)
             button.setMinimumHeight(60)
             button.setMinimumWidth(140)
+        toolbar.addWidget(self.export_button)
         toolbar.addWidget(self.refresh_button)
         toolbar.addWidget(self.back_button)
         root.addLayout(toolbar)
@@ -136,6 +139,7 @@ class AppearanceLogPage(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(48)
         root.addWidget(self.table, 1)
 
+        self.export_button.clicked.connect(self.exportRequested.emit)
         self.refresh_button.clicked.connect(self.refreshRequested.emit)
         self.back_button.clicked.connect(self.backRequested.emit)
 

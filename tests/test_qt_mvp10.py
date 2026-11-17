@@ -9,10 +9,11 @@ try:
     from PyQt6.QtCore import QRectF, Qt
     from PyQt6.QtWidgets import QAbstractItemView, QApplication, QMainWindow
     from src.config import load_config
+    from ui.qt.activity_feed import ActivityFeed
     from ui.qt.appearance_log_page import AppearanceLogPage
     from ui.qt.gallery_page import GalleryTableModel
     from ui.qt.main_window import QtMainWindow
-    from ui.qt.models import AppearanceLogRecordDTO, GalleryRecordDTO
+    from ui.qt.models import ActivityEventDTO, AppearanceLogRecordDTO, GalleryRecordDTO
     from ui.qt.widgets.video_canvas import CanvasTransform, VideoCanvas
     QT_AVAILABLE = True
 except ImportError:
@@ -79,6 +80,7 @@ class QtMVP10Tests(unittest.TestCase):
         canvas.set_frame(frame)
         self.assertEqual(canvas.source_frame.shape, frame.shape)
         self.assertIsNotNone(canvas.transform)
+        self.assertEqual(canvas.transform.offset_x, 0.0)
 
     def test_formal_window_has_one_qmainwindow_and_split_window_controls(self) -> None:
         window = QtMainWindow(load_config("config/config.yaml"), start_worker=False)
@@ -202,6 +204,7 @@ class QtMVP10Tests(unittest.TestCase):
 
     def test_appearance_log_page_is_read_only_and_newest_first(self) -> None:
         page = AppearanceLogPage()
+        self.assertTrue(hasattr(page, "export_button"))
         page.set_records(
             (
                 AppearanceLogRecordDTO(
@@ -237,14 +240,44 @@ class QtMVP10Tests(unittest.TestCase):
         self.assertEqual(page.model.data(page.model.index(1, 4)), "\u2014")
 
         refreshes = []
+        exports = []
         backs = []
         page.refreshRequested.connect(lambda: refreshes.append(True))
+        page.exportRequested.connect(lambda: exports.append(True))
         page.backRequested.connect(lambda: backs.append(True))
+        page.export_button.click()
         page.refresh_button.click()
         page.back_button.click()
+        self.assertEqual(exports, [True])
         self.assertEqual(refreshes, [True])
         self.assertEqual(backs, [True])
         page.close()
+
+    def test_activity_feed_is_bounded_newest_first_and_not_persistent(self) -> None:
+        feed = ActivityFeed(max_events=3)
+        for index in range(4):
+            feed.add_event(
+                ActivityEventDTO(
+                    sequence_id=index,
+                    event_time=f"2026-01-01 12:00:0{index}",
+                    domain="person",
+                    identity_id=index,
+                    display_id=f"P{index:03d}",
+                    event_type="recognition",
+                )
+            )
+        self.assertEqual(
+            [event.display_id for event in feed.events],
+            ["P003", "P002", "P001"],
+        )
+        self.assertNotEqual(
+            feed.scroll_area.verticalScrollBarPolicy(),
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+        )
+        new_feed = ActivityFeed(max_events=3)
+        self.assertEqual(new_feed.events, ())
+        feed.close()
+        new_feed.close()
 
 
 if __name__ == "__main__":

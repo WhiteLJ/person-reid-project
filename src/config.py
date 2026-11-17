@@ -214,9 +214,17 @@ class DiagnosticsConfig:
 
 @dataclass(frozen=True)
 class RecognitionLogConfig:
-    """Separate append-only SQLite path for accepted identity events."""
+    """Bounded SQLite path for accepted identity events."""
 
     path: Path
+    max_events: int = 1000
+
+
+@dataclass(frozen=True)
+class ActivityFeedConfig:
+    """Per-process in-memory activity feed limits."""
+
+    max_events: int = 100
 
 
 @dataclass(frozen=True)
@@ -330,6 +338,7 @@ class AppConfig:
     ui: UIConfig
     diagnostics: DiagnosticsConfig
     recognition_log: RecognitionLogConfig
+    activity_feed: ActivityFeedConfig
     replay: ReplayConfig
 
 
@@ -397,6 +406,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     inference = _section(raw, "inference")
     ascend = _section(raw, "ascend")
     runtime = _section(raw, "runtime")
+    activity_feed = _section(raw, "activity_feed")
     replay = _section(raw, "replay")
     tracking = _section(raw, "tracking")
     multiclass_tracking = _section(raw, "multiclass_tracking")
@@ -1001,6 +1011,12 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         raise ValueError("recognition_log.path cannot be empty")
     if not recognition_log_path.is_absolute():
         recognition_log_path = project_root / recognition_log_path
+    recognition_log_max_events = int(recognition_log.get("max_events", 1000))
+    if recognition_log_max_events < 1:
+        raise ValueError("recognition_log.max_events must be positive")
+    activity_feed_max_events = int(activity_feed.get("max_events", 100))
+    if activity_feed_max_events < 1:
+        raise ValueError("activity_feed.max_events must be positive")
 
     replay_directory = Path(
         replay.get("directory", "/home/HwHiAiUser/person_reid/replay")
@@ -1198,7 +1214,11 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
                 1, int(diagnostics.get("log_interval_frames", 300))
             ),
         ),
-        recognition_log=RecognitionLogConfig(path=recognition_log_path),
+        recognition_log=RecognitionLogConfig(
+            path=recognition_log_path,
+            max_events=recognition_log_max_events,
+        ),
+        activity_feed=ActivityFeedConfig(max_events=activity_feed_max_events),
         replay=ReplayConfig(
             enabled=bool(replay.get("enabled", True)),
             directory=replay_directory,

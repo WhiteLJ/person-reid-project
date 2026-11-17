@@ -129,7 +129,7 @@ class VideoCanvas(QWidget):
             self.width(),
             self.height(),
             scale,
-            (self.width() - display_width) / 2.0,
+            0.0,
             (self.height() - display_height) / 2.0,
         )
 

@@ -44,6 +44,7 @@ from src.vehicle_plate import (
 from src.time_utils import current_local_timestamp
 from src.visualization import draw_multiclass_tracks
 from ui.qt.models import (
+    ActivityEventDTO,
     AppearanceLogRecordDTO,
     GalleryRecordDTO,
     RuntimeFrame,
@@ -89,6 +90,7 @@ class RuntimeWorker(QObject):
     gallery_rows_ready = pyqtSignal(object)
     appearance_log_rows_ready = pyqtSignal(object)
     appearance_log_changed = pyqtSignal()
+    activity_event_ready = pyqtSignal(object)
     gallery_mutation_done = pyqtSignal(str)
     status_message = pyqtSignal(str)
     fatal_error = pyqtSignal(str)
@@ -152,6 +154,7 @@ class RuntimeWorker(QObject):
         self._frozen_vehicle_gallery_labels_by_target: dict[int, str] = {}
         self._pending_selection: tuple[str, Any, Track, np.ndarray] | None = None
         self._closing = False
+        self._activity_sequence = 0
 
     @pyqtSlot()
     def start(self) -> None:
@@ -177,7 +180,9 @@ class RuntimeWorker(QObject):
             log_config = getattr(config, "recognition_log", None)
             if log_config is None:
                 raise AttributeError("recognition_log configuration is missing")
-            recognition_log = RecognitionLogRepository(log_config.path)
+            recognition_log = RecognitionLogRepository(
+                log_config.path, max_events=log_config.max_events
+            )
             recognition_log.initialize()
             self._recognition_log = recognition_log
         except Exception:
@@ -462,7 +467,7 @@ class RuntimeWorker(QObject):
             self.frame_ready.emit(self._runtime_frame(annotated))
 
     def _log_recovery_events(self, domain, matches, gallery, manager) -> None:
-        if self._recognition_log is None or gallery is None:
+        if gallery is None:
             return
         for match in matches:
             target = manager.targets.get(match.target_id)
@@ -476,17 +481,29 @@ class RuntimeWorker(QObject):
             if identity is None:
                 continue
             identity_id = identity.person_id if domain == "person" else identity.vehicle_id
-            self._write_recognition_event(
+            display_id = (
+                format_person_id(identity_id)
+                if domain == "person"
+                else format_vehicle_id(identity_id)
+            )
+            if self._recognition_log is not None:
+                self._write_recognition_event(
+                    domain=domain,
+                    identity_id=identity_id,
+                    display_id=display_id,
+                    event_type="recovery",
+                    similarity=float(match.similarity),
+                    track_id=int(match.candidate.track.track_id),
+                )
+            self._publish_activity_event(
                 domain=domain,
                 identity_id=identity_id,
-                display_id=format_person_id(identity_id) if domain == "person" else format_vehicle_id(identity_id),
+                display_id=display_id,
                 event_type="recovery",
-                similarity=float(match.similarity),
-                track_id=int(match.candidate.track.track_id),
             )
 
     def _log_recognition_events(self, domain, matches, gallery, manager) -> None:
-        if self._recognition_log is None or gallery is None:
+        if gallery is None:
             return
         for match in matches:
             track_id = int(match.candidate.track.track_id)
@@ -497,14 +514,67 @@ class RuntimeWorker(QObject):
             identity = gallery.get(identity_id)
             if identity is None:
                 continue
-            self._write_recognition_event(
+            display_id = (
+                format_person_id(identity_id)
+                if domain == "person"
+                else format_vehicle_id(identity_id)
+            )
+            if self._recognition_log is not None:
+                self._write_recognition_event(
+                    domain=domain,
+                    identity_id=identity_id,
+                    display_id=display_id,
+                    event_type="recognition",
+                    similarity=float(match.similarity),
+                    track_id=track_id,
+                )
+            self._publish_activity_event(
                 domain=domain,
                 identity_id=identity_id,
-                display_id=format_person_id(identity_id) if domain == "person" else format_vehicle_id(identity_id),
+                display_id=display_id,
                 event_type="recognition",
-                similarity=float(match.similarity),
-                track_id=track_id,
             )
+
+    def _publish_activity_event(
+        self,
+        *,
+        domain: str,
+        identity_id: int,
+        display_id: str,
+        event_type: str,
+        plate_number: str | None = None,
+    ) -> None:
+        repository = (
+            self._person_repository
+            if domain == "person"
+            else self._vehicle_repository
+        )
+        snapshot = None
+        if repository is not None:
+            try:
+                snapshot = repository.load_snapshot(int(identity_id))
+            except Exception:
+                LOGGER.exception(
+                    "ACTIVITY_SNAPSHOT_LOAD_FAILED domain=%s identity_id=%d",
+                    domain,
+                    identity_id,
+                )
+        if domain == "vehicle" and plate_number is None and self._vehicle_gallery is not None:
+            vehicle = self._vehicle_gallery.get(int(identity_id))
+            plate_number = None if vehicle is None else vehicle.plate_number
+        self._activity_sequence += 1
+        self.activity_event_ready.emit(
+            ActivityEventDTO(
+                sequence_id=self._activity_sequence,
+                event_time=current_local_timestamp(),
+                domain=domain,
+                identity_id=int(identity_id),
+                display_id=display_id,
+                event_type=event_type,
+                snapshot_jpeg=snapshot,
+                plate_number=plate_number,
+            )
+        )
 
     def _write_recognition_event(
         self,
@@ -579,6 +649,47 @@ class RuntimeWorker(QObject):
             self.status_message.emit("\u51fa\u73b0\u8bb0\u5f55\u8bfb\u53d6\u5931\u8d25")
             return
         self.appearance_log_rows_ready.emit(rows)
+
+    @pyqtSlot(str)
+    def export_appearance_log(self, file_path: str) -> None:
+        if self._recognition_log is None:
+            self.status_message.emit("出现记录导出失败：数据库不可用")
+            return
+        try:
+            events = self._recognition_log.load_all()
+            output = Path(file_path)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with output.open("w", encoding="utf-8-sig", newline="") as stream:
+                stream.write("目标出现记录\n")
+                stream.write(f"导出时间：{current_local_timestamp()}\n")
+                stream.write(f"记录数量：{len(events)}\n\n")
+                stream.write("时间\t类别\t目标ID\t事件\t车牌号\t相似度\t来源\n")
+                for event in events:
+                    domain = "人员" if event.domain == "person" else "车辆"
+                    event_type = {
+                        "recognition": "识别",
+                        "recovery": "恢复",
+                    }.get(event.event_type, event.event_type)
+                    plate = "—" if event.domain == "person" else (event.plate_number or "NULL")
+                    similarity = "—" if event.similarity is None else f"{event.similarity:.4f}"
+                    stream.write(
+                        "\t".join(
+                            (
+                                event.event_time,
+                                domain,
+                                event.display_id,
+                                event_type,
+                                plate,
+                                similarity,
+                                event.source_label or "—",
+                            )
+                        )
+                        + "\n"
+                    )
+            self.status_message.emit(f"出现记录已导出：{output}")
+        except Exception as exc:
+            LOGGER.exception("APPEARANCE_LOG_EXPORT_FAILED path=%s", file_path)
+            self.status_message.emit(f"出现记录导出失败：{exc}")
 
     def _sync_vehicle_plate_confirmations(
         self, confirmations: tuple[PlateConfirmation, ...]
@@ -1023,6 +1134,21 @@ class RuntimeWorker(QObject):
             self.status_message.emit(f"已保存 {display_id}")
             self._pending_selection = None
             self._publish_gallery_rows()
+            self._publish_activity_event(
+                domain=domain,
+                identity_id=(
+                    identity.person_id
+                    if domain == "person"
+                    else identity.vehicle_id
+                ),
+                display_id=display_id,
+                event_type="enrollment",
+                plate_number=(
+                    None
+                    if domain == "person"
+                    else getattr(identity, "plate_number", None)
+                ),
+            )
             self._emit_frozen_frame()
         except Exception as exc:
             LOGGER.exception("QT_GALLERY_ENROLL_FAILED")

@@ -25,6 +25,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.replay.retention_segments, 4)
         self.assertEqual(config.replay.codec, "mp4v")
         self.assertEqual(config.replay.queue_size, 120)
+        self.assertEqual(config.activity_feed.max_events, 100)
+        self.assertEqual(config.recognition_log.max_events, 1000)
         self.assertEqual(config.inference.backend, "torch")
         self.assertEqual(config.ascend.device_id, 0)
         self.assertEqual(
@@ -178,6 +180,8 @@ class ConfigTests(unittest.TestCase):
         config = load_config(Path("config/config_atlas.yaml"))
 
         self.assertEqual(config.inference.backend, "ascend")
+        self.assertEqual(config.activity_feed.max_events, 100)
+        self.assertEqual(config.recognition_log.max_events, 1000)
         self.assertEqual(config.model.device, "cpu")
         self.assertEqual(
             config.ascend.vehicle_reid_model,

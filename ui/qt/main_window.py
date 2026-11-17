@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QPoint, QThread, Qt, pyqtSignal
@@ -10,6 +11,7 @@ from PyQt6.QtWidgets import QApplication, QFileDialog, QFrame, QHBoxLayout, QLab
 
 from src.config import AppConfig
 from .appearance_log_page import AppearanceLogPage
+from .activity_feed import ActivityFeed
 from .gallery_page import GalleryPage
 from .models import AppearanceLogRecordDTO, GalleryRecordDTO, RuntimeFrame, SelectionResultDTO
 from .runtime_worker import RuntimeWorker
@@ -48,10 +50,12 @@ class QtMainWindow(QMainWindow):
     importGalleryFileRequested = pyqtSignal(str, str)
     setGalleryRecognitionEnabledRequested = pyqtSignal(str, int, bool)
     refreshAppearanceLogRequested = pyqtSignal()
+    exportAppearanceLogRequested = pyqtSignal(str)
     shutdownRequested = pyqtSignal()
 
     def __init__(self, config: AppConfig, source_override: str | None = None, parent=None, *, start_worker: bool = True) -> None:
         super().__init__(parent)
+        self.config = config
         self.setWindowTitle("Person + Vehicle Tracking System")
         self._shutdown_requested = False
         self._popup: TargetDecisionPopup | None = None
@@ -86,6 +90,7 @@ class QtMainWindow(QMainWindow):
         self.worker.gallery_rows_ready.connect(self._gallery_rows_ready)
         self.worker.appearance_log_rows_ready.connect(self._appearance_log_rows_ready)
         self.worker.appearance_log_changed.connect(self._appearance_log_changed)
+        self.worker.activity_event_ready.connect(self.activity_feed.add_event)
         self.worker.gallery_mutation_done.connect(self._gallery_mutation_done)
         self.worker.status_message.connect(self._set_status)
         self.worker.fatal_error.connect(self._fatal_error)
@@ -104,6 +109,7 @@ class QtMainWindow(QMainWindow):
             self.worker.set_gallery_recognition_enabled
         )
         self.refreshAppearanceLogRequested.connect(self.worker.refresh_appearance_log)
+        self.exportAppearanceLogRequested.connect(self.worker.export_appearance_log)
         self.shutdownRequested.connect(self.worker.request_shutdown)
         self._update_edit_controls()
         if start_worker:
@@ -155,7 +161,12 @@ class QtMainWindow(QMainWindow):
         self.remove_button.setStyleSheet(active_style)
         root.addLayout(toolbar)
         self.video_canvas = VideoCanvas()
-        root.addWidget(self.video_canvas, 1)
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(12)
+        content_layout.addWidget(self.video_canvas, 1)
+        self.activity_feed = ActivityFeed(self.config.activity_feed.max_events)
+        content_layout.addWidget(self.activity_feed)
+        root.addLayout(content_layout, 1)
         self.status_label = QLabel("\u6b63\u5728\u542f\u52a8...")
         self.status_label.setMinimumHeight(28)
         root.addWidget(self.status_label)
@@ -170,6 +181,9 @@ class QtMainWindow(QMainWindow):
         self.gallery_page.importRequested.connect(self._choose_gallery_import)
         self.gallery_page.appearanceLogRequested.connect(self._open_appearance_log)
         self.appearance_log_page.backRequested.connect(self._back_to_tracking)
+        self.appearance_log_page.exportRequested.connect(
+            self._choose_appearance_log_export
+        )
         self.appearance_log_page.refreshRequested.connect(
             self.refreshAppearanceLogRequested.emit
         )
@@ -299,6 +313,26 @@ class QtMainWindow(QMainWindow):
     def _open_appearance_log(self) -> None:
         self.stack.setCurrentWidget(self.appearance_log_page)
         self.refreshAppearanceLogRequested.emit()
+
+    def _choose_appearance_log_export(self) -> None:
+        default_directory = Path("/home/HwHiAiUser/person_reid/log")
+        default_name = datetime.now().strftime(
+            "log_%Y-%m-%d_%H-%M-%S.txt"
+        )
+        try:
+            default_directory.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # The worker will report a clear error if the selected directory
+            # cannot be created or written.
+            pass
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出出现记录",
+            str(default_directory / default_name),
+            "Text Files (*.txt)",
+        )
+        if path:
+            self.exportAppearanceLogRequested.emit(path)
 
     def _back_to_tracking(self) -> None:
         self.stack.setCurrentWidget(self.main_page)

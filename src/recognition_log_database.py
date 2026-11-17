@@ -1,4 +1,4 @@
-"""Append-only SQLite log for accepted identity events.
+"""Bounded SQLite log for accepted identity events.
 
 This database is intentionally independent from the Person and Vehicle Gallery
 databases.  Deleting a Gallery identity therefore does not erase its history.
@@ -35,8 +35,25 @@ class RecognitionLogEvent:
 class RecognitionLogRepository:
     """Persist accepted Recognition/Recovery events without runtime coupling."""
 
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(self, database_path: str | Path, max_events: int = 1000) -> None:
+        if int(max_events) < 1:
+            raise ValueError("max_events must be positive")
         self.path = Path(database_path)
+        self.max_events = int(max_events)
+
+    def _trim_connection(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            DELETE FROM recognition_event
+            WHERE event_id NOT IN (
+                SELECT event_id
+                FROM recognition_event
+                ORDER BY event_id DESC
+                LIMIT ?
+            )
+            """,
+            (self.max_events,),
+        )
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
@@ -72,6 +89,7 @@ class RecognitionLogRepository:
                     )
                     """
                 )
+                self._trim_connection(connection)
         except sqlite3.Error as exc:
             raise RecognitionLogRepositoryError(
                 f"failed to initialize recognition log: {self.path}"
@@ -120,6 +138,7 @@ class RecognitionLogRepository:
                     ),
                 )
                 event_id = int(cursor.lastrowid)
+                self._trim_connection(connection)
         except sqlite3.Error as exc:
             raise RecognitionLogRepositoryError(
                 f"failed to write recognition event to {self.path}"

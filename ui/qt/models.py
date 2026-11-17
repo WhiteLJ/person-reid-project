@@ -58,6 +58,20 @@ class AppearanceLogRecordDTO:
 
 
 @dataclass(frozen=True)
+class ActivityEventDTO:
+    """One in-memory event shown by the current-process activity feed."""
+
+    sequence_id: int
+    event_time: str
+    domain: str
+    identity_id: int
+    display_id: str
+    event_type: str
+    snapshot_jpeg: bytes | None = None
+    plate_number: str | None = None
+
+
+@dataclass(frozen=True)
 class SelectionResultDTO:
     domain: str
     target_id: int

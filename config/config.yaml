@@ -179,8 +179,12 @@ database:
 vehicle_database:
   path: "database/vehicle_reid.db"
 
+activity_feed:
+  max_events: 100
+
 recognition_log:
   path: "data/recognition_log.db"
+  max_events: 1000
 
 replay:
   enabled: true
