@@ -9,6 +9,7 @@ import numpy as np
 
 from .models import SessionTarget
 from .reid import normalize_embedding
+from .time_utils import current_local_timestamp
 
 
 def _empty_embedding() -> np.ndarray:
@@ -31,6 +32,8 @@ class GalleryPerson:
     label: str
     reference_embeddings: list[np.ndarray] = field(default_factory=list)
     centroid: np.ndarray = field(default_factory=_empty_embedding)
+    recognition_enabled: bool = True
+    created_at: str | None = None
 
 
 class TargetGallery:
@@ -105,6 +108,8 @@ class TargetGallery:
             label=f"Target {format_person_id(person_id)}",
             reference_embeddings=references,
             centroid=centroid,
+            recognition_enabled=False,
+            created_at=current_local_timestamp(),
         )
         self._people[person_id] = person
         self._session_target_to_person[session_target.target_id] = person_id
@@ -129,6 +134,8 @@ class TargetGallery:
                 label=f"Target {format_person_id(person_id)}",
                 reference_embeddings=[normalized.astype(np.float32, copy=True)],
                 centroid=normalized.astype(np.float32, copy=True),
+                recognition_enabled=False,
+                created_at=current_local_timestamp(),
             )
         )
         self._people[person_id] = person
@@ -157,6 +164,8 @@ class TargetGallery:
                     for reference in reference_embeddings
                 ],
                 centroid=np.asarray(centroid).copy(),
+                recognition_enabled=current.recognition_enabled,
+                created_at=current.created_at,
             )
         )
 
@@ -188,6 +197,27 @@ class TargetGallery:
             centroid,
         )
         return self.apply_feature_snapshot(snapshot)
+
+    def update_recognition_enabled(
+        self, person_id: int, enabled: bool
+    ) -> GalleryPerson:
+        """Update only the runtime Gallery Recognition participation flag."""
+
+        current = self._people.get(person_id)
+        if current is None:
+            raise KeyError(f"unknown Gallery person: {person_id}")
+        updated = _copy_gallery_person(
+            GalleryPerson(
+                person_id=current.person_id,
+                label=current.label,
+                reference_embeddings=[reference.copy() for reference in current.reference_embeddings],
+                centroid=current.centroid.copy(),
+                recognition_enabled=bool(enabled),
+                created_at=current.created_at,
+            )
+        )
+        self._people[person_id] = updated
+        return updated
 
     def restore_person(self, person: GalleryPerson) -> GalleryPerson:
         """Replace one person from persistence without changing session mappings."""
@@ -381,6 +411,8 @@ def _copy_gallery_person(person: GalleryPerson) -> GalleryPerson:
         label=person.label,
         reference_embeddings=references,
         centroid=centroid.astype(np.float32, copy=True),
+        recognition_enabled=bool(person.recognition_enabled),
+        created_at=person.created_at,
     )
 
 

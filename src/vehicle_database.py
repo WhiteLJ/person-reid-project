@@ -42,6 +42,8 @@ class VehicleGalleryRepository:
                         vehicle_id INTEGER PRIMARY KEY,
                         label TEXT NOT NULL,
                         plate_number TEXT NULL,
+                        recognition_enabled INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NULL,
                         centroid BLOB NOT NULL,
                         centroid_dim INTEGER NOT NULL,
                         centroid_dtype TEXT NOT NULL,
@@ -88,6 +90,15 @@ class VehicleGalleryRepository:
                     connection.execute(
                         "ALTER TABLE gallery_vehicle ADD COLUMN plate_number TEXT NULL"
                     )
+                if "recognition_enabled" not in columns:
+                    connection.execute(
+                        "ALTER TABLE gallery_vehicle ADD COLUMN "
+                        "recognition_enabled INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "created_at" not in columns:
+                    connection.execute(
+                        "ALTER TABLE gallery_vehicle ADD COLUMN created_at TEXT NULL"
+                    )
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO gallery_vehicle_meta(key, value)
@@ -110,7 +121,8 @@ class VehicleGalleryRepository:
             vehicle_rows = connection.execute(
                 """
                 SELECT vehicle_id, label, plate_number, centroid,
-                       centroid_dim, centroid_dtype
+                       centroid_dim, centroid_dtype, recognition_enabled,
+                       created_at
                 FROM gallery_vehicle
                 ORDER BY vehicle_id
                 """
@@ -182,6 +194,8 @@ class VehicleGalleryRepository:
                     plate_number=normalize_plate_number(row[2]),
                     reference_embeddings=[reference.copy() for reference in references],
                     centroid=centroid.copy(),
+                    recognition_enabled=bool(row[6]),
+                    created_at=row[7],
                 )
             )
         return tuple(vehicles)
@@ -229,8 +243,9 @@ class VehicleGalleryRepository:
                     """
                     INSERT INTO gallery_vehicle(
                         vehicle_id, label, plate_number, centroid,
-                        centroid_dim, centroid_dtype
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        centroid_dim, centroid_dtype, recognition_enabled,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         vehicle_id,
@@ -239,6 +254,8 @@ class VehicleGalleryRepository:
                         centroid_blob,
                         VEHICLE_EMBEDDING_DIMENSION,
                         VEHICLE_EMBEDDING_DTYPE,
+                        1 if vehicle.recognition_enabled else 0,
+                        vehicle.created_at,
                     ),
                 )
                 connection.executemany(
@@ -384,6 +401,29 @@ class VehicleGalleryRepository:
                 f"failed to update plate for vehicle_id={vehicle_id} in {self.path}"
             ) from exc
 
+    def update_recognition_enabled(self, vehicle_id: int, enabled: bool) -> None:
+        """Persist only whether this identity participates in future recognition."""
+
+        vehicle_id = _validate_vehicle_id(vehicle_id)
+        self.initialize()
+        try:
+            with self._transaction() as connection:
+                cursor = connection.execute(
+                    "UPDATE gallery_vehicle SET recognition_enabled = ? "
+                    "WHERE vehicle_id = ?",
+                    (1 if enabled else 0, vehicle_id),
+                )
+                if cursor.rowcount != 1:
+                    raise VehicleRepositoryError(
+                        f"cannot update recognition flag for unknown vehicle_id={vehicle_id}"
+                    )
+        except VehicleRepositoryError:
+            raise
+        except sqlite3.Error as exc:
+            raise VehicleRepositoryError(
+                f"failed to update recognition flag for vehicle_id={vehicle_id}"
+            ) from exc
+
     def delete_vehicle(self, vehicle_id: int) -> bool:
         vehicle_id = _validate_vehicle_id(vehicle_id)
         self.initialize()
@@ -442,8 +482,8 @@ class VehicleGalleryRepository:
                 if vehicle_id < next_vehicle_id:
                     raise VehicleRepositoryError(f"vehicle_id={vehicle_id} would reuse an allocated historical ID")
                 connection.execute(
-                    "INSERT INTO gallery_vehicle(vehicle_id, label, plate_number, centroid, centroid_dim, centroid_dtype) VALUES (?, ?, ?, ?, ?, ?)",
-                    (vehicle_id, label, normalize_plate_number(vehicle.plate_number), centroid_blob, VEHICLE_EMBEDDING_DIMENSION, VEHICLE_EMBEDDING_DTYPE),
+                    "INSERT INTO gallery_vehicle(vehicle_id, label, plate_number, centroid, centroid_dim, centroid_dtype, recognition_enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (vehicle_id, label, normalize_plate_number(vehicle.plate_number), centroid_blob, VEHICLE_EMBEDDING_DIMENSION, VEHICLE_EMBEDDING_DTYPE, 1 if vehicle.recognition_enabled else 0, vehicle.created_at),
                 )
                 connection.executemany(
                     "INSERT INTO gallery_vehicle_embedding(vehicle_id, embedding_index, embedding, embedding_dim, embedding_dtype) VALUES (?, ?, ?, ?, ?)",

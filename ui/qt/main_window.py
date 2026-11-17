@@ -45,6 +45,7 @@ class QtMainWindow(QMainWindow):
     discardPendingRequested = pyqtSignal()
     deleteGalleryRequested = pyqtSignal(str, object, bool)
     importGalleryFileRequested = pyqtSignal(str, str)
+    setGalleryRecognitionEnabledRequested = pyqtSignal(str, int, bool)
     shutdownRequested = pyqtSignal()
 
     def __init__(self, config: AppConfig, source_override: str | None = None, parent=None, *, start_worker: bool = True) -> None:
@@ -90,6 +91,12 @@ class QtMainWindow(QMainWindow):
         self.discardPendingRequested.connect(self.worker.discard_pending_selection)
         self.deleteGalleryRequested.connect(self.worker.delete_gallery)
         self.importGalleryFileRequested.connect(self.worker.import_gallery_file)
+        self.gallery_page.recognitionEnabledChanged.connect(
+            self.setGalleryRecognitionEnabledRequested.emit
+        )
+        self.setGalleryRecognitionEnabledRequested.connect(
+            self.worker.set_gallery_recognition_enabled
+        )
         self.shutdownRequested.connect(self.worker.request_shutdown)
         self._update_edit_controls()
         if start_worker:

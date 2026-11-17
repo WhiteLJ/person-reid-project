@@ -44,6 +44,8 @@ class GalleryRepository:
                     centroid BLOB NOT NULL,
                     centroid_dim INTEGER NOT NULL,
                     centroid_dtype TEXT NOT NULL,
+                    recognition_enabled INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NULL,
                     CHECK (centroid_dim = 512),
                     CHECK (centroid_dtype = 'float32')
                 );
@@ -77,6 +79,21 @@ class GalleryRepository:
                 );
                 """
             )
+            columns = {
+                str(row[1])
+                for row in connection.execute(
+                    "PRAGMA table_info(gallery_person)"
+                ).fetchall()
+            }
+            if "recognition_enabled" not in columns:
+                connection.execute(
+                    "ALTER TABLE gallery_person ADD COLUMN "
+                    "recognition_enabled INTEGER NOT NULL DEFAULT 0"
+                )
+            if "created_at" not in columns:
+                connection.execute(
+                    "ALTER TABLE gallery_person ADD COLUMN created_at TEXT NULL"
+                )
             connection.execute(
                 """
                 INSERT OR IGNORE INTO gallery_meta(key, value)
@@ -94,7 +111,8 @@ class GalleryRepository:
         try:
             person_rows = connection.execute(
                 """
-                SELECT person_id, label, centroid, centroid_dim, centroid_dtype
+                SELECT person_id, label, centroid, centroid_dim, centroid_dtype,
+                       recognition_enabled, created_at
                 FROM gallery_person
                 ORDER BY person_id
                 """
@@ -162,6 +180,8 @@ class GalleryRepository:
                     label=label,
                     reference_embeddings=[reference.copy() for reference in references],
                     centroid=centroid.copy(),
+                    recognition_enabled=bool(row[5]),
+                    created_at=row[6],
                 )
             )
         return tuple(people)
@@ -205,8 +225,9 @@ class GalleryRepository:
                 connection.execute(
                     """
                     INSERT INTO gallery_person(
-                        person_id, label, centroid, centroid_dim, centroid_dtype
-                    ) VALUES (?, ?, ?, ?, ?)
+                        person_id, label, centroid, centroid_dim, centroid_dtype,
+                        recognition_enabled, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         person_id,
@@ -214,6 +235,8 @@ class GalleryRepository:
                         centroid_blob,
                         EMBEDDING_DIMENSION,
                         EMBEDDING_DTYPE,
+                        1 if person.recognition_enabled else 0,
+                        person.created_at,
                     ),
                 )
                 connection.executemany(
@@ -339,6 +362,29 @@ class GalleryRepository:
                 f"failed to update person_id={person_id} in {self.path}"
             ) from exc
 
+    def update_recognition_enabled(self, person_id: int, enabled: bool) -> None:
+        """Persist only whether this identity participates in future recognition."""
+
+        person_id = self._validate_person_id(person_id)
+        self.initialize()
+        try:
+            with self._transaction() as connection:
+                cursor = connection.execute(
+                    "UPDATE gallery_person SET recognition_enabled = ? "
+                    "WHERE person_id = ?",
+                    (1 if enabled else 0, person_id),
+                )
+                if cursor.rowcount != 1:
+                    raise RepositoryError(
+                        f"cannot update recognition flag for unknown person_id={person_id}"
+                    )
+        except RepositoryError:
+            raise
+        except sqlite3.Error as exc:
+            raise RepositoryError(
+                f"failed to update recognition flag for person_id={person_id}"
+            ) from exc
+
     def load_person(self, person_id: int) -> GalleryPerson | None:
         """Load one persisted person for consistency recovery after an apply error."""
 
@@ -406,8 +452,8 @@ class GalleryRepository:
                 if person_id < next_person_id:
                     raise RepositoryError(f"person_id={person_id} would reuse an allocated historical ID")
                 connection.execute(
-                    "INSERT INTO gallery_person(person_id, label, centroid, centroid_dim, centroid_dtype) VALUES (?, ?, ?, ?, ?)",
-                    (person_id, label, centroid_blob, EMBEDDING_DIMENSION, EMBEDDING_DTYPE),
+                    "INSERT INTO gallery_person(person_id, label, centroid, centroid_dim, centroid_dtype, recognition_enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (person_id, label, centroid_blob, EMBEDDING_DIMENSION, EMBEDDING_DTYPE, 1 if person.recognition_enabled else 0, person.created_at),
                 )
                 connection.executemany(
                     "INSERT INTO gallery_embedding(person_id, embedding_index, embedding, embedding_dim, embedding_dtype) VALUES (?, ?, ?, ?, ?)",

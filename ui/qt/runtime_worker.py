@@ -25,6 +25,7 @@ from src.gallery_snapshot import encode_snapshot_image
 from src.models import Track
 from src.reid import ReIDExtractor
 from src.reid_frame_cache import ReIDFrameCache
+from src.recognition_log_database import RecognitionLogRepository
 from src.roi_selector import find_track_by_roi, roi_xyxy_to_xywh
 from src.source_factory import create_frame_source
 from src.target_manager import TargetManager
@@ -39,6 +40,7 @@ from src.vehicle_plate import (
     VehiclePlateOCRWorker,
     create_plate_provider,
 )
+from src.time_utils import current_local_timestamp
 from src.visualization import draw_multiclass_tracks
 from ui.qt.models import GalleryRecordDTO, RuntimeFrame, SelectionResultDTO
 
@@ -105,12 +107,17 @@ class RuntimeWorker(QObject):
         self._vehicle_service: VehicleGalleryPersistenceService | None = None
         self._person_repository: GalleryRepository | None = None
         self._vehicle_repository: Any = None
+        self._recognition_log: RecognitionLogRepository | None = None
         self._person_recovery: TargetRecoveryCoordinator | None = None
         self._vehicle_recovery: VehicleRecoveryCoordinator | None = None
         self._person_recognition: GalleryRecognitionCoordinator | None = None
         self._vehicle_recognition: VehicleGalleryRecognitionCoordinator | None = None
         self._vehicle_plate: VehiclePlateCoordinator | None = None
         self._vehicle_plate_ocr_worker: VehiclePlateOCRWorker | None = None
+        self._pending_external_vehicle_imports: dict[
+            str, tuple[np.ndarray, bytes, np.ndarray]
+        ] = {}
+        self._next_external_import_id = 1
         self._person_guard: ActiveIdentityGuard | None = None
         self._person_cache = ReIDFrameCache()
         self._vehicle_cache = ReIDFrameCache()
@@ -156,6 +163,21 @@ class RuntimeWorker(QObject):
 
     def _initialize_runtime(self) -> None:
         config = self.config
+        try:
+            log_config = getattr(config, "recognition_log", None)
+            if log_config is None:
+                raise AttributeError("recognition_log configuration is missing")
+            recognition_log = RecognitionLogRepository(log_config.path)
+            recognition_log.initialize()
+            self._recognition_log = recognition_log
+        except Exception:
+            # Event history is diagnostic/persistent enrichment only; it must
+            # never prevent the live tracking pipeline from starting.
+            LOGGER.exception(
+                "RECOGNITION_LOG_INIT_FAILED path=%s",
+                getattr(getattr(config, "recognition_log", None), "path", None),
+            )
+            self._recognition_log = None
         is_torch_pc = config.inference.backend == "torch"
         person_repository = GalleryRepository(config.database.path)
         person_repository.initialize()
@@ -256,6 +278,9 @@ class RuntimeWorker(QObject):
             person_class_id=config.model.person_class_id,
             embedding_cache=self._person_cache,
             quality_config=config.reid_quality,
+            identity_enabled_filter=lambda person: bool(
+                getattr(person, "recognition_enabled", True)
+            ),
         )
         self._person_guard = ActiveIdentityGuard(
             target_manager=person_manager,
@@ -325,7 +350,7 @@ class RuntimeWorker(QObject):
         guard_result = self._person_guard.process_frame(
             frame, self._person_tracks, self._frame_index
         )
-        self._person_recovery.process_frame(
+        recovered_people = self._person_recovery.process_frame(
             frame,
             self._person_tracks,
             self._frame_index,
@@ -340,6 +365,13 @@ class RuntimeWorker(QObject):
                     match.target_id, match.candidate.track.track_id
                 )
 
+        self._log_recovery_events(
+            "person", recovered_people, self._person_gallery, self._person_manager
+        )
+        self._log_recovery_events(
+            "vehicle", recovered_vehicles, self._vehicle_gallery, self._vehicle_manager
+        )
+
         # Recovery runs before plate scheduling so a recovered target's stable
         # plate is transferred to the new Track ID before OCR candidates are
         # selected.  This avoids re-running OCR merely because a Track ID
@@ -350,6 +382,7 @@ class RuntimeWorker(QObject):
                 frame, self._vehicle_tracks, self._frame_index
             )
             self._sync_vehicle_plate_confirmations(plate_confirmations)
+            self._finalize_external_vehicle_imports()
 
         self._person_service.update_runtime_state(
             self._person_manager.targets.values(), self._frame_index
@@ -363,7 +396,7 @@ class RuntimeWorker(QObject):
         self._vehicle_service.enrich_reference_updates(
             self._vehicle_recovery.drain_reference_updates()
         )
-        self._person_recognition.process_frame(
+        recognized_people = self._person_recognition.process_frame(
             frame,
             self._person_tracks,
             self._frame_index,
@@ -389,6 +422,12 @@ class RuntimeWorker(QObject):
                             target.target_id, match.candidate.track.track_id
                         )
 
+        self._log_recognition_events(
+            "person", recognized_people, self._person_gallery, self._person_manager
+        )
+        self._log_recognition_events(
+            "vehicle", recognized, self._vehicle_gallery, self._vehicle_manager
+        )
         self._sync_active_vehicle_plates()
 
         # Recovery and recognition get the current frame first.  TTL cleanup
@@ -407,6 +446,91 @@ class RuntimeWorker(QObject):
         # live frames.
         if not self._editing:
             self.frame_ready.emit(self._runtime_frame(annotated))
+
+    def _log_recovery_events(self, domain, matches, gallery, manager) -> None:
+        if self._recognition_log is None or gallery is None:
+            return
+        for match in matches:
+            target = manager.targets.get(match.target_id)
+            if target is None:
+                continue
+            identity = (
+                gallery.person_for_session_target(match.target_id)
+                if domain == "person"
+                else gallery.vehicle_for_session_target(match.target_id)
+            )
+            if identity is None:
+                continue
+            identity_id = identity.person_id if domain == "person" else identity.vehicle_id
+            self._write_recognition_event(
+                domain=domain,
+                identity_id=identity_id,
+                display_id=format_person_id(identity_id) if domain == "person" else format_vehicle_id(identity_id),
+                event_type="recovery",
+                similarity=float(match.similarity),
+                track_id=int(match.candidate.track.track_id),
+            )
+
+    def _log_recognition_events(self, domain, matches, gallery, manager) -> None:
+        if self._recognition_log is None or gallery is None:
+            return
+        for match in matches:
+            track_id = int(match.candidate.track.track_id)
+            target = manager.target_for_track(track_id)
+            if target is None:
+                continue
+            identity_id = int(match.identity_id)
+            identity = gallery.get(identity_id)
+            if identity is None:
+                continue
+            self._write_recognition_event(
+                domain=domain,
+                identity_id=identity_id,
+                display_id=format_person_id(identity_id) if domain == "person" else format_vehicle_id(identity_id),
+                event_type="recognition",
+                similarity=float(match.similarity),
+                track_id=track_id,
+            )
+
+    def _write_recognition_event(
+        self,
+        *,
+        domain: str,
+        identity_id: int,
+        display_id: str,
+        event_type: str,
+        similarity: float,
+        track_id: int,
+    ) -> None:
+        if self._recognition_log is None:
+            return
+        plate_number = None
+        if domain == "vehicle" and self._vehicle_plate is not None:
+            plate_number = self._vehicle_plate.track_plate(track_id)
+        try:
+            self._recognition_log.record_event(
+                event_time=current_local_timestamp(),
+                domain=domain,
+                identity_id=identity_id,
+                display_id=display_id,
+                event_type=event_type,
+                similarity=similarity,
+                track_id=track_id,
+                frame_index=self._frame_index,
+                source_label=(
+                    self._source.source_label if self._source is not None else None
+                ),
+                plate_number=plate_number,
+            )
+        except Exception:
+            LOGGER.exception(
+                "RECOGNITION_LOG_WRITE_FAILED domain=%s identity_id=%d "
+                "event_type=%s frame=%d",
+                domain,
+                identity_id,
+                event_type,
+                self._frame_index,
+            )
 
     def _sync_vehicle_plate_confirmations(
         self, confirmations: tuple[PlateConfirmation, ...]
@@ -893,6 +1017,28 @@ class RuntimeWorker(QObject):
                     raise RuntimeError("Vehicle ReID runtime is not initialized")
                 embedding = self._vehicle_reid_extractor.extract(image)
                 snapshot = encode_snapshot_image(image)
+                if (
+                    self._vehicle_plate is not None
+                    and self._vehicle_plate.enabled
+                    and self._vehicle_plate_ocr_worker is not None
+                ):
+                    request_id = f"external-{self._next_external_import_id}"
+                    self._next_external_import_id += 1
+                    submitted = self._vehicle_plate.submit_external_task(
+                        image, request_id
+                    )
+                    if submitted:
+                        self._pending_external_vehicle_imports[request_id] = (
+                            np.asarray(embedding).copy(),
+                            bytes(snapshot),
+                            image.copy(),
+                        )
+                        self.status_message.emit("正在识别车牌，完成后导入车辆库")
+                        return
+                    LOGGER.warning(
+                        "VEHICLE_EXTERNAL_PLATE_FALLBACK_NULL request_id=%s",
+                        request_id,
+                    )
                 identity = self._vehicle_service.import_external_identity(
                     embedding,
                     snapshot,
@@ -911,6 +1057,102 @@ class RuntimeWorker(QObject):
                 file_path,
             )
             self.status_message.emit(f"导入失败：{exc}")
+
+    def _finalize_external_vehicle_import(
+        self,
+        request_id: str,
+        plate_number: str | None,
+        error: str | None = None,
+    ) -> None:
+        payload = self._pending_external_vehicle_imports.pop(request_id, None)
+        if payload is None:
+            LOGGER.info(
+                "VEHICLE_EXTERNAL_PLATE_RESULT_DROPPED request_id=%s reason=unknown_request",
+                request_id,
+            )
+            return
+        embedding, snapshot, _image = payload
+        try:
+            if self._vehicle_service is None:
+                raise RuntimeError("Vehicle Gallery runtime is not initialized")
+            identity = self._vehicle_service.import_external_identity(
+                embedding,
+                snapshot,
+                plate_number=plate_number,
+            )
+            if self._vehicle_recognition is not None:
+                self._vehicle_recognition.notify_gallery_changed()
+            self._publish_gallery_rows()
+            display_id = format_vehicle_id(identity.vehicle_id)
+            self.gallery_mutation_done.emit(f"已导入 {display_id}")
+            LOGGER.info(
+                "VEHICLE_EXTERNAL_IMPORT_COMPLETED request_id=%s identity_id=%s plate=%s ocr_error=%s",
+                request_id,
+                display_id,
+                plate_number,
+                error or "none",
+            )
+        except Exception as exc:
+            LOGGER.exception(
+                "VEHICLE_EXTERNAL_IMPORT_FAILED request_id=%s", request_id
+            )
+            self.status_message.emit(f"车辆导入失败：{exc}")
+
+    def _finalize_external_vehicle_imports(self) -> None:
+        if self._vehicle_plate is None:
+            return
+        for result in self._vehicle_plate.drain_external_results():
+            request_id = result.task.request_id
+            if request_id is None:
+                continue
+            plate_number = None
+            if result.error is None:
+                payload = self._pending_external_vehicle_imports.get(request_id)
+                if payload is not None:
+                    try:
+                        plate_number = self._vehicle_plate.best_external_plate(
+                            payload[2], result.observations
+                        )
+                    except Exception:
+                        LOGGER.exception(
+                            "VEHICLE_EXTERNAL_PLATE_VALIDATION_FAILED request_id=%s",
+                            request_id,
+                        )
+            self._finalize_external_vehicle_import(
+                request_id,
+                plate_number,
+                result.error,
+            )
+
+    @pyqtSlot(str, int, bool)
+    def set_gallery_recognition_enabled(
+        self, domain: str, identity_id: int, enabled: bool
+    ) -> None:
+        """Persist a Gallery recognition flag without touching runtime targets."""
+
+        try:
+            if domain == "person" and self._person_service is not None:
+                self._person_service.set_recognition_enabled(identity_id, enabled)
+            elif domain == "vehicle" and self._vehicle_service is not None:
+                self._vehicle_service.set_recognition_enabled(identity_id, enabled)
+            else:
+                raise ValueError(f"unknown Gallery domain: {domain}")
+            if domain == "person" and self._person_recognition is not None:
+                self._person_recognition.notify_gallery_changed()
+            if domain == "vehicle" and self._vehicle_recognition is not None:
+                self._vehicle_recognition.notify_gallery_changed()
+            self._publish_gallery_rows()
+            self.gallery_mutation_done.emit(
+                f"{domain} {identity_id} recognition={'on' if enabled else 'off'}"
+            )
+        except Exception as exc:
+            LOGGER.exception(
+                "GALLERY_RECOGNITION_FLAG_UPDATE_FAILED domain=%s identity_id=%d",
+                domain,
+                identity_id,
+            )
+            self._publish_gallery_rows()
+            self.status_message.emit(f"更新识别开关失败：{exc}")
 
     @pyqtSlot()
     def clear_session(self) -> None:
@@ -1002,6 +1244,8 @@ class RuntimeWorker(QObject):
                     format_person_id(person.person_id),
                     people.get(person.person_id),
                     None,
+                    person.recognition_enabled,
+                    person.created_at,
                 )
             )
         for vehicle in self._vehicle_gallery.all_vehicles():
@@ -1012,6 +1256,8 @@ class RuntimeWorker(QObject):
                     format_vehicle_id(vehicle.vehicle_id),
                     vehicles.get(vehicle.vehicle_id),
                     vehicle.plate_number,
+                    vehicle.recognition_enabled,
+                    vehicle.created_at,
                 )
             )
         self.gallery_rows_ready.emit(tuple(rows))

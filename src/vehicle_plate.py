@@ -85,6 +85,8 @@ class PlateOCRTask:
     target_id: int | None
     stable_plate_at_submit: str | None
     crop: np.ndarray
+    kind: str = "live"
+    request_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +128,7 @@ class VehiclePlateOCRWorker:
             raise ValueError("VehiclePlateOCRWorker requires one pending task")
         self.provider = provider
         self._tasks: Queue[PlateOCRTask | None] = Queue(maxsize=max_pending_tasks)
+        self._external_tasks: Queue[PlateOCRTask | None] = Queue(maxsize=1)
         self._results: Queue[PlateOCRResult] = Queue(maxsize=result_queue_size)
         self._stop = Event()
         self._lock = Lock()
@@ -166,6 +169,8 @@ class VehiclePlateOCRWorker:
         target_id: int | None,
         stable_plate_at_submit: str | None,
         crop: np.ndarray,
+        kind: str = "live",
+        request_id: str | None = None,
     ) -> PlateOCRTask:
         with self._lock:
             task_id = self._next_task_id
@@ -180,6 +185,24 @@ class VehiclePlateOCRWorker:
             target_id=None if target_id is None else int(target_id),
             stable_plate_at_submit=stable_plate_at_submit,
             crop=np.asarray(crop).copy(),
+            kind=kind,
+            request_id=request_id,
+        )
+
+    def new_external_task(
+        self, *, request_id: str, crop: np.ndarray
+    ) -> PlateOCRTask:
+        return self.new_task(
+            track_id=-1,
+            frame_index=-1,
+            track_epoch=0,
+            class_id=-1,
+            bbox=(0.0, 0.0, 0.0, 0.0),
+            target_id=None,
+            stable_plate_at_submit=None,
+            crop=crop,
+            kind="external",
+            request_id=request_id,
         )
 
     def submit(self, task: PlateOCRTask) -> PlateOCRTask | None:
@@ -206,6 +229,27 @@ class VehiclePlateOCRWorker:
             if dropped is not None:
                 self._dropped_tasks += 1
         return dropped
+
+    def submit_external(self, task: PlateOCRTask) -> bool:
+        """Queue one non-droppable external import task.
+
+        Live latest-only work uses a separate queue, so a live frame can never
+        replace an external Gallery import.  A second external import waits
+        for the caller to retry rather than overwriting the first one.
+        """
+
+        if task.kind != "external":
+            raise ValueError("submit_external requires an external task")
+        if not self.running:
+            raise RuntimeError("VehiclePlateOCRWorker is not running")
+        try:
+            self._external_tasks.put_nowait(task)
+        except Full:
+            self._increment_dropped_tasks()
+            return False
+        with self._lock:
+            self._submitted += 1
+        return True
 
     def drain_results(self) -> tuple[PlateOCRResult, ...]:
         results: list[PlateOCRResult] = []
@@ -237,6 +281,11 @@ class VehiclePlateOCRWorker:
                 self._tasks.get_nowait()
             except Empty:
                 break
+        while True:
+            try:
+                self._external_tasks.get_nowait()
+            except Empty:
+                break
         try:
             self._tasks.put_nowait(None)
         except Full:
@@ -248,9 +297,12 @@ class VehiclePlateOCRWorker:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                task = self._tasks.get(timeout=0.1)
+                task = self._external_tasks.get_nowait()
             except Empty:
-                continue
+                try:
+                    task = self._tasks.get(timeout=0.01)
+                except Empty:
+                    continue
             if task is None:
                 return
             started = perf_counter()
@@ -363,6 +415,7 @@ class VehiclePlateCoordinator:
         self._track_ages: dict[int, int] = {}
         self._track_epochs: dict[int, int] = {}
         self._pending_tasks: dict[int, PlateOCRTask] = {}
+        self._external_results: list[PlateOCRResult] = []
         self._round_robin_cursor = 0
         self._last_global_inference_at: float | None = None
         self._first_ocr_at: float | None = None
@@ -568,6 +621,9 @@ class VehiclePlateCoordinator:
             return []
         confirmations: list[PlateConfirmation] = []
         for result in self.ocr_worker.drain_results():
+            if result.task.kind == "external":
+                self._external_results.append(result)
+                continue
             task = self._pending_tasks.pop(result.task.task_id, None)
             if task is None:
                 self._expired_results += 1
@@ -606,6 +662,51 @@ class VehiclePlateCoordinator:
                 self._apply_observations(task, result.observations, result.elapsed_ms)
             )
         return confirmations
+
+    def submit_external_task(
+        self, crop: np.ndarray, request_id: str
+    ) -> bool:
+        """Submit one external import crop through the existing OCR worker."""
+
+        if not self.enabled or self.ocr_worker is None:
+            return False
+        task = self.ocr_worker.new_external_task(
+            request_id=str(request_id), crop=crop
+        )
+        try:
+            return self.ocr_worker.submit_external(task)
+        except RuntimeError:
+            LOGGER.warning(
+                "VEHICLE_EXTERNAL_PLATE_TASK_SKIPPED request_id=%s reason=worker_not_running",
+                request_id,
+            )
+            return False
+
+    def drain_external_results(self) -> tuple[PlateOCRResult, ...]:
+        """Return external results already drained on the runtime thread."""
+
+        results = tuple(self._external_results)
+        self._external_results.clear()
+        return results
+
+    def best_external_plate(
+        self, crop: np.ndarray, observations: Sequence[PlateObservation]
+    ) -> str | None:
+        """Choose one trusted plate for a single external crop.
+
+        External imports intentionally do not use the live track confirmation
+        counter: one image yields at most one quality-gated trusted plate.
+        """
+
+        accepted: list[tuple[PlateObservation, float]] = []
+        for observation in observations:
+            sharpness = self._quality(crop, observation)
+            if sharpness is not None:
+                accepted.append((observation, sharpness))
+        if not accepted:
+            return None
+        observation, _ = max(accepted, key=lambda item: item[0].confidence)
+        return normalize_plate_number(observation.plate_number)
 
     def _apply_observations(
         self,

@@ -179,6 +179,9 @@ database:
 vehicle_database:
   path: "database/vehicle_reid.db"
 
+recognition_log:
+  path: "data/recognition_log.db"
+
 ui:
   window_name: "Person Tracking - MVP-8.2"
   wait_key_ms: 1

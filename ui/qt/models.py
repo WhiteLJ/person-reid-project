@@ -36,6 +36,8 @@ class GalleryRecordDTO:
     display_id: str
     snapshot_jpeg: bytes | None = None
     plate_number: str | None = None
+    recognition_enabled: bool = False
+    created_at: str | None = None
 
 
 @dataclass(frozen=True)

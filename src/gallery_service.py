@@ -127,6 +127,27 @@ class GalleryPersistenceService:
             raise
         return person
 
+    def set_recognition_enabled(
+        self, person_id: int, enabled: bool
+    ) -> GalleryPerson:
+        """Atomically update the opt-in flag for future recognition."""
+
+        person = self.gallery.get(person_id)
+        if person is None:
+            raise KeyError(f"unknown Gallery person: {person_id}")
+        self.repository.update_recognition_enabled(person_id, enabled)
+        try:
+            return self.gallery.update_recognition_enabled(person_id, enabled)
+        except Exception:
+            LOGGER.exception(
+                "GALLERY_RECOGNITION_FLAG_MEMORY_APPLY_FAILED person_id=%d",
+                person_id,
+            )
+            persisted = self.repository.load_person(person_id)
+            if persisted is None:
+                raise
+            return self.gallery.apply_feature_snapshot(persisted)
+
     def update_runtime_state(
         self,
         targets: Iterable[SessionTarget],

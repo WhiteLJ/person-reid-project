@@ -9,6 +9,7 @@ import numpy as np
 
 from .models import SessionTarget
 from .vehicle_plate import normalize_plate_number
+from .time_utils import current_local_timestamp
 
 
 VEHICLE_EMBEDDING_DIMENSION = 2048
@@ -50,6 +51,8 @@ class GalleryVehicle:
     reference_embeddings: list[np.ndarray] = field(default_factory=list)
     centroid: np.ndarray = field(default_factory=_empty_embedding)
     plate_number: str | None = None
+    recognition_enabled: bool = True
+    created_at: str | None = None
 
 
 class VehicleTargetGallery:
@@ -118,6 +121,8 @@ class VehicleTargetGallery:
             reference_embeddings=references,
             centroid=centroid,
             plate_number=normalize_plate_number(plate_number),
+            recognition_enabled=False,
+            created_at=current_local_timestamp(),
         )
         self._vehicles[vehicle_id] = vehicle
         self._session_target_to_vehicle[session_target.target_id] = vehicle_id
@@ -139,6 +144,8 @@ class VehicleTargetGallery:
                 reference_embeddings=[normalized.copy()],
                 centroid=normalized.copy(),
                 plate_number=None,
+                recognition_enabled=False,
+                created_at=current_local_timestamp(),
             )
         )
         self._vehicles[vehicle_id] = vehicle
@@ -168,6 +175,8 @@ class VehicleTargetGallery:
                 ],
                 centroid=np.asarray(centroid).copy(),
                 plate_number=current.plate_number,
+                recognition_enabled=current.recognition_enabled,
+                created_at=current.created_at,
             )
         )
 
@@ -215,9 +224,33 @@ class VehicleTargetGallery:
                 reference_embeddings=[reference.copy() for reference in current.reference_embeddings],
                 centroid=current.centroid.copy(),
                 plate_number=normalize_plate_number(plate_number),
+                recognition_enabled=current.recognition_enabled,
+                created_at=current.created_at,
             )
         )
         self._vehicles[current.vehicle_id] = updated
+        return updated
+
+    def update_recognition_enabled(
+        self, vehicle_id: int, enabled: bool
+    ) -> GalleryVehicle:
+        """Update only the runtime Gallery Recognition participation flag."""
+
+        current = self.get(vehicle_id)
+        if current is None:
+            raise KeyError(f"unknown Vehicle Gallery identity: {vehicle_id}")
+        updated = _copy_gallery_vehicle(
+            GalleryVehicle(
+                vehicle_id=current.vehicle_id,
+                label=current.label,
+                reference_embeddings=[reference.copy() for reference in current.reference_embeddings],
+                centroid=current.centroid.copy(),
+                plate_number=current.plate_number,
+                recognition_enabled=bool(enabled),
+                created_at=current.created_at,
+            )
+        )
+        self._vehicles[vehicle_id] = updated
         return updated
 
     def all_vehicles(self) -> tuple[GalleryVehicle, ...]:
@@ -355,6 +388,8 @@ def _copy_gallery_vehicle(vehicle: GalleryVehicle) -> GalleryVehicle:
         reference_embeddings=references,
         centroid=centroid,
         plate_number=normalize_plate_number(vehicle.plate_number),
+        recognition_enabled=bool(vehicle.recognition_enabled),
+        created_at=vehicle.created_at,
     )
 
 

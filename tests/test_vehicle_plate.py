@@ -312,6 +312,84 @@ class VehiclePlateAsyncTests(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_external_task_has_separate_non_replacing_queue(self) -> None:
+        started = Event()
+        release = Event()
+
+        class BlockingProvider:
+            def recognize(self, crop):
+                del crop
+                started.set()
+                release.wait(timeout=1.0)
+                return ()
+
+        worker = VehiclePlateOCRWorker(BlockingProvider())
+        worker.start()
+        try:
+            live = worker.new_task(
+                track_id=1,
+                frame_index=1,
+                track_epoch=1,
+                class_id=2,
+                bbox=(10, 10, 190, 190),
+                target_id=None,
+                stable_plate_at_submit=None,
+                crop=self.frame.copy(),
+            )
+            self.assertIsNone(worker.submit(live))
+            self.assertTrue(started.wait(timeout=1.0))
+            external = worker.new_external_task(
+                request_id="external-1", crop=self.frame.copy()
+            )
+            self.assertTrue(worker.submit_external(external))
+            # New live work may replace only a waiting live task.
+            newer_live = worker.new_task(
+                track_id=2,
+                frame_index=2,
+                track_epoch=1,
+                class_id=2,
+                bbox=(10, 10, 190, 190),
+                target_id=None,
+                stable_plate_at_submit=None,
+                crop=self.frame.copy(),
+            )
+            worker.submit(newer_live)
+            release.set()
+            sleep(0.1)
+            results = worker.drain_results()
+            self.assertTrue(any(result.task.kind == "external" for result in results))
+        finally:
+            release.set()
+            worker.close()
+
+    def test_external_plate_uses_one_quality_gated_observation_without_hits(self) -> None:
+        class FastProvider:
+            def recognize(self, crop):
+                del crop
+                return (PlateObservation("ABC12345", 0.95, (20, 40, 140, 70)),)
+
+        worker = VehiclePlateOCRWorker(FastProvider())
+        worker.start()
+        coordinator = VehiclePlateCoordinator(
+            self._config(confirmation_hits=5), FastProvider(), ocr_worker=worker
+        )
+        try:
+            self.assertTrue(coordinator.submit_external_task(self.frame, "external-1"))
+            results = ()
+            for frame_index in range(10):
+                sleep(0.01)
+                coordinator.process_frame(self.frame, [], frame_index)
+                results = coordinator.drain_external_results()
+                if results:
+                    break
+            self.assertEqual(len(results), 1)
+            self.assertEqual(
+                coordinator.best_external_plate(self.frame, results[0].observations),
+                "ABC12345",
+            )
+        finally:
+            worker.close()
+
 
 if __name__ == "__main__":
     unittest.main()

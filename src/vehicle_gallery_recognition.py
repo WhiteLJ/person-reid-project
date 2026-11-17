@@ -82,6 +82,9 @@ class VehicleGalleryRecognitionCoordinator(GalleryRecognitionCoordinator):
             quality_assessor=quality_assessor,
             gallery_adapter=adapter,
             gallery_pair_filter=self._plate_pair_compatible,
+            identity_enabled_filter=lambda vehicle: bool(
+                getattr(vehicle, "recognition_enabled", True)
+            ),
         )
 
     def _plate_pair_compatible(

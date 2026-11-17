@@ -166,6 +166,27 @@ class VehicleGalleryPersistenceService:
             self.gallery.apply_feature_snapshot(persisted)
             return persisted
 
+    def set_recognition_enabled(
+        self, vehicle_id: int, enabled: bool
+    ) -> GalleryVehicle:
+        """Atomically update the opt-in flag for future recognition."""
+
+        vehicle = self.gallery.get(vehicle_id)
+        if vehicle is None:
+            raise KeyError(f"unknown Vehicle Gallery identity: {vehicle_id}")
+        self.repository.update_recognition_enabled(vehicle_id, enabled)
+        try:
+            return self.gallery.update_recognition_enabled(vehicle_id, enabled)
+        except Exception:
+            LOGGER.exception(
+                "VEHICLE_GALLERY_RECOGNITION_FLAG_MEMORY_APPLY_FAILED vehicle_id=%d",
+                vehicle_id,
+            )
+            persisted = self.repository.load_vehicle(vehicle_id)
+            if persisted is None:
+                raise
+            return self.gallery.apply_feature_snapshot(persisted)
+
     def mark_auto_recognized(self, target_id: int) -> None:
         """Start the safety cooldown for a cold-start recognized identity."""
 

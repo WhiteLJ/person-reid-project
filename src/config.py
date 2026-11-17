@@ -200,6 +200,13 @@ class DiagnosticsConfig:
 
 
 @dataclass(frozen=True)
+class RecognitionLogConfig:
+    """Separate append-only SQLite path for accepted identity events."""
+
+    path: Path
+
+
+@dataclass(frozen=True)
 class GalleryRecognitionConfig:
     """Runtime controls for automatic recognition of persisted Gallery people."""
 
@@ -309,6 +316,7 @@ class AppConfig:
     vehicle_plate: VehiclePlateConfig
     ui: UIConfig
     diagnostics: DiagnosticsConfig
+    recognition_log: RecognitionLogConfig
 
 
 def parse_source(value: Any) -> int | str:
@@ -395,6 +403,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     vehicle_plate = _section(raw, "vehicle_plate")
     ui = _section(raw, "ui")
     diagnostics = _section(raw, "diagnostics")
+    recognition_log = _section(raw, "recognition_log")
 
     source = parse_source(video.get("source", 0))
     inference_backend = str(inference.get("backend", "torch")).strip().lower()
@@ -969,6 +978,15 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     if not vehicle_database_path.is_absolute():
         vehicle_database_path = project_root / vehicle_database_path
 
+    recognition_log_value = recognition_log.get(
+        "path", "data/recognition_log.db"
+    )
+    recognition_log_path = Path(recognition_log_value)
+    if not str(recognition_log_path).strip():
+        raise ValueError("recognition_log.path cannot be empty")
+    if not recognition_log_path.is_absolute():
+        recognition_log_path = project_root / recognition_log_path
+
     tracker_value = str(tracking.get("tracker", "botsort.yaml"))
     tracker_path = Path(tracker_value)
     if not tracker_path.is_absolute():
@@ -1139,4 +1157,5 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
                 1, int(diagnostics.get("log_interval_frames", 300))
             ),
         ),
+        recognition_log=RecognitionLogConfig(path=recognition_log_path),
     )

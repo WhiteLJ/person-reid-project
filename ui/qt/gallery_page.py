@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QPixmap
-from PyQt6.QtWidgets import QAbstractItemView, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget
+from dataclasses import replace
+
+from PyQt6.QtCore import QAbstractTableModel, QEvent, QModelIndex, Qt, pyqtSignal
+from PyQt6.QtGui import QFont, QMouseEvent, QPainter, QPixmap
+from PyQt6.QtWidgets import QAbstractItemView, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyle, QStyleOptionButton, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget
 
 from .models import GalleryRecordDTO
 
@@ -23,8 +25,77 @@ class ThumbnailDelegate(QStyledItemDelegate):
         super().paint(painter, option, index)
 
 
+class RecognitionDelegate(QStyledItemDelegate):
+    """Paint and toggle the recognition option as centered ``\u5426\u2610``/``\u662f\u2611``."""
+
+    def paint(self, painter: QPainter, option, index) -> None:
+        painter.save()
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+
+        enabled = index.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
+        text = "\u662f" if enabled else "\u5426"
+        metrics = painter.fontMetrics()
+        box_size = max(16, metrics.height() - 2)
+        spacing = max(3, metrics.averageCharWidth() // 4)
+        text_width = metrics.horizontalAdvance(text)
+        total_width = text_width + spacing + box_size
+        start_x = option.rect.left() + (option.rect.width() - total_width) // 2
+        text_rect = option.rect.adjusted(
+            start_x - option.rect.left(),
+            0,
+            start_x - option.rect.left(),
+            0,
+        )
+        text_rect.setWidth(text_width)
+        painter.setPen(
+            option.palette.highlightedText().color()
+            if option.state & QStyle.StateFlag.State_Selected
+            else option.palette.text().color()
+        )
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter, text)
+
+        checkbox = QStyleOptionButton()
+        checkbox.rect = option.rect.__class__(
+            start_x + text_width + spacing,
+            option.rect.top() + (option.rect.height() - box_size) // 2,
+            box_size,
+            box_size,
+        )
+        checkbox.state = QStyle.StateFlag.State_Enabled
+        if enabled:
+            checkbox.state |= QStyle.StateFlag.State_On
+        if option.widget is None:
+            painter.restore()
+            return
+        style = option.widget.style()
+        style.drawPrimitive(
+            QStyle.PrimitiveElement.PE_IndicatorCheckBox,
+            checkbox,
+            painter,
+            option.widget,
+        )
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index) -> bool:
+        if (
+            event.type() != QEvent.Type.MouseButtonRelease
+            or not isinstance(event, QMouseEvent)
+            or event.button() != Qt.MouseButton.LeftButton
+        ):
+            return False
+        current = index.data(Qt.ItemDataRole.CheckStateRole)
+        next_state = (
+            Qt.CheckState.Unchecked
+            if current == Qt.CheckState.Checked
+            else Qt.CheckState.Checked
+        )
+        return bool(model.setData(index, next_state, Qt.ItemDataRole.CheckStateRole))
+
+
 class GalleryTableModel(QAbstractTableModel):
-    HEADERS = ("\u76ee\u6807 ID", "\u76ee\u6807\u56fe\u50cf", "\u8f66\u724c\u53f7", "\u5220\u9664")
+    HEADERS = ("\u76ee\u6807 ID", "\u76ee\u6807\u56fe\u50cf", "\u8f66\u724c\u53f7", "\u5165\u5e93\u65f6\u95f4", "\u53c2\u4e0e\u8bc6\u522b", "\u5220\u9664")
+    recognitionEnabledChanged = pyqtSignal(str, int, bool)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -42,7 +113,7 @@ class GalleryTableModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self._records)
 
     def columnCount(self, parent=QModelIndex()) -> int:
-        return 0 if parent.isValid() else 4
+        return 0 if parent.isValid() else 6
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
@@ -65,15 +136,63 @@ class GalleryTableModel(QAbstractTableModel):
                     else ("\u2014" if record.domain == "person" else "NULL")
                 )
             if index.column() == 3:
+                return record.created_at or "\u672a\u77e5"
+            if index.column() == 4:
+                return "\u662f" if record.recognition_enabled else "\u5426"
+            if index.column() == 5:
                 return "\u5220\u9664"
             return "\u65e0\u5feb\u7167" if record.snapshot_jpeg is None else ""
+        if role == Qt.ItemDataRole.CheckStateRole and index.column() == 4:
+            return (
+                Qt.CheckState.Checked
+                if record.recognition_enabled
+                else Qt.CheckState.Unchecked
+            )
         if role == Qt.ItemDataRole.DecorationRole and index.column() == 1 and record.snapshot_jpeg:
             pixmap = QPixmap()
             pixmap.loadFromData(record.snapshot_jpeg, "JPG")
             return pixmap
-        if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in {0, 1, 2, 3}:
+        if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in {0, 1, 2, 3, 4, 5}:
             return Qt.AlignmentFlag.AlignCenter
         return None
+
+    def flags(self, index):
+        flags = super().flags(index)
+        if index.isValid() and index.column() == 4:
+            flags |= Qt.ItemFlag.ItemIsUserCheckable
+        return flags
+
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
+        if (
+            not index.isValid()
+            or index.column() != 4
+            or role not in {
+                Qt.ItemDataRole.CheckStateRole,
+                Qt.ItemDataRole.EditRole,
+            }
+        ):
+            return False
+        record = self.record_at(index.row())
+        if record is None:
+            return False
+        try:
+            if isinstance(value, bool):
+                enabled = value
+            else:
+                state = value if isinstance(value, Qt.CheckState) else Qt.CheckState(value)
+                enabled = state == Qt.CheckState.Checked
+        except (TypeError, ValueError):
+            return False
+        if enabled == record.recognition_enabled:
+            return True
+        self._records[index.row()] = replace(record, recognition_enabled=enabled)
+        self.dataChanged.emit(
+            index,
+            index,
+            [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.CheckStateRole],
+        )
+        self.recognitionEnabledChanged.emit(record.domain, record.identity_id, enabled)
+        return True
 
 
 class SnapshotPreviewDialog(QDialog):
@@ -109,6 +228,7 @@ class GalleryPage(QWidget):
     backRequested = pyqtSignal()
     deleteRequested = pyqtSignal(str, object, bool)
     importRequested = pyqtSignal(str)
+    recognitionEnabledChanged = pyqtSignal(str, int, bool)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -153,12 +273,20 @@ class GalleryPage(QWidget):
         self.model = GalleryTableModel(self)
         self.table.setModel(self.model)
         self.table.setItemDelegateForColumn(1, ThumbnailDelegate(self.table))
+        self.table.setItemDelegateForColumn(4, RecognitionDelegate(self.table))
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setAlternatingRowColors(True)
+        table_font = QFont(self.table.font())
+        table_font.setPointSize(18)
+        self.table.setFont(table_font)
         header = self.table.horizontalHeader()
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
-        for column in range(4):
+        header_font = QFont(header.font())
+        header_font.setPointSize(18)
+        header_font.setBold(True)
+        header.setFont(header_font)
+        for column in range(6):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setDefaultSectionSize(150)
         root.addWidget(self.table, 1)
@@ -169,6 +297,7 @@ class GalleryPage(QWidget):
         self.back_button.clicked.connect(self.backRequested)
         self.table.clicked.connect(self._table_clicked)
         self.table.doubleClicked.connect(self._preview_clicked)
+        self.model.recognitionEnabledChanged.connect(self.recognitionEnabledChanged)
 
     def set_records(self, records: tuple[GalleryRecordDTO, ...]) -> None:
         self._all_records = tuple(records)
@@ -201,7 +330,7 @@ class GalleryPage(QWidget):
             self.deleteRequested.emit(self._domain, ids, True)
 
     def _table_clicked(self, index) -> None:
-        if index.column() == 3 and not self._batch_mode:
+        if index.column() == 5 and not self._batch_mode:
             record = self.model.record_at(index.row())
             if record is not None:
                 self.deleteRequested.emit(record.domain, record.identity_id, False)

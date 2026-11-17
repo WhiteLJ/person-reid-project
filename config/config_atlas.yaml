@@ -155,6 +155,9 @@ database:
 vehicle_database:
   path: "database/vehicle_reid.db"
 
+recognition_log:
+  path: "data/recognition_log.db"
+
 gallery_enrichment:
   post_recovery_stable_frames: 30
   max_reference_embeddings: 8

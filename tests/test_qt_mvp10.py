@@ -39,10 +39,33 @@ class QtMVP10Tests(unittest.TestCase):
                 GalleryRecordDTO("vehicle", 1, "V001", None, "粤B12345"),
             )
         )
-        self.assertEqual(model.columnCount(), 4)
+        self.assertEqual(model.columnCount(), 6)
         self.assertEqual(model.data(model.index(0, 0)), "P001")
         self.assertEqual(model.data(model.index(0, 1)), "\u65e0\u5feb\u7167")
         self.assertEqual(model.data(model.index(0, 2)), "\u2014")
+        self.assertEqual(model.data(model.index(0, 3)), "\u672a\u77e5")
+        self.assertEqual(model.data(model.index(0, 4)), "\u5426")
+        self.assertEqual(model.data(model.index(0, 5)), "\u5220\u9664")
+        self.assertEqual(
+            model.data(model.index(0, 4), Qt.ItemDataRole.CheckStateRole),
+            Qt.CheckState.Unchecked,
+        )
+        self.assertTrue(
+            model.setData(
+                model.index(0, 4),
+                Qt.CheckState.Checked,
+                Qt.ItemDataRole.CheckStateRole,
+            )
+        )
+        self.assertEqual(model.data(model.index(0, 4)), "\u662f")
+        self.assertTrue(
+            model.setData(
+                model.index(0, 4),
+                Qt.CheckState.Unchecked,
+                Qt.ItemDataRole.CheckStateRole,
+            )
+        )
+        self.assertEqual(model.data(model.index(0, 4)), "\u5426")
         model.set_records((GalleryRecordDTO("vehicle", 1, "V001", None),))
         self.assertEqual(model.data(model.index(0, 2)), "NULL")
 
@@ -140,9 +163,11 @@ class QtMVP10Tests(unittest.TestCase):
         self.assertTrue(
             all(
                 header.sectionResizeMode(column) == QHeaderView.ResizeMode.Stretch
-                for column in range(4)
+                for column in range(6)
             )
         )
+        self.assertGreaterEqual(page.table.font().pointSize(), 18)
+        self.assertGreaterEqual(page.table.horizontalHeader().font().pointSize(), 18)
         page._toggle_batch()
         self.assertEqual(page.table.selectionMode(), QAbstractItemView.SelectionMode.MultiSelection)
         page.close()

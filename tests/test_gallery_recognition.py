@@ -141,6 +141,20 @@ class GalleryRecognitionTests(unittest.TestCase):
         self.assertEqual(coordinator.process_frame(self.frame, [_track(1)], 0), [])
         self.assertEqual(extractor.batch_calls, 0)
 
+    def test_disabled_gallery_identity_is_not_recognized(self) -> None:
+        extractor = _FakeReIDExtractor([_unit((1, 0))])
+        disabled = GalleryPerson(
+            person_id=1,
+            label="Target P001",
+            reference_embeddings=[_unit((1, 0))],
+            centroid=_unit((1, 0)),
+            recognition_enabled=False,
+        )
+        coordinator = _coordinator(TargetManager(), _gallery(disabled), extractor)
+
+        self.assertEqual(coordinator.process_frame(self.frame, [_track(1)], 0), [])
+        self.assertEqual(extractor.batch_calls, 0)
+
     def test_interval_and_track_age_are_enforced(self) -> None:
         extractor = _FakeReIDExtractor([_unit((1, 0)), _unit((1, 0))])
         coordinator = _coordinator(

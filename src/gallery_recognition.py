@@ -275,6 +275,7 @@ class GalleryRecognitionCoordinator:
         gallery_adapter: GalleryRecognitionAdapter | None = None,
         gallery_pair_filter: Callable[[Any, GalleryRecognitionCandidate], bool]
         | None = None,
+        identity_enabled_filter: Callable[[Any], bool] | None = None,
     ) -> None:
         self.target_manager = target_manager
         self.gallery = gallery
@@ -310,6 +311,9 @@ class GalleryRecognitionCoordinator:
         self.quality_assessor = quality_assessor
         self.gallery_adapter = gallery_adapter or person_gallery_adapter(gallery)
         self.gallery_pair_filter = gallery_pair_filter
+        self.identity_enabled_filter = identity_enabled_filter or (
+            lambda identity: bool(getattr(identity, "recognition_enabled", True))
+        )
         self._track_ages: dict[int, int] = {}
         self._last_seen_frame: dict[int, int] = {}
         self._pending: dict[tuple[int, int], _PendingRecognition] = {}
@@ -596,6 +600,7 @@ class GalleryRecognitionCoordinator:
             self.gallery_adapter.identity_id(identity)
             for identity in self.gallery_adapter.all_identities()
             if self.gallery_adapter.identity_id(identity) not in attached
+            and self.identity_enabled_filter(identity)
         )
 
     def _start_sweep(
@@ -726,6 +731,7 @@ class GalleryRecognitionCoordinator:
             for identity_id in sweep.identity_ids
             if identity_id not in attached
             and (identity := self.gallery_adapter.get_identity(identity_id)) is not None
+            and self.identity_enabled_filter(identity)
         ]
         candidates: list[GalleryRecognitionCandidate] = []
         for track_id, embedding in sweep.embeddings.items():
