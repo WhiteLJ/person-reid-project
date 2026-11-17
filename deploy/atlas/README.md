@@ -163,19 +163,47 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 python app.py --config config/config_atlas.yaml --source data/your_video.mp4
 ```
 
-For the long-running USB-camera deployment, install the desktop launcher once
-on the Atlas board:
+For the long-running USB-camera deployment, install the desktop launcher and
+the user-level graphical autostart entry once on the Atlas board:
 
 ```bash
-bash deploy/atlas/install_camera_launcher.sh
+bash deploy/atlas/install_camera_autostart.sh
 ```
 
-This creates `Person-ReID-Camera.desktop` on the desktop. Clicking it loads the
-CANN environment and starts the application with camera index `0`; it never
-opens a video file. The launcher searches for the `person-reid` Python
-environment under the usual Anaconda/Miniconda locations. If the environment
-is installed elsewhere, set `PYTHON_BIN` in
-`deploy/atlas/start_camera.sh` or export it before launching.
+This creates `Person-ReID-Camera.desktop` on the desktop and in
+`~/.config/autostart/`. The autostart entry runs only after the desktop user
+has logged in. It loads the CANN environment and starts the application with
+camera index `0`; it never opens a video file. The launcher searches for the
+`person-reid` Python environment under the usual Anaconda/Miniconda locations.
+If the environment is installed elsewhere, set `PYTHON_BIN` in
+`deploy/atlas/start_camera.sh`.
+
+To remove the password prompt at power-on, configure graphical autologin once:
+
+```bash
+bash deploy/atlas/configure_camera_autologin.sh
+```
+
+The script requests the current user's `sudo` password during setup only. It
+does not save the password and does not run the application as root. It writes
+a small LightDM or SDDM autologin drop-in. If the board uses another display
+manager, the script stops and prints the required manual configuration rather
+than modifying an unknown system file. After setup, reboot:
+
+```bash
+sudo reboot
+```
+
+If the board restricts `sudo` commands but permits the root password, run the
+configuration from a root shell instead. Do not put the password in a command
+or in a script:
+
+```bash
+su -
+cd /home/HwHiAiUser/person_reid
+bash deploy/atlas/configure_camera_autologin.sh HwHiAiUser
+reboot
+```
 
 To use another USB camera index without changing the application, set
 `CAMERA_INDEX`, for example:
