@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtCore import QPoint, QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
 
 from src.config import AppConfig
 from .gallery_page import GalleryPage
@@ -24,9 +26,11 @@ class TargetDecisionPopup(QFrame):
         self.save_button = QPushButton("\u4fdd\u5b58\u76ee\u6807")
         self.discard_button = QPushButton("\u4e0d\u4fdd\u5b58")
         button_font = QFont(self.font())
-        button_font.setPointSize(16)
+        button_font.setPointSize(18)
         self.save_button.setFont(button_font)
         self.discard_button.setFont(button_font)
+        self.save_button.setMinimumHeight(56)
+        self.discard_button.setMinimumHeight(56)
         layout.addWidget(self.save_button)
         layout.addWidget(self.discard_button)
         self.save_button.clicked.connect(self.saveRequested.emit)
@@ -40,6 +44,7 @@ class QtMainWindow(QMainWindow):
     savePendingRequested = pyqtSignal()
     discardPendingRequested = pyqtSignal()
     deleteGalleryRequested = pyqtSignal(str, object, bool)
+    importGalleryFileRequested = pyqtSignal(str, str)
     shutdownRequested = pyqtSignal()
 
     def __init__(self, config: AppConfig, source_override: str | None = None, parent=None, *, start_worker: bool = True) -> None:
@@ -84,6 +89,7 @@ class QtMainWindow(QMainWindow):
         self.savePendingRequested.connect(self.worker.save_pending_selection)
         self.discardPendingRequested.connect(self.worker.discard_pending_selection)
         self.deleteGalleryRequested.connect(self.worker.delete_gallery)
+        self.importGalleryFileRequested.connect(self.worker.import_gallery_file)
         self.shutdownRequested.connect(self.worker.request_shutdown)
         self._update_edit_controls()
         if start_worker:
@@ -100,9 +106,9 @@ class QtMainWindow(QMainWindow):
         self.quit_button = QPushButton("\u9000\u51fa")
         for button in (self.select_button, self.remove_button, self.database_button, self.quit_button):
             button_font = QFont(button.font())
-            button_font.setPointSize(18)
+            button_font.setPointSize(20)
             button.setFont(button_font)
-            button.setMinimumHeight(56)
+            button.setMinimumHeight(64)
             button.setSizePolicy(
                 QSizePolicy.Policy.Expanding,
                 QSizePolicy.Policy.Fixed,
@@ -126,6 +132,7 @@ class QtMainWindow(QMainWindow):
         self.video_canvas.roiSelected.connect(self.submitRoiRequested.emit)
         self.gallery_page.backRequested.connect(self._back_to_tracking)
         self.gallery_page.deleteRequested.connect(self._confirm_gallery_delete)
+        self.gallery_page.importRequested.connect(self._choose_gallery_import)
 
     def _runtime_ready(self) -> None:
         self._set_status("\u8fd0\u884c\u4e2d")
@@ -250,6 +257,20 @@ class QtMainWindow(QMainWindow):
 
     def _back_to_tracking(self) -> None:
         self.stack.setCurrentWidget(self.main_page)
+
+    def _choose_gallery_import(self, domain: str) -> None:
+        if domain not in {"person", "vehicle"}:
+            return
+        default_directory = Path(__file__).resolve().parents[2] / "file"
+        initial_directory = str(default_directory) if default_directory.is_dir() else ""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "\u8bfb\u53d6\u5916\u90e8\u6587\u4ef6",
+            initial_directory,
+            "Images (*.jpg *.jpeg *.png *.bmp *.webp)",
+        )
+        if path:
+            self.importGalleryFileRequested.emit(domain, path)
 
     def _gallery_rows_ready(self, records: tuple[GalleryRecordDTO, ...]) -> None:
         self.gallery_page.set_records(records)

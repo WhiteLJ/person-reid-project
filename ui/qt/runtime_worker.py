@@ -10,6 +10,7 @@ from time import monotonic, perf_counter
 from typing import Any
 
 import numpy as np
+import cv2
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 
 from src.active_identity_guard import ActiveIdentityGuard
@@ -20,6 +21,7 @@ from src.frame_source import FrameSource, SourceReadStatus
 from src.gallery import TargetGallery, format_person_id
 from src.gallery_recognition import GalleryRecognitionCoordinator
 from src.gallery_service import GalleryPersistenceService
+from src.gallery_snapshot import encode_snapshot_image
 from src.models import Track
 from src.reid import ReIDExtractor
 from src.reid_frame_cache import ReIDFrameCache
@@ -832,6 +834,83 @@ class RuntimeWorker(QObject):
             self._pending_selection = None
             self.status_message.emit("目标已保留，未保存到数据库")
             self._emit_frozen_frame()
+
+    @pyqtSlot(str, str)
+    def import_gallery_file(self, domain: str, file_path: str) -> None:
+        """Import one already-cropped image directly into a persistent Gallery."""
+
+        if domain not in {"person", "vehicle"}:
+            self.status_message.emit("导入失败：未知目标库")
+            return
+        try:
+            path = Path(file_path)
+            if not path.is_file():
+                raise ValueError("图片读取失败：文件不存在")
+            try:
+                encoded = np.frombuffer(path.read_bytes(), dtype=np.uint8)
+            except OSError as exc:
+                raise ValueError("图片读取失败：文件不可读") from exc
+            image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+            if image is None:
+                raise ValueError("图片格式不支持或图片解码失败")
+            if image.ndim != 3 or image.shape[2] != 3 or image.size == 0:
+                raise ValueError("图片为空或不是三通道彩色图片")
+
+            height, width = image.shape[:2]
+            if domain == "person":
+                if (
+                    width < self.config.reid.min_crop_width
+                    or height < self.config.reid.min_crop_height
+                ):
+                    raise ValueError(
+                        "图片尺寸过小：人员图片至少需要 "
+                        f"{self.config.reid.min_crop_width}x"
+                        f"{self.config.reid.min_crop_height}"
+                    )
+                if self._reid_extractor is None or self._person_service is None:
+                    raise RuntimeError("Person ReID runtime is not initialized")
+                embedding = self._reid_extractor.extract(image)
+                snapshot = encode_snapshot_image(image)
+                identity = self._person_service.import_external_identity(
+                    embedding,
+                    snapshot,
+                )
+                display_id = format_person_id(identity.person_id)
+                if self._person_recognition is not None:
+                    self._person_recognition.notify_gallery_changed()
+            else:
+                min_width = self.config.vehicle_reid_quality.min_crop_width
+                min_height = self.config.vehicle_reid_quality.min_crop_height
+                if width < min_width or height < min_height:
+                    raise ValueError(
+                        "图片尺寸过小：车辆图片至少需要 "
+                        f"{min_width}x{min_height}"
+                    )
+                if (
+                    self._vehicle_reid_extractor is None
+                    or self._vehicle_service is None
+                ):
+                    raise RuntimeError("Vehicle ReID runtime is not initialized")
+                embedding = self._vehicle_reid_extractor.extract(image)
+                snapshot = encode_snapshot_image(image)
+                identity = self._vehicle_service.import_external_identity(
+                    embedding,
+                    snapshot,
+                    plate_number=None,
+                )
+                display_id = format_vehicle_id(identity.vehicle_id)
+                if self._vehicle_recognition is not None:
+                    self._vehicle_recognition.notify_gallery_changed()
+
+            self._publish_gallery_rows()
+            self.gallery_mutation_done.emit(f"已导入 {display_id}")
+        except Exception as exc:
+            LOGGER.exception(
+                "QT_EXTERNAL_GALLERY_IMPORT_FAILED domain=%s path=%s",
+                domain,
+                file_path,
+            )
+            self.status_message.emit(f"导入失败：{exc}")
 
     @pyqtSlot()
     def clear_session(self) -> None:

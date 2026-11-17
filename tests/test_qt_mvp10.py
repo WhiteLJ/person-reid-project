@@ -64,6 +64,8 @@ class QtMVP10Tests(unittest.TestCase):
             ["\u6846\u9009", "\u64a4\u9500", "\u6570\u636e\u5e93", "\u9000\u51fa"],
         )
         self.assertEqual(window.stack.count(), 2)
+        self.assertEqual(window.select_button.font().pointSize(), 20)
+        self.assertGreaterEqual(window.select_button.minimumHeight(), 64)
         window.resize(1200, 800)
         window.show()
         self.app.processEvents()
@@ -122,6 +124,15 @@ class QtMVP10Tests(unittest.TestCase):
         from ui.qt.gallery_page import GalleryPage
 
         page = GalleryPage()
+        self.assertTrue(hasattr(page, "import_button"))
+        self.assertEqual(page.import_button.font().pointSize(), 18)
+        self.assertGreaterEqual(page.import_button.minimumHeight(), 60)
+        requested_domains = []
+        page.importRequested.connect(requested_domains.append)
+        page.import_button.click()
+        page.set_domain("vehicle")
+        page.import_button.click()
+        self.assertEqual(requested_domains, ["person", "vehicle"])
         page.resize(1200, 800)
         page.show()
         self.app.processEvents()

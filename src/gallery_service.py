@@ -105,6 +105,28 @@ class GalleryPersistenceService:
         self._mark_explicit_enrollment(session_target.target_id)
         return person
 
+    def import_external_identity(
+        self,
+        embedding,
+        snapshot_jpeg: bytes,
+    ) -> GalleryPerson:
+        """Persist one external crop without creating SessionTarget state."""
+
+        person = self.gallery.create_external_identity(embedding)
+        try:
+            saver = getattr(self.repository, "save_person_with_snapshot", None)
+            if saver is not None:
+                saver(person, snapshot_jpeg)
+            else:
+                self.repository.save_person(person)
+                self.repository.save_snapshot(person.person_id, snapshot_jpeg)
+        except Exception:
+            # The allocator remains monotonic, but the failed identity must not
+            # remain visible in memory without a matching database row.
+            self.gallery.remove(person.person_id)
+            raise
+        return person
+
     def update_runtime_state(
         self,
         targets: Iterable[SessionTarget],

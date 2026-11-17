@@ -73,6 +73,47 @@ class VehicleGalleryPersistenceServiceTests(unittest.TestCase):
         self.assertEqual(gallery.all_vehicles(), ())
         self.assertIsNone(gallery.vehicle_for_session_target(1))
 
+    def test_external_import_persists_without_session_target_mapping(self) -> None:
+        snapshot = b"external-vehicle-jpeg"
+        vehicle = self.service.import_external_identity(_embedding(), snapshot)
+
+        self.assertEqual(vehicle.vehicle_id, 1)
+        self.assertIsNone(vehicle.plate_number)
+        self.assertIsNone(self.gallery.vehicle_for_session_target(999))
+        self.assertEqual(self.repository.load_snapshot(vehicle.vehicle_id), snapshot)
+
+        restarted_gallery = VehicleTargetGallery()
+        restarted_service = VehicleGalleryPersistenceService(
+            restarted_gallery,
+            VehicleGalleryRepository(self.path),
+        )
+        restarted_service.load()
+        restored = restarted_gallery.get(vehicle.vehicle_id)
+        self.assertIsNotNone(restored)
+        self.assertIsNone(restored.plate_number if restored is not None else None)
+        self.assertIsNone(restarted_gallery.vehicle_for_session_target(999))
+
+    def test_external_import_failure_rolls_back_memory_identity(self) -> None:
+        class FailingExternalRepository:
+            def save_vehicle_with_snapshot(self, vehicle, image_jpeg) -> None:
+                del vehicle, image_jpeg
+                raise VehicleRepositoryError("forced external import failure")
+
+        gallery = VehicleTargetGallery()
+        service = VehicleGalleryPersistenceService(gallery, FailingExternalRepository())
+
+        with self.assertRaises(VehicleRepositoryError):
+            service.import_external_identity(_embedding(), b"jpeg")
+
+        self.assertEqual(gallery.all_vehicles(), ())
+
+    def test_external_import_and_manual_enrollment_share_allocator(self) -> None:
+        external = self.service.import_external_identity(_embedding(), b"jpeg")
+        manual = self.service.enroll(_target(2))
+
+        self.assertEqual(external.vehicle_id, 1)
+        self.assertEqual(manual.vehicle_id, 2)
+
     def test_remove_detaches_mapping_but_does_not_touch_person_database(self) -> None:
         target = _target(1)
         vehicle = self.service.enroll(target)

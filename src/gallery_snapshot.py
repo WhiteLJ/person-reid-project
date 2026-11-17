@@ -42,6 +42,22 @@ def encode_track_snapshot(
     """Encode one clean track crop as a bounded JPEG snapshot."""
 
     crop = crop_track_from_frame(frame, bbox)
+    return encode_snapshot_image(crop, max_side=max_side, quality=quality)
+
+
+def encode_snapshot_image(
+    image: np.ndarray,
+    *,
+    max_side: int = 720,
+    quality: int = 90,
+) -> bytes:
+    """Encode an already-cropped BGR image using Gallery snapshot policy."""
+
+    if not isinstance(image, np.ndarray) or image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError("snapshot image must be an HxWx3 BGR ndarray")
+    if image.shape[0] <= 0 or image.shape[1] <= 0 or image.size == 0:
+        raise ValueError("snapshot image must be non-empty")
+    crop = image.copy()
     if max_side > 0 and max(crop.shape[:2]) > max_side:
         scale = max_side / float(max(crop.shape[:2]))
         crop = cv2.resize(

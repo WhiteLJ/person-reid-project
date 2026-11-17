@@ -120,6 +120,46 @@ class GalleryPersistenceServiceTests(unittest.TestCase):
         self.assertEqual(failing_service.gallery.all_people(), ())
         self.assertIsNone(failing_service.gallery.person_for_session_target(1))
 
+    def test_external_import_persists_without_session_target_mapping(self) -> None:
+        snapshot = b"external-person-jpeg"
+        person = self.service.import_external_identity(_embedding(), snapshot)
+
+        self.assertEqual(person.person_id, 1)
+        self.assertIsNone(self.gallery.person_for_session_target(999))
+        self.assertEqual(self.repository.load_snapshot(person.person_id), snapshot)
+
+        restarted_gallery = TargetGallery()
+        restarted_service = GalleryPersistenceService(
+            restarted_gallery,
+            GalleryRepository(self.database_path),
+        )
+        restarted_service.load()
+        restored = restarted_gallery.get(person.person_id)
+        self.assertIsNotNone(restored)
+        self.assertEqual(self.repository.load_snapshot(person.person_id), snapshot)
+        self.assertIsNone(restarted_gallery.person_for_session_target(999))
+
+    def test_external_import_failure_rolls_back_memory_identity(self) -> None:
+        class FailingExternalRepository:
+            def save_person_with_snapshot(self, person, image_jpeg) -> None:
+                del person, image_jpeg
+                raise RepositoryError("forced external import failure")
+
+        gallery = TargetGallery()
+        service = GalleryPersistenceService(gallery, FailingExternalRepository())
+
+        with self.assertRaises(RepositoryError):
+            service.import_external_identity(_embedding(), b"jpeg")
+
+        self.assertEqual(gallery.all_people(), ())
+
+    def test_external_import_and_manual_enrollment_share_allocator(self) -> None:
+        external = self.service.import_external_identity(_embedding(), b"jpeg")
+        manual = self.service.enroll(_target(2))
+
+        self.assertEqual(external.person_id, 1)
+        self.assertEqual(manual.person_id, 2)
+
     def test_duplicate_enrollment_failure_does_not_remove_existing_person(self) -> None:
         gallery = TargetGallery()
         target = _target(1)

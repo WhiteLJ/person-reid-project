@@ -110,6 +110,30 @@ class TargetGallery:
         self._session_target_to_person[session_target.target_id] = person_id
         return person
 
+    def create_external_identity(self, embedding: np.ndarray) -> GalleryPerson:
+        """Create a persistent identity from one already-extracted embedding.
+
+        External imports deliberately do not create or attach a SessionTarget.
+        The caller owns persistence ordering and rolls this object back if the
+        repository write fails.
+        """
+
+        normalized = normalize_embedding(embedding)
+        if normalized.ndim != 1:
+            raise ValueError("external person embedding must have shape (D,)")
+        person_id = self._next_person_id
+        self._next_person_id += 1
+        person = _copy_gallery_person(
+            GalleryPerson(
+                person_id=person_id,
+                label=f"Target {format_person_id(person_id)}",
+                reference_embeddings=[normalized.astype(np.float32, copy=True)],
+                centroid=normalized.astype(np.float32, copy=True),
+            )
+        )
+        self._people[person_id] = person
+        return person
+
     def get(self, person_id: int) -> GalleryPerson | None:
         return self._people.get(person_id)
 

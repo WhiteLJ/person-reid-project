@@ -117,6 +117,32 @@ class VehicleGalleryPersistenceService:
         self._mark_explicit_enrollment(session_target.target_id)
         return vehicle
 
+    def import_external_identity(
+        self,
+        embedding,
+        snapshot_jpeg: bytes,
+        plate_number: str | None = None,
+    ) -> GalleryVehicle:
+        """Persist one external vehicle crop without SessionTarget state."""
+
+        vehicle = self.gallery.create_external_identity(embedding)
+        if plate_number is not None:
+            # The first version intentionally defaults to NULL.  Keep the
+            # argument for service symmetry, but normalize only if a future
+            # caller explicitly supplies a trusted value.
+            vehicle.plate_number = normalize_plate_number(plate_number)
+        try:
+            saver = getattr(self.repository, "save_vehicle_with_snapshot", None)
+            if saver is not None:
+                saver(vehicle, snapshot_jpeg)
+            else:
+                self.repository.save_vehicle(vehicle)
+                self.repository.save_snapshot(vehicle.vehicle_id, snapshot_jpeg)
+        except Exception:
+            self.gallery.remove(vehicle.vehicle_id)
+            raise
+        return vehicle
+
     def update_vehicle_plate(
         self, vehicle_id: int, plate_number: str | None
     ) -> GalleryVehicle:

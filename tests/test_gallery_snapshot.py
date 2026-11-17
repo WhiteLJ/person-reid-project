@@ -5,7 +5,11 @@ import unittest
 import cv2
 import numpy as np
 
-from src.gallery_snapshot import crop_track_from_frame, encode_track_snapshot
+from src.gallery_snapshot import (
+    crop_track_from_frame,
+    encode_snapshot_image,
+    encode_track_snapshot,
+)
 
 
 class GallerySnapshotTests(unittest.TestCase):
@@ -22,6 +26,13 @@ class GallerySnapshotTests(unittest.TestCase):
     def test_invalid_bbox_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             crop_track_from_frame(np.zeros((10, 10, 3), dtype=np.uint8), (4, 4, 4, 5))
+
+    def test_external_image_snapshot_uses_same_jpeg_policy(self) -> None:
+        image = np.zeros((80, 120, 3), dtype=np.uint8)
+        data = encode_snapshot_image(image)
+        decoded = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertIsNotNone(decoded)
+        self.assertEqual(decoded.shape[:2], (80, 120))
 
 
 if __name__ == "__main__":

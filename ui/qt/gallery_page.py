@@ -98,8 +98,9 @@ class SnapshotPreviewDialog(QDialog):
         layout.addWidget(image)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         button_font = QFont(self.font())
-        button_font.setPointSize(16)
+        button_font.setPointSize(18)
         buttons.setFont(button_font)
+        buttons.setMinimumHeight(56)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
@@ -107,6 +108,7 @@ class SnapshotPreviewDialog(QDialog):
 class GalleryPage(QWidget):
     backRequested = pyqtSignal()
     deleteRequested = pyqtSignal(str, object, bool)
+    importRequested = pyqtSignal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -121,23 +123,30 @@ class GalleryPage(QWidget):
         toolbar.setColumnStretch(2, 1)
         self.people_button = QPushButton("\u4eba\u5458\u5e93")
         self.vehicle_button = QPushButton("\u8f66\u8f86\u5e93")
+        self.import_button = QPushButton("\u8bfb\u53d6\u5916\u90e8\u6587\u4ef6")
         self.batch_button = QPushButton("\u6279\u91cf\u7ba1\u7406")
         self.back_button = QPushButton("\u8fd4\u56de")
         for button in (
             self.people_button,
             self.vehicle_button,
+            self.import_button,
             self.batch_button,
             self.back_button,
         ):
             button_font = QFont(button.font())
-            button_font.setPointSize(16)
+            button_font.setPointSize(18)
             button.setFont(button_font)
+            button.setMinimumHeight(60)
         domain_buttons = QHBoxLayout()
         domain_buttons.setSpacing(10)
         domain_buttons.addWidget(self.people_button)
         domain_buttons.addWidget(self.vehicle_button)
         toolbar.addLayout(domain_buttons, 0, 0, alignment=Qt.AlignmentFlag.AlignLeft)
-        toolbar.addWidget(self.batch_button, 0, 1, alignment=Qt.AlignmentFlag.AlignCenter)
+        management_buttons = QHBoxLayout()
+        management_buttons.setSpacing(10)
+        management_buttons.addWidget(self.import_button)
+        management_buttons.addWidget(self.batch_button)
+        toolbar.addLayout(management_buttons, 0, 1, alignment=Qt.AlignmentFlag.AlignCenter)
         toolbar.addWidget(self.back_button, 0, 2, alignment=Qt.AlignmentFlag.AlignRight)
         root.addLayout(toolbar)
         self.table = QTableView()
@@ -155,6 +164,7 @@ class GalleryPage(QWidget):
         root.addWidget(self.table, 1)
         self.people_button.clicked.connect(lambda: self.set_domain("person"))
         self.vehicle_button.clicked.connect(lambda: self.set_domain("vehicle"))
+        self.import_button.clicked.connect(lambda: self.importRequested.emit(self._domain))
         self.batch_button.clicked.connect(self._toggle_batch)
         self.back_button.clicked.connect(self.backRequested)
         self.table.clicked.connect(self._table_clicked)

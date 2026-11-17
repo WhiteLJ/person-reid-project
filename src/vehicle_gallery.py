@@ -123,6 +123,27 @@ class VehicleTargetGallery:
         self._session_target_to_vehicle[session_target.target_id] = vehicle_id
         return vehicle
 
+    def create_external_identity(self, embedding: np.ndarray) -> GalleryVehicle:
+        """Create a persistent Vehicle identity without SessionTarget mapping."""
+
+        normalized = _copy_vehicle_embedding(
+            embedding,
+            context="external Vehicle embedding",
+        )
+        vehicle_id = self._next_vehicle_id
+        self._next_vehicle_id += 1
+        vehicle = _copy_gallery_vehicle(
+            GalleryVehicle(
+                vehicle_id=vehicle_id,
+                label=f"Target {format_vehicle_id(vehicle_id)}",
+                reference_embeddings=[normalized.copy()],
+                centroid=normalized.copy(),
+                plate_number=None,
+            )
+        )
+        self._vehicles[vehicle_id] = vehicle
+        return vehicle
+
     def get(self, vehicle_id: int) -> GalleryVehicle | None:
         return self._vehicles.get(_validate_vehicle_id(vehicle_id))
 
