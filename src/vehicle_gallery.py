@@ -51,7 +51,9 @@ class GalleryVehicle:
     reference_embeddings: list[np.ndarray] = field(default_factory=list)
     centroid: np.ndarray = field(default_factory=_empty_embedding)
     plate_number: str | None = None
-    recognition_enabled: bool = True
+    # Gallery Recognition eligibility is opt-in.  This flag does not control
+    # SessionTarget tracking, Recovery, or Recovery alerts.
+    recognition_enabled: bool = False
     created_at: str | None = None
 
 
@@ -121,7 +123,7 @@ class VehicleTargetGallery:
             reference_embeddings=references,
             centroid=centroid,
             plate_number=normalize_plate_number(plate_number),
-            recognition_enabled=True,
+            recognition_enabled=False,
             created_at=current_local_timestamp(),
         )
         self._vehicles[vehicle_id] = vehicle

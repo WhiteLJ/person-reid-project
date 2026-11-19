@@ -500,9 +500,7 @@ class RuntimeWorker(QObject):
                 identity_id=identity_id,
                 display_id=display_id,
                 event_type="recovery",
-                requires_attention=bool(
-                    getattr(identity, "recognition_enabled", False)
-                ),
+                requires_attention=True,
             )
 
     def _log_recognition_events(self, domain, matches, gallery, manager) -> None:
@@ -536,9 +534,7 @@ class RuntimeWorker(QObject):
                 identity_id=identity_id,
                 display_id=display_id,
                 event_type="recognition",
-                requires_attention=bool(
-                    getattr(identity, "recognition_enabled", False)
-                ),
+                requires_attention=True,
             )
 
     def _publish_activity_event(

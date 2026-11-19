@@ -49,7 +49,7 @@ def _remove(path: Path) -> None:
 
 
 class GalleryIdentityControlTests(unittest.TestCase):
-    def test_manual_person_enrollment_defaults_enabled_and_persists(self) -> None:
+    def test_manual_person_enrollment_defaults_disabled_and_persists(self) -> None:
         path = ROOT / "manual_person_enabled.db"
         _remove(path)
         repository = GalleryRepository(path)
@@ -58,12 +58,12 @@ class GalleryIdentityControlTests(unittest.TestCase):
         service = GalleryPersistenceService(gallery, repository)
         person = service.enroll(_session_target(1, _person_embedding()))
 
-        self.assertTrue(person.recognition_enabled)
+        self.assertFalse(person.recognition_enabled)
         restored = GalleryRepository(path).load_all()[0]
-        self.assertTrue(restored.recognition_enabled)
+        self.assertFalse(restored.recognition_enabled)
         _remove(path)
 
-    def test_manual_vehicle_enrollment_defaults_enabled_and_persists(self) -> None:
+    def test_manual_vehicle_enrollment_defaults_disabled_and_persists(self) -> None:
         path = ROOT / "manual_vehicle_enabled.db"
         _remove(path)
         repository = VehicleGalleryRepository(path)
@@ -72,9 +72,9 @@ class GalleryIdentityControlTests(unittest.TestCase):
         service = VehicleGalleryPersistenceService(gallery, repository)
         vehicle = service.enroll(_session_target(1, _vehicle_embedding()))
 
-        self.assertTrue(vehicle.recognition_enabled)
+        self.assertFalse(vehicle.recognition_enabled)
         restored = VehicleGalleryRepository(path).load_all()[0]
-        self.assertTrue(restored.recognition_enabled)
+        self.assertFalse(restored.recognition_enabled)
         _remove(path)
 
     def test_person_metadata_and_recognition_flag_round_trip(self) -> None:
@@ -88,10 +88,12 @@ class GalleryIdentityControlTests(unittest.TestCase):
 
         self.assertFalse(person.recognition_enabled)
         self.assertRegex(person.created_at or "", r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
-        updated = service.set_recognition_enabled(person.person_id, False)
-        self.assertFalse(updated.recognition_enabled)
         restored = GalleryRepository(path).load_all()[0]
         self.assertFalse(restored.recognition_enabled)
+        updated = service.set_recognition_enabled(person.person_id, True)
+        self.assertTrue(updated.recognition_enabled)
+        restored = GalleryRepository(path).load_all()[0]
+        self.assertTrue(restored.recognition_enabled)
         self.assertEqual(restored.created_at, person.created_at)
         _remove(path)
 
@@ -107,10 +109,12 @@ class GalleryIdentityControlTests(unittest.TestCase):
         self.assertFalse(vehicle.recognition_enabled)
         self.assertIsNone(vehicle.plate_number)
         self.assertRegex(vehicle.created_at or "", r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
-        updated = service.set_recognition_enabled(vehicle.vehicle_id, False)
-        self.assertFalse(updated.recognition_enabled)
         restored = VehicleGalleryRepository(path).load_all()[0]
         self.assertFalse(restored.recognition_enabled)
+        updated = service.set_recognition_enabled(vehicle.vehicle_id, True)
+        self.assertTrue(updated.recognition_enabled)
+        restored = VehicleGalleryRepository(path).load_all()[0]
+        self.assertTrue(restored.recognition_enabled)
         self.assertEqual(restored.created_at, vehicle.created_at)
         _remove(path)
 

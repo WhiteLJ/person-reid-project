@@ -39,6 +39,7 @@ def _vehicle(
         reference_embeddings=[reference.copy()],
         centroid=reference.copy(),
         plate_number=plate_number,
+        recognition_enabled=True,
     )
 
 

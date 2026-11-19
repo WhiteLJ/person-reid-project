@@ -33,6 +33,11 @@ def _target(target_id: int, reference_count: int = 1) -> SessionTarget:
 
 
 class VehicleGalleryTests(unittest.TestCase):
+    def test_gallery_vehicle_dataclass_defaults_to_recognition_disabled(self) -> None:
+        self.assertFalse(
+            GalleryVehicle(vehicle_id=1, label="Target V001").recognition_enabled
+        )
+
     def test_vehicle_id_format(self) -> None:
         self.assertEqual(format_vehicle_id(1), "V001")
         self.assertEqual(format_vehicle_id(12), "V012")
@@ -54,7 +59,7 @@ class VehicleGalleryTests(unittest.TestCase):
         self.assertAlmostEqual(
             float(np.linalg.norm(vehicle.centroid)), 1.0, places=5
         )
-        self.assertTrue(vehicle.recognition_enabled)
+        self.assertFalse(vehicle.recognition_enabled)
         self.assertNotEqual(float(vehicle.reference_embeddings[0][0]), 0.0)
         self.assertEqual(float(target.reference_embeddings[0][0]), 0.0)
 

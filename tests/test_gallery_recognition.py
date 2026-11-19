@@ -99,6 +99,7 @@ def _person(person_id: int, value: tuple[float, ...]) -> GalleryPerson:
         label=f"Target P{person_id:03d}",
         reference_embeddings=[vector.copy()],
         centroid=vector.copy(),
+        recognition_enabled=True,
     )
 
 
@@ -419,6 +420,7 @@ class GalleryRecognitionTests(unittest.TestCase):
             label="Target P001",
             reference_embeddings=[reference.copy() for reference in historical_references],
             centroid=_unit((1.0, 0.0)),
+            recognition_enabled=True,
         )
         gallery = _gallery(source)
         extractor = _FakeReIDExtractor([live_embedding])
@@ -454,6 +456,7 @@ class GalleryRecognitionTests(unittest.TestCase):
                 label="Target P001",
                 reference_embeddings=historical_references,
                 centroid=_unit((1.0, 0.0)),
+                recognition_enabled=True,
             )
         )
         automatic_manager = TargetManager()

@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from src.gallery import TargetGallery, format_person_id
+from src.gallery import GalleryPerson, TargetGallery, format_person_id
 from src.models import SessionTarget, TargetState, Track
 from src.target_manager import TargetManager
 
@@ -23,6 +23,9 @@ def _session_target(target_id: int, values: tuple[float, ...]) -> SessionTarget:
 
 
 class TargetGalleryTests(unittest.TestCase):
+    def test_gallery_person_dataclass_defaults_to_recognition_disabled(self) -> None:
+        self.assertFalse(GalleryPerson(person_id=1, label="Target P001").recognition_enabled)
+
     def test_person_id_and_label_are_generated(self) -> None:
         gallery = TargetGallery()
 
@@ -30,7 +33,7 @@ class TargetGalleryTests(unittest.TestCase):
 
         self.assertEqual(person.person_id, 1)
         self.assertEqual(person.label, "Target P001")
-        self.assertTrue(person.recognition_enabled)
+        self.assertFalse(person.recognition_enabled)
         self.assertEqual(format_person_id(2), "P002")
 
     def test_enrollment_snapshots_reference_bank_and_centroid(self) -> None:

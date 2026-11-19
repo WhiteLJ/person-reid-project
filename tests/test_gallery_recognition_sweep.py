@@ -34,6 +34,7 @@ def _gallery() -> TargetGallery:
                 label="Target P001",
                 reference_embeddings=[vector.copy()],
                 centroid=vector.copy(),
+                recognition_enabled=True,
             )
         ]
     )
@@ -61,10 +62,12 @@ def _coordinator(
     confirmation_hits: int = 1,
     candidates_per_frame: int = 3,
     retry_interval: int = 15,
+    gallery: TargetGallery | None = None,
 ) -> GalleryRecognitionCoordinator:
+    manager = TargetManager()
     return GalleryRecognitionCoordinator(
-        TargetManager(),
-        _gallery(),
+        manager,
+        gallery or _gallery(),
         extractor,  # type: ignore[arg-type]
         ReIDConfig(
             model_name="test",
@@ -217,6 +220,25 @@ class GalleryRecognitionSweepTests(unittest.TestCase):
         coordinator.notify_gallery_changed()
         coordinator.process_frame(self.frame, [track], 1)
         self.assertEqual(extractor.batch_sizes, [1, 1])
+
+    def test_disabling_identity_during_sweep_blocks_final_match(self) -> None:
+        extractor = _FakeExtractor([_unit(0), _unit(0)])
+        gallery = _gallery()
+        coordinator = _coordinator(
+            extractor,
+            gallery=gallery,
+            candidates_per_frame=1,
+        )
+        tracks = [_track(1), _track(2)]
+
+        self.assertEqual(coordinator.process_frame(self.frame, tracks, 0), [])
+        gallery.update_recognition_enabled(1, False)
+        coordinator.notify_gallery_changed()
+
+        self.assertEqual(coordinator.process_frame(self.frame, tracks, 1), [])
+        self.assertEqual(extractor.batch_sizes, [1, 1])
+        self.assertIsNone(coordinator.target_manager.target_for_track(1))
+        self.assertIsNone(coordinator.target_manager.target_for_track(2))
 
 
 if __name__ == "__main__":

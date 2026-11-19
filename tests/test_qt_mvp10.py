@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -349,6 +350,28 @@ class QtMVP10Tests(unittest.TestCase):
             requires_attention=False,
         )
         self.assertFalse(events[1].requires_attention)
+
+    def test_gallery_recovery_alert_is_independent_of_recognition_flag(self) -> None:
+        worker = RuntimeWorker(load_config("config/config.yaml"))
+        events = []
+        worker.activity_event_ready.connect(events.append)
+        identity = SimpleNamespace(person_id=1, recognition_enabled=False)
+        gallery = SimpleNamespace(
+            person_for_session_target=lambda _target_id: identity,
+        )
+        manager = SimpleNamespace(targets={7: object()})
+        match = SimpleNamespace(
+            target_id=7,
+            similarity=0.95,
+            candidate=SimpleNamespace(track=SimpleNamespace(track_id=11)),
+        )
+
+        worker._log_recovery_events("person", [match], gallery, manager)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].event_type, "recovery")
+        self.assertEqual(events[0].display_id, "P001")
+        self.assertTrue(events[0].requires_attention)
 
 
 if __name__ == "__main__":
