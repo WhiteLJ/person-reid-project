@@ -225,6 +225,8 @@ class ActivityFeedConfig:
     """Per-process in-memory activity feed limits."""
 
     max_events: int = 100
+    alarm_flash_seconds: float = 8.0
+    alarm_flash_interval_ms: int = 500
 
 
 @dataclass(frozen=True)
@@ -1017,6 +1019,19 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     activity_feed_max_events = int(activity_feed.get("max_events", 100))
     if activity_feed_max_events < 1:
         raise ValueError("activity_feed.max_events must be positive")
+    activity_feed_alarm_flash_seconds = float(
+        activity_feed.get("alarm_flash_seconds", 8.0)
+    )
+    activity_feed_alarm_flash_interval_ms = int(
+        activity_feed.get("alarm_flash_interval_ms", 500)
+    )
+    if (
+        not math.isfinite(activity_feed_alarm_flash_seconds)
+        or activity_feed_alarm_flash_seconds < 0.0
+    ):
+        raise ValueError("activity_feed.alarm_flash_seconds must be non-negative")
+    if activity_feed_alarm_flash_interval_ms < 100:
+        raise ValueError("activity_feed.alarm_flash_interval_ms must be at least 100")
 
     replay_directory = Path(
         replay.get("directory", "/home/HwHiAiUser/person_reid/replay")
@@ -1218,7 +1233,11 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             path=recognition_log_path,
             max_events=recognition_log_max_events,
         ),
-        activity_feed=ActivityFeedConfig(max_events=activity_feed_max_events),
+        activity_feed=ActivityFeedConfig(
+            max_events=activity_feed_max_events,
+            alarm_flash_seconds=activity_feed_alarm_flash_seconds,
+            alarm_flash_interval_ms=activity_feed_alarm_flash_interval_ms,
+        ),
         replay=ReplayConfig(
             enabled=bool(replay.get("enabled", True)),
             directory=replay_directory,

@@ -69,6 +69,7 @@ class ActivityEventDTO:
     event_type: str
     snapshot_jpeg: bytes | None = None
     plate_number: str | None = None
+    requires_attention: bool = False
 
 
 @dataclass(frozen=True)

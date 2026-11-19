@@ -157,6 +157,8 @@ vehicle_database:
 
 activity_feed:
   max_events: 100
+  alarm_flash_seconds: 8.0
+  alarm_flash_interval_ms: 500
 
 recognition_log:
   path: "data/recognition_log.db"

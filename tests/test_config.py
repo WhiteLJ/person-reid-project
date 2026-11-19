@@ -26,6 +26,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.replay.codec, "mp4v")
         self.assertEqual(config.replay.queue_size, 120)
         self.assertEqual(config.activity_feed.max_events, 100)
+        self.assertEqual(config.activity_feed.alarm_flash_seconds, 8.0)
+        self.assertEqual(config.activity_feed.alarm_flash_interval_ms, 500)
         self.assertEqual(config.recognition_log.max_events, 1000)
         self.assertEqual(config.inference.backend, "torch")
         self.assertEqual(config.ascend.device_id, 0)
@@ -181,6 +183,8 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.inference.backend, "ascend")
         self.assertEqual(config.activity_feed.max_events, 100)
+        self.assertEqual(config.activity_feed.alarm_flash_seconds, 8.0)
+        self.assertEqual(config.activity_feed.alarm_flash_interval_ms, 500)
         self.assertEqual(config.recognition_log.max_events, 1000)
         self.assertEqual(config.model.device, "cpu")
         self.assertEqual(

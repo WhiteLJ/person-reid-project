@@ -164,7 +164,11 @@ class QtMainWindow(QMainWindow):
         content_layout = QHBoxLayout()
         content_layout.setSpacing(12)
         content_layout.addWidget(self.video_canvas, 1)
-        self.activity_feed = ActivityFeed(self.config.activity_feed.max_events)
+        self.activity_feed = ActivityFeed(
+            max_events=self.config.activity_feed.max_events,
+            alarm_flash_seconds=self.config.activity_feed.alarm_flash_seconds,
+            alarm_flash_interval_ms=self.config.activity_feed.alarm_flash_interval_ms,
+        )
         content_layout.addWidget(self.activity_feed)
         root.addLayout(content_layout, 1)
         self.status_label = QLabel("\u6b63\u5728\u542f\u52a8...")

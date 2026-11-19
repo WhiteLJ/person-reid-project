@@ -14,6 +14,7 @@ try:
     from ui.qt.gallery_page import GalleryTableModel
     from ui.qt.main_window import QtMainWindow
     from ui.qt.models import ActivityEventDTO, AppearanceLogRecordDTO, GalleryRecordDTO
+    from ui.qt.runtime_worker import RuntimeWorker
     from ui.qt.widgets.video_canvas import CanvasTransform, VideoCanvas
     QT_AVAILABLE = True
 except ImportError:
@@ -278,6 +279,72 @@ class QtMVP10Tests(unittest.TestCase):
         self.assertEqual(new_feed.events, ())
         feed.close()
         new_feed.close()
+
+    def test_activity_alert_is_visual_and_acknowledge_is_ui_only(self) -> None:
+        feed = ActivityFeed(
+            max_events=3,
+            alarm_flash_seconds=8.0,
+            alarm_flash_interval_ms=500,
+        )
+        feed.add_event(
+            ActivityEventDTO(
+                sequence_id=1,
+                event_time="2026-01-01 12:00:00",
+                domain="person",
+                identity_id=1,
+                display_id="P001",
+                event_type="enrollment",
+            )
+        )
+        self.assertEqual(feed.unacknowledged_count, 0)
+        self.assertIsNone(feed._cards[0]._flash_timer)
+
+        feed.add_event(
+            ActivityEventDTO(
+                sequence_id=2,
+                event_time="2026-01-01 12:00:01",
+                domain="person",
+                identity_id=2,
+                display_id="P002",
+                event_type="recognition",
+                requires_attention=True,
+            )
+        )
+        card = feed._cards[0]
+        self.assertEqual(feed.unacknowledged_count, 1)
+        self.assertIn("未确认", feed._title.text())
+        self.assertTrue(card.flash_timer_active)
+        self.assertIsNotNone(card._acknowledge_button)
+        card._acknowledge_button.click()
+        self.app.processEvents()
+        self.assertTrue(card.acknowledged_state)
+        self.assertFalse(card.flash_timer_active)
+        self.assertEqual(feed.unacknowledged_count, 0)
+        self.assertIn("已确认", card._status_label.text())
+        self.assertEqual(len(feed.events), 2)
+        feed.close()
+
+    def test_runtime_activity_dto_carries_attention_without_persistence(self) -> None:
+        worker = RuntimeWorker(load_config("config/config.yaml"))
+        events = []
+        worker.activity_event_ready.connect(events.append)
+        worker._publish_activity_event(
+            domain="person",
+            identity_id=1,
+            display_id="P001",
+            event_type="recognition",
+            requires_attention=True,
+        )
+        self.assertEqual(len(events), 1)
+        self.assertTrue(events[0].requires_attention)
+        worker._publish_activity_event(
+            domain="person",
+            identity_id=2,
+            display_id="P002",
+            event_type="enrollment",
+            requires_attention=False,
+        )
+        self.assertFalse(events[1].requires_attention)
 
 
 if __name__ == "__main__":

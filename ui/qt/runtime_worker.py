@@ -500,6 +500,9 @@ class RuntimeWorker(QObject):
                 identity_id=identity_id,
                 display_id=display_id,
                 event_type="recovery",
+                requires_attention=bool(
+                    getattr(identity, "recognition_enabled", False)
+                ),
             )
 
     def _log_recognition_events(self, domain, matches, gallery, manager) -> None:
@@ -533,6 +536,9 @@ class RuntimeWorker(QObject):
                 identity_id=identity_id,
                 display_id=display_id,
                 event_type="recognition",
+                requires_attention=bool(
+                    getattr(identity, "recognition_enabled", False)
+                ),
             )
 
     def _publish_activity_event(
@@ -543,6 +549,7 @@ class RuntimeWorker(QObject):
         display_id: str,
         event_type: str,
         plate_number: str | None = None,
+        requires_attention: bool = False,
     ) -> None:
         repository = (
             self._person_repository
@@ -573,6 +580,7 @@ class RuntimeWorker(QObject):
                 event_type=event_type,
                 snapshot_jpeg=snapshot,
                 plate_number=plate_number,
+                requires_attention=bool(requires_attention),
             )
         )
 
@@ -1148,6 +1156,7 @@ class RuntimeWorker(QObject):
                     if domain == "person"
                     else getattr(identity, "plate_number", None)
                 ),
+                requires_attention=False,
             )
             self._emit_frozen_frame()
         except Exception as exc:
