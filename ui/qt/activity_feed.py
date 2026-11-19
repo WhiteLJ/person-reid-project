@@ -83,15 +83,6 @@ class ActivityCard(QFrame):
 
         text_layout = QVBoxLayout()
         text_layout.setSpacing(2)
-        if self._requires_attention:
-            alert_label = QLabel("重点目标出现")
-            alert_font = QFont(alert_label.font())
-            alert_font.setBold(True)
-            alert_font.setPointSize(max(14, alert_font.pointSize()))
-            alert_label.setFont(alert_font)
-            alert_label.setStyleSheet("color: #b71c1c; border: 0px;")
-            text_layout.addWidget(alert_label)
-
         title = QLabel(event.display_id)
         title_font = QFont(title.font())
         title_font.setPointSize(16)

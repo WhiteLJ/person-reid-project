@@ -136,6 +136,46 @@ class TargetManagerTests(unittest.TestCase):
         self.assertNotIn(target.target_id, manager.targets)
         self.assertIsNone(manager.lost_since(target.target_id))
 
+    def test_lost_target_uses_exact_600_second_boundary(self) -> None:
+        manager = TargetManager()
+        target = manager.select(self.track_a, _embedding(1, 0))
+        manager.update_visibility([], lost_grace_frames=1, frame_index=1)
+        lost_at = manager.lost_since(target.target_id)
+        assert lost_at is not None
+
+        self.assertEqual(
+            manager.expire_lost_targets(600.0, now=lost_at + 599.0),
+            (),
+        )
+        expired = manager.expire_lost_targets(600.0, now=lost_at + 600.0)
+        self.assertEqual(tuple(item.target_id for item in expired), (target.target_id,))
+
+    def test_recovery_clears_600_second_retention_timer(self) -> None:
+        manager = TargetManager()
+        target = manager.select(self.track_a, _embedding(1, 0))
+        manager.update_visibility([], lost_grace_frames=1, frame_index=1)
+        lost_at = manager.lost_since(target.target_id)
+        assert lost_at is not None
+
+        self.assertEqual(
+            manager.expire_lost_targets(600.0, now=lost_at + 300.0),
+            (),
+        )
+        manager.recover(
+            target_id=target.target_id,
+            track=self.track_b,
+            embedding=_embedding(1, 0),
+            similarity=1.0,
+            frame_index=2,
+            max_reference_embeddings=8,
+            reference_update_threshold=0.80,
+        )
+        self.assertEqual(
+            manager.expire_lost_targets(600.0, now=lost_at + 600.0),
+            (),
+        )
+        self.assertEqual(target.state, TargetState.ACTIVE)
+
     def test_expiring_target_does_not_delete_gallery_identity(self) -> None:
         manager = TargetManager()
         target = manager.select(self.track_a, _embedding(1, 0))

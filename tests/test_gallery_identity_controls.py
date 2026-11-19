@@ -10,6 +10,7 @@ import numpy as np
 from src.database import GalleryRepository
 from src.gallery import TargetGallery
 from src.gallery_service import GalleryPersistenceService
+from src.models import SessionTarget, TargetState
 from src.vehicle_database import VehicleGalleryRepository
 from src.vehicle_gallery import VehicleTargetGallery
 from src.vehicle_gallery_service import VehicleGalleryPersistenceService
@@ -31,12 +32,51 @@ def _vehicle_embedding() -> np.ndarray:
     return value
 
 
+def _session_target(target_id: int, embedding: np.ndarray) -> SessionTarget:
+    return SessionTarget(
+        target_id=target_id,
+        current_track_id=target_id + 100,
+        last_track_id=target_id + 100,
+        state=TargetState.ACTIVE,
+        reference_embeddings=[embedding.copy()],
+        centroid=embedding.copy(),
+    )
+
+
 def _remove(path: Path) -> None:
     for suffix in ("", "-wal", "-shm", "-journal"):
         Path(f"{path}{suffix}").unlink(missing_ok=True)
 
 
 class GalleryIdentityControlTests(unittest.TestCase):
+    def test_manual_person_enrollment_defaults_enabled_and_persists(self) -> None:
+        path = ROOT / "manual_person_enabled.db"
+        _remove(path)
+        repository = GalleryRepository(path)
+        repository.initialize()
+        gallery = TargetGallery()
+        service = GalleryPersistenceService(gallery, repository)
+        person = service.enroll(_session_target(1, _person_embedding()))
+
+        self.assertTrue(person.recognition_enabled)
+        restored = GalleryRepository(path).load_all()[0]
+        self.assertTrue(restored.recognition_enabled)
+        _remove(path)
+
+    def test_manual_vehicle_enrollment_defaults_enabled_and_persists(self) -> None:
+        path = ROOT / "manual_vehicle_enabled.db"
+        _remove(path)
+        repository = VehicleGalleryRepository(path)
+        repository.initialize()
+        gallery = VehicleTargetGallery()
+        service = VehicleGalleryPersistenceService(gallery, repository)
+        vehicle = service.enroll(_session_target(1, _vehicle_embedding()))
+
+        self.assertTrue(vehicle.recognition_enabled)
+        restored = VehicleGalleryRepository(path).load_all()[0]
+        self.assertTrue(restored.recognition_enabled)
+        _remove(path)
+
     def test_person_metadata_and_recognition_flag_round_trip(self) -> None:
         path = ROOT / "identity_controls_person.db"
         _remove(path)

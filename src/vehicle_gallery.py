@@ -121,7 +121,7 @@ class VehicleTargetGallery:
             reference_embeddings=references,
             centroid=centroid,
             plate_number=normalize_plate_number(plate_number),
-            recognition_enabled=False,
+            recognition_enabled=True,
             created_at=current_local_timestamp(),
         )
         self._vehicles[vehicle_id] = vehicle

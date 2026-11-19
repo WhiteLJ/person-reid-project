@@ -108,7 +108,7 @@ class TargetGallery:
             label=f"Target {format_person_id(person_id)}",
             reference_embeddings=references,
             centroid=centroid,
-            recognition_enabled=False,
+            recognition_enabled=True,
             created_at=current_local_timestamp(),
         )
         self._people[person_id] = person

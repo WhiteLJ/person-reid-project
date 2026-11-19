@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PyQt6.QtCore import QRectF, Qt
-    from PyQt6.QtWidgets import QAbstractItemView, QApplication, QMainWindow
+    from PyQt6.QtWidgets import QAbstractItemView, QApplication, QLabel, QMainWindow
     from src.config import load_config
     from ui.qt.activity_feed import ActivityFeed
     from ui.qt.appearance_log_page import AppearanceLogPage
@@ -313,6 +313,10 @@ class QtMVP10Tests(unittest.TestCase):
         card = feed._cards[0]
         self.assertEqual(feed.unacknowledged_count, 1)
         self.assertIn("未确认", feed._title.text())
+        self.assertNotIn(
+            "重点目标出现",
+            [label.text() for label in card.findChildren(QLabel)],
+        )
         self.assertTrue(card.flash_timer_active)
         self.assertIsNotNone(card._acknowledge_button)
         card._acknowledge_button.click()

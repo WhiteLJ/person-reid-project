@@ -43,7 +43,7 @@ selection:
 
 session_target:
   # 0 keeps LOST SessionTargets indefinitely; positive values enable TTL cleanup.
-  lost_retention_seconds: 0
+  lost_retention_seconds: 600
 
 reid:
   model_name: "osnet_x0_25"

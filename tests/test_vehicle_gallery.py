@@ -54,6 +54,7 @@ class VehicleGalleryTests(unittest.TestCase):
         self.assertAlmostEqual(
             float(np.linalg.norm(vehicle.centroid)), 1.0, places=5
         )
+        self.assertTrue(vehicle.recognition_enabled)
         self.assertNotEqual(float(vehicle.reference_embeddings[0][0]), 0.0)
         self.assertEqual(float(target.reference_embeddings[0][0]), 0.0)
 

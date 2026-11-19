@@ -30,6 +30,7 @@ class TargetGalleryTests(unittest.TestCase):
 
         self.assertEqual(person.person_id, 1)
         self.assertEqual(person.label, "Target P001")
+        self.assertTrue(person.recognition_enabled)
         self.assertEqual(format_person_id(2), "P002")
 
     def test_enrollment_snapshots_reference_bank_and_centroid(self) -> None:
